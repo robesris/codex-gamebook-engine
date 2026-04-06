@@ -1587,7 +1587,38 @@ function handleRollDice(event) {
     btn.disabled = true;
     const result = rollDice(dice);
 
-    // Find matching result
+    // Handle "roll and apply to stat" shorthand (e.g., results: "subtract_from_stamina")
+    if (typeof event.results === 'string' || event.apply_to_stat) {
+      const stat = event.apply_to_stat || event.results.replace('subtract_from_', '').replace('add_to_', '');
+      const isAdd = event.results?.startsWith?.('add_to_') || (event.amount_sign === 'positive');
+      const amount = isAdd ? result.total : -result.total;
+
+      if (stat === 'provisions') state.provisions = Math.max(0, state.provisions + amount);
+      else if (stat === 'gold') state.gold = Math.max(0, state.gold + amount);
+      else {
+        const old = state.stats[stat] || 0;
+        state.stats[stat] = Math.max(0, old + amount);
+      }
+
+      area.innerHTML = `
+        <h3>${event.prompt || 'Roll the Dice'}</h3>
+        <div class="dice-display">[${result.rolls.join(', ')}] = ${result.total}</div>
+        <div class="event-msg ${isAdd ? 'gain' : 'loss'}">${stat.toUpperCase()} ${isAdd ? '+' : ''}${amount}</div>
+        ${event.note ? `<p style="font-size:0.85em;color:var(--text-dim)">${event.note}</p>` : ''}
+      `;
+      updateStatBar();
+
+      // Check for death
+      if (state.stats.stamina !== undefined && state.stats.stamina <= 0) {
+        setTimeout(() => showEnding({ text: 'Your STAMINA has reached zero. Your adventure is over.', ending_type: 'death', events: [], choices: [] }), 1000);
+        return;
+      }
+
+      setTimeout(() => processNextEvent(), 1000);
+      return;
+    }
+
+    // Standard result table lookup
     let target = null;
     let resultText = '';
     const results = event.results || {};
