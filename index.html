@@ -1150,14 +1150,17 @@ function handleChooseItems(event) {
   const addAutomatic = event.add_automatic || [];
   const replaceCategory = event.replace_category || false;
 
-  // Filter catalog
+  // Filter catalog — separate automatic items from selectable ones
+  const autoSet = new Set(addAutomatic);
   const available = Object.entries(catalog).filter(([id, item]) => {
+    if (autoSet.has(id)) return false; // shown separately
     if (excludeSet.has(id)) return false;
     for (const [key, val] of Object.entries(filter)) {
       if (item[key] !== val) return false;
     }
     return true;
   });
+  const autoItems = addAutomatic.map(id => [id, catalog[id]]).filter(([id, item]) => item);
 
   const selected = new Set();
 
@@ -1165,6 +1168,14 @@ function handleChooseItems(event) {
     let html = `<h3>${event.description || 'Choose your items'}</h3>`;
     html += `<div class="choose-items-count">Selected: ${selected.size} / ${count}</div>`;
     html += `<div class="choose-items-grid">`;
+    // Show automatic items first (always included, not clickable)
+    for (const [id, item] of autoItems) {
+      html += `<div class="choose-item-btn selected" style="opacity:0.7;cursor:default;">
+        <strong>${item.name}</strong> <span style="font-size:0.8em;color:var(--text-dim)">(always carried)</span>
+        ${item.description ? `<div class="item-desc">${item.description}</div>` : ''}
+      </div>`;
+    }
+    // Show selectable items
     for (const [id, item] of available) {
       const isSel = selected.has(id);
       html += `<div class="choose-item-btn ${isSel ? 'selected' : ''}" data-item-id="${id}">

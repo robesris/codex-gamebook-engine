@@ -360,6 +360,8 @@ Describes the character setup process in the order the player performs it. **The
 }
 ```
 
+**Important:** Only include steps here for things that must happen *before* section 1 begins (stat rolling, ability selection, starting equipment). If the book defers a choice to a specific section during gameplay — for example, "read page 1, then choose your role" — that choice should be modeled as section choices and events, NOT as a character_creation step. The emulator displays character creation before the first section, so putting a choice here that the book intends to happen later will break the intended flow. If the book has no pre-game setup (no stats, no equipment selection), `steps` should be an empty array.
+
 ### 2.4 sections
 
 The heart of the game data. Each section is keyed by its number as a string.
@@ -433,10 +435,12 @@ Events are things that happen in a section before or independent of the choices.
     "takes_inventory_slot": "boolean",
     "inventory_category": "string or null — which category slot it uses",
     "stat_modifier": {"stat": "string", "amount": "number", "when": "always|combat"} ,
-    "description": "string"
+    "description": "string — the FULL description from the book, not a summary"
   }
 }
 ```
+
+**Item descriptions must be the complete text from the book.** The emulator displays item descriptions to the player during `choose_items` events (e.g., weapon selection). If the book provides a paragraph-length description of each weapon, spell, or item, include the full text — do not summarize. The player needs the same information the book provides to make informed choices.
 
 ### 2.6 enemies_catalog
 
