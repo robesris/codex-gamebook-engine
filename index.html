@@ -540,25 +540,13 @@ function getEnemy(ref) {
   return gameData.enemies_catalog[ref] || null;
 }
 
-// Resolve combat stat names — games use different names for the attack and health stats
+// Resolve combat stat names from the game data's rules.attack_stat and rules.health_stat
 function getCombatStats() {
-  const stats = gameData.rules.stats || [];
-  const csType = gameData.rules.combat_system?.type ||
-                 gameData.rules.combat_rules_detail?.type ||
-                 (typeof gameData.rules.combat_system === 'string' ? gameData.rules.combat_system : null);
-
-  // Try to identify attack and health stats from the rules
-  // Look for common patterns: skill/stamina (FF), combat_skill/endurance (LW), etc.
-  const statNames = stats.map(s => s.name.toLowerCase());
-
-  let attackStat = stats.find(s => /skill|combat/i.test(s.name))?.name;
-  let healthStat = stats.find(s => /stamina|endurance|hp|hit/i.test(s.name))?.name;
-
-  // Fallback: first stat is attack, second is health
-  if (!attackStat && stats.length >= 1) attackStat = stats[0].name;
-  if (!healthStat && stats.length >= 2) healthStat = stats[1].name;
-
-  return { attackStat, healthStat };
+  const rules = gameData.rules || {};
+  return {
+    attackStat: rules.attack_stat || null,
+    healthStat: rules.health_stat || null,
+  };
 }
 
 // Get the player's current attack stat value
@@ -579,14 +567,21 @@ function setPlayerHealth(val) {
   if (healthStat) state.stats[healthStat] = val;
 }
 
-// Get enemy's attack stat (tries skill, combat_skill, COMBAT SKILL, etc.)
+// Get enemy's attack stat value using the game's attack_stat name
 function getEnemyAttack(enemy) {
-  return enemy.skill ?? enemy.combat_skill ?? enemy['COMBAT SKILL'] ?? 0;
+  const { attackStat } = getCombatStats();
+  if (!attackStat) return 0;
+  // Try exact match, then common variants (lowercase, snake_case)
+  const key = attackStat.toLowerCase().replace(/ /g, '_');
+  return enemy[attackStat] ?? enemy[key] ?? enemy.skill ?? enemy.combat_skill ?? 0;
 }
 
-// Get enemy's health stat (tries stamina, endurance, ENDURANCE, etc.)
+// Get enemy's health stat value using the game's health_stat name
 function getEnemyHealth(enemy) {
-  return enemy.stamina ?? enemy.endurance ?? enemy['ENDURANCE'] ?? 0;
+  const { healthStat } = getCombatStats();
+  if (!healthStat) return 0;
+  const key = healthStat.toLowerCase().replace(/ /g, '_');
+  return enemy[healthStat] ?? enemy[key] ?? enemy.stamina ?? enemy.endurance ?? 0;
 }
 
 function getItemName(itemId) {

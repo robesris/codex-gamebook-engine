@@ -317,6 +317,8 @@ The rules object describes the game system as parsed from the book. Do not assum
       "description": "string"
     }
   ],
+  "attack_stat": "string — which stat is used for attack/combat skill (must match a stat name above, e.g., 'skill', 'COMBAT SKILL')",
+  "health_stat": "string — which stat is used for health/hit points (must match a stat name above, e.g., 'stamina', 'ENDURANCE'). Character dies when this reaches 0.",
   "combat_system": {
     "description": "string — plain English description of how combat works in this book",
     "type": "string — e.g., attack_strength_comparison, combat_ratio_table, single_roll, alternating_strikes, none",

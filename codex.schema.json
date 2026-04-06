@@ -157,6 +157,14 @@
             "$ref": "#/definitions/stat_definition"
           }
         },
+        "attack_stat": {
+          "type": "string",
+          "description": "The stat name used for attack/combat skill (e.g., 'skill', 'COMBAT SKILL'). Must match a name in the stats array."
+        },
+        "health_stat": {
+          "type": "string",
+          "description": "The stat name used for health/hit points (e.g., 'stamina', 'ENDURANCE'). When this reaches 0, the character is dead. Must match a name in the stats array."
+        },
         "combat_system": {
           "description": "Combat system identifier or detailed rules object. May be a string shorthand (e.g., 'fighting_fantasy_standard') or a full object.",
           "oneOf": [
