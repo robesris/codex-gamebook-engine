@@ -409,8 +409,11 @@ Events are things that happen in a section before or independent of the choices.
 {"type": "input_text", "prompt": "string", "answers": {"answer1": {"target": 250}}, "case_sensitive": false, "default": {"target": 340}}
 {"type": "eat_meal", "required": true, "penalty_stat": "stamina", "penalty_amount": -3}
 {"type": "choose_items", "catalog_filter": {"inventory_category": "weapons"}, "count": 3, "add_automatic": ["sword_of_golden_lion"], "exclude": ["sword_of_golden_lion"], "replace_category": true, "description": "Player selects 3 weapons from the Book of Weapons."}
+{"type": "script", "description": "Roll 1d6. Odd = lose 3 SKILL, 1 STAMINA. Even = lose 1 SKILL, 2 STAMINA.", "script_code": "-- Lua code here (see Combat Scripting section for sandbox API)"}
 {"type": "custom", "mechanic_name": "string", "description": "string", "parameters": {}}
 ```
+
+**`script` vs `custom`:** Use `script` when the mechanic can be expressed as executable Lua — dice rolls with branching outcomes, conditional stat modifications, gambling games, complex multi-step checks, etc. The emulator will execute the Lua code. Use `custom` only as a last resort for mechanics that truly cannot be scripted (e.g., they require visual/spatial reasoning). Always include a `description` on both types. The `script` event uses the same Lua sandbox API as combat scripts — see section 7.5 for the full reference. Additionally, `script` events have access to `game_state` (all player stats), `inventory` (item ID array), and `flags` (flag name array). Set `player.stats_changed = {stat = value}` to modify stats, or `player.navigate_to = N` to navigate to a section.
 
 #### Condition Types
 

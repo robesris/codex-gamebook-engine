@@ -1300,6 +1300,9 @@ function processNextEvent() {
     case 'choose_items':
       handleChooseItems(event);
       break;
+    case 'script':
+      handleScript(event);
+      break;
     case 'custom':
       handleCustom(event);
       processNextEvent();
@@ -1399,6 +1402,104 @@ function handleSetFlag(event) {
 }
 
 // --- Custom ---
+// ==================== SCRIPT EVENT ====================
+function handleScript(event) {
+  if (!LuaEngine.available || !event.script_code) {
+    // Fall back to showing description
+    const content = document.getElementById('game-content');
+    const msg = document.createElement('div');
+    msg.className = 'event-msg info';
+    msg.textContent = event.description || 'Script event (Lua not available)';
+    content.appendChild(msg);
+    processNextEvent();
+    return;
+  }
+
+  const { attackStat, healthStat } = getCombatStats();
+  const playerData = {
+    attack: getPlayerAttack(),
+    health: getPlayerHealth(),
+    name: 'You',
+  };
+
+  // Build game_state with all stats
+  const gameState = { ...state.stats };
+
+  // Build extra context
+  const extraContext = {
+    game_state: gameState,
+    inventory: [...state.inventory],
+    flags: [...state.flags],
+  };
+
+  const result = LuaEngine.runCombatRound(event.script_code, playerData, { attack: 0, health: 0, name: '' }, { round: 0 }, extraContext);
+
+  const content = document.getElementById('game-content');
+
+  if (result.error) {
+    const msg = document.createElement('div');
+    msg.className = 'event-msg loss';
+    msg.textContent = 'Script error: ' + result.error;
+    content.appendChild(msg);
+    processNextEvent();
+    return;
+  }
+
+  // Apply stat changes from game_state
+  if (result.combat?.navigate_to || result.player?.navigate_to) {
+    // Script wants to navigate
+    const target = result.combat?.navigate_to || result.player?.navigate_to;
+    // Apply health changes first
+    if (result.player?.health !== undefined && healthStat) {
+      state.stats[healthStat] = Math.max(0, result.player.health);
+    }
+    // Apply game_state changes
+    const newGameState = result.combat?.game_state_changed;
+    if (newGameState) {
+      for (const [k, v] of Object.entries(newGameState)) {
+        state.stats[k] = v;
+      }
+    }
+    updateStatBar();
+    for (const msg of result.logs || []) {
+      const el = document.createElement('div');
+      el.className = 'event-msg info';
+      el.innerHTML = msg;
+      content.appendChild(el);
+    }
+    setTimeout(() => navigateTo(target), 1000);
+    return;
+  }
+
+  // Apply health/stat changes
+  if (result.player?.health !== undefined && healthStat) {
+    state.stats[healthStat] = Math.max(0, result.player.health);
+  }
+  if (result.player?.stats_changed) {
+    for (const [k, v] of Object.entries(result.player.stats_changed)) {
+      state.stats[k] = v;
+    }
+  }
+
+  // Show log messages
+  for (const msg of result.logs || []) {
+    const el = document.createElement('div');
+    el.className = 'event-msg info';
+    el.innerHTML = msg;
+    content.appendChild(el);
+  }
+
+  updateStatBar();
+
+  // Check for death
+  if (healthStat && state.stats[healthStat] !== undefined && state.stats[healthStat] <= 0) {
+    showEnding({ text: `Your ${healthStat} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] });
+    return;
+  }
+
+  processNextEvent();
+}
+
 function handleCustom(event) {
   const content = document.getElementById('game-content');
   const msg = document.createElement('div');

@@ -551,6 +551,8 @@
             "input_number",
             "input_text",
             "eat_meal",
+            "choose_items",
+            "script",
             "custom"
           ]
         },
@@ -662,8 +664,13 @@
         "penalty_stat": { "type": "string", "description": "eat_meal: stat penalized if no food available." },
         "penalty_amount": { "type": "number", "description": "eat_meal: penalty amount if no food." },
 
+        "script_code": {
+          "type": "string",
+          "description": "script: Lua code to execute. Same sandbox as combat round_script (roll, log, lookup). Also has: game_state (table of all player stats), inventory (array of item IDs), flags (array of flag names). Can modify game_state, call log(), and set navigate_to=N to go to a section."
+        },
+
         "mechanic_name": { "type": "string", "description": "custom: name for this mechanic." },
-        "description": { "type": "string", "description": "custom: detailed plain-English description of how the mechanic works." },
+        "description": { "type": "string", "description": "custom, script: plain-English description of what the mechanic does." },
         "parameters": {
           "type": "object",
           "description": "custom: mechanic-specific parameters.",
