@@ -834,13 +834,59 @@ function processCreationSteps(steps, items) {
           for (const name of selected) {
             state.flags.add('ability_' + name.toLowerCase().replace(/ /g, '_'));
           }
-          section.innerHTML = `<div class="event-msg gain">Disciplines: ${[...selected].join(', ')}</div>`;
-          processCreationSteps(steps, items);
+
+          // Check if any selected abilities require a roll
+          const rollAbilities = available.filter(ab => selected.has(ab.name) && ab.requires_roll);
+          if (rollAbilities.length > 0) {
+            processAbilityRolls(section, rollAbilities, 0, steps, items);
+          } else {
+            section.innerHTML = `<div class="event-msg gain">Disciplines: ${[...selected].join(', ')}</div>`;
+            processCreationSteps(steps, items);
+          }
         });
       }
     }
     renderAbilities();
   }
+}
+
+function processAbilityRolls(section, rollAbilities, idx, steps, items) {
+  if (idx >= rollAbilities.length) {
+    section.innerHTML = `<div class="event-msg gain">Disciplines: ${state.abilities.join(', ')}</div>`;
+    processCreationSteps(steps, items);
+    return;
+  }
+
+  const ab = rollAbilities[idx];
+  const roll = ab.requires_roll;
+  section.innerHTML = `
+    <div class="test-area">
+      <h3>${ab.name}</h3>
+      <p>${roll.prompt || 'Roll to determine your result'}</p>
+      <div class="mt-2">
+        <button class="btn" id="ability-roll-btn">Roll</button>
+      </div>
+    </div>
+  `;
+
+  section.querySelector('#ability-roll-btn').addEventListener('click', () => {
+    const result = rollDice(roll.formula || 'R10');
+    const resultLabel = roll.results?.[String(result.total)] || String(result.total);
+
+    // Store the result as a flag
+    const flagName = ab.name.toLowerCase().replace(/ /g, '_') + '_' + resultLabel.toLowerCase().replace(/ /g, '_');
+    state.flags.add(flagName);
+
+    section.innerHTML = `
+      <div class="test-area">
+        <h3>${ab.name}</h3>
+        <div class="dice-display">[${result.rolls[0]}]</div>
+        <p><strong>${resultLabel}</strong></p>
+      </div>
+    `;
+
+    setTimeout(() => processAbilityRolls(section, rollAbilities, idx + 1, steps, items), 1500);
+  });
 }
 
 function showEquipmentAndBegin() {

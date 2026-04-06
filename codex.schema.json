@@ -244,8 +244,21 @@
                 "type": "object",
                 "properties": {
                   "name": { "type": "string" },
-                  "description": { "type": "string" },
-                  "mechanical_effect": { "type": "string" }
+                  "description": { "type": "string", "description": "Full book text describing this ability. Do not summarize." },
+                  "mechanical_effect": { "type": "string" },
+                  "requires_roll": {
+                    "type": "object",
+                    "description": "If this ability requires a random roll when selected (e.g., Weaponskill in Lone Wolf requires R10 to determine weapon type).",
+                    "properties": {
+                      "formula": { "type": "string", "description": "Dice/random formula (e.g., 'R10')." },
+                      "prompt": { "type": "string", "description": "Text shown to the player when rolling." },
+                      "results": {
+                        "type": "object",
+                        "description": "Mapping of roll values to result labels.",
+                        "additionalProperties": { "type": "string" }
+                      }
+                    }
+                  }
                 },
                 "required": ["name"]
               }
