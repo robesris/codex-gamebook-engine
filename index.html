@@ -179,7 +179,8 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 /* --- Section Text --- */
 .section-header {
-  color: var(--text-dim); font-size: 0.85em; margin-bottom: 8px;
+  color: var(--accent); font-size: 1em; margin-bottom: 10px;
+  font-weight: bold; letter-spacing: 1px; text-transform: uppercase;
 }
 .section-text {
   margin-bottom: 20px; white-space: pre-wrap;
@@ -321,6 +322,25 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 8px; padding: 16px; margin-bottom: 16px; text-align: center;
 }
+
+/* --- Debug Panel --- */
+.debug-toggle {
+  position: fixed; bottom: 10px; right: 10px; z-index: 100;
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.75em; padding: 4px 8px;
+  border-radius: 4px; cursor: pointer; font-family: monospace;
+}
+.debug-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.debug-panel {
+  display: none; position: fixed; bottom: 36px; right: 10px; z-index: 100;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px; font-family: monospace;
+  font-size: 0.75em; max-width: 320px; max-height: 50vh;
+  overflow-y: auto; color: var(--text-dim);
+}
+.debug-panel.open { display: block; }
+.debug-panel div { margin-bottom: 4px; }
+.debug-panel .debug-label { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -375,6 +395,10 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   <div id="ending-screen" class="screen"></div>
 
 </div>
+
+<!-- Debug Panel -->
+<div class="debug-toggle" onclick="toggleDebug()">DEBUG</div>
+<div class="debug-panel" id="debug-panel"></div>
 
 <script>
 // ==================== GAME STATE ====================
@@ -662,6 +686,7 @@ function navigateTo(sectionId) {
 
   updateStatBar();
   updateInventory();
+  updateDebug();
 
   const content = document.getElementById('game-content');
   content.innerHTML = '';
@@ -669,7 +694,7 @@ function navigateTo(sectionId) {
   // Section header
   const header = document.createElement('div');
   header.className = 'section-header';
-  header.textContent = `Section ${sid}`;
+  header.textContent = `\u2014 ${sid} \u2014`;
   content.appendChild(header);
 
   // Section text
@@ -1158,6 +1183,14 @@ function handleStatTest(event) {
       ${event.deduct_after ? `<p style="font-size:0.85em;color:var(--text-dim)">${(event.deduct_stat || stat).toUpperCase()} reduced by ${event.deduct_amount || 1}</p>` : ''}
     `;
 
+    // Apply failure_penalty if present and failed
+    if (!success && event.failure_penalty) {
+      const penalty = event.failure_penalty;
+      if (penalty.type === 'modify_stat') {
+        handleModifyStat(penalty);
+      }
+    }
+
     // Set a flag for test_failed conditions
     window._lastTestResult = success;
 
@@ -1167,7 +1200,7 @@ function handleStatTest(event) {
       } else if (!success && event.failure_to) {
         navigateTo(event.failure_to);
       } else {
-        // No navigation target, continue events
+        // No navigation target, continue events and show choices
         processNextEvent();
       }
     }, 1000);
@@ -1373,7 +1406,40 @@ function showChoices(choices) {
       btn.appendChild(tooltip);
       btn.addEventListener('click', (e) => e.preventDefault());
     } else {
-      btn.addEventListener('click', () => navigateTo(choice.target));
+      btn.addEventListener('click', () => {
+        if (choice.target != null) {
+          navigateTo(choice.target);
+        } else {
+          // Null target — check for section-level luck_test/skill_test
+          const section = gameData.sections[state.currentSection];
+          if (section?.luck_test) {
+            // Trigger an inline luck test
+            handleStatTest({
+              type: 'stat_test',
+              stat: 'luck',
+              success_to: section.luck_test.success_to,
+              failure_to: section.luck_test.failure_to,
+              deduct_after: gameData.rules.luck_test?.deduct_after ?? true,
+              deduct_stat: 'luck',
+              deduct_amount: gameData.rules.luck_test?.deduct_amount ?? 1,
+            });
+          } else if (section?.skill_test) {
+            handleStatTest({
+              type: 'stat_test',
+              stat: 'skill',
+              success_to: section.skill_test.success_to,
+              failure_to: section.skill_test.failure_to,
+              deduct_after: gameData.rules.skill_test?.deduct_after ?? false,
+            });
+          } else if (choice.note) {
+            // Dead end or informational — show the note
+            const msg = document.createElement('div');
+            msg.className = 'event-msg info';
+            msg.textContent = choice.note;
+            document.getElementById('game-content').appendChild(msg);
+          }
+        }
+      });
     }
 
     div.appendChild(btn);
@@ -1479,6 +1545,30 @@ function playAgain() {
   };
   window._lastTestResult = null;
   showScreen('load-screen');
+}
+
+// ==================== DEBUG PANEL ====================
+function toggleDebug() {
+  document.getElementById('debug-panel').classList.toggle('open');
+  if (document.getElementById('debug-panel').classList.contains('open')) updateDebug();
+}
+
+function updateDebug() {
+  const panel = document.getElementById('debug-panel');
+  if (!panel.classList.contains('open')) return;
+  const visited = state.visitedSections ? [...state.visitedSections].join(', ') : 'none';
+  panel.innerHTML = `
+    <div><span class="debug-label">Section:</span> ${state.currentSection || 'n/a'}</div>
+    <div><span class="debug-label">Stats:</span> ${Object.entries(state.stats).map(([k,v]) => k+'='+v).join(', ')}</div>
+    <div><span class="debug-label">Initial:</span> ${Object.entries(state.initialStats).map(([k,v]) => k+'='+v).join(', ')}</div>
+    <div><span class="debug-label">Provisions:</span> ${state.provisions}</div>
+    <div><span class="debug-label">Gold:</span> ${state.gold}</div>
+    <div><span class="debug-label">Potion:</span> ${state.potion || 'none'} (${state.potionDoses} doses)</div>
+    <div><span class="debug-label">Flags:</span> ${state.flags.size > 0 ? [...state.flags].join(', ') : 'none'}</div>
+    <div><span class="debug-label">Inventory:</span> ${state.inventory.length > 0 ? state.inventory.map(i => getItemName(i)).join(', ') : 'empty'}</div>
+    <div><span class="debug-label">Last test:</span> ${window._lastTestResult === null ? 'n/a' : window._lastTestResult ? 'success' : 'failure'}</div>
+    <div><span class="debug-label">Visited:</span> ${visited}</div>
+  `;
 }
 </script>
 </body>
