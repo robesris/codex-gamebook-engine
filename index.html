@@ -955,26 +955,21 @@ function handleCombat(event) {
   const fleeTo = event.flee_to || null;
   const specialRules = event.special_rules || null;
 
-  let currentEnemyIdx = 0;
-  let roundNum = 0;
-  let combatLog = [];
-  let waitingForLuckChoice = false;
-  let lastRoundResult = null;
-
   function renderCombat() {
-    const enemy = enemies[currentEnemyIdx];
+    const c = window._combat;
+    const enemy = c.enemies[c.currentEnemyIdx];
     const playerStamina = state.stats.stamina || 0;
     const playerMaxStamina = state.initialStats.stamina || playerStamina;
     const enemyMaxStamina = getEnemy(enemy.ref)?.stamina || enemy.stamina;
 
     let html = `<div class="combat-header"><h3>COMBAT</h3>`;
-    if (enemies.length > 1) {
-      html += `<div style="font-size:0.85em;color:var(--text-dim)">Enemy ${currentEnemyIdx + 1} of ${enemies.length} (${mode})</div>`;
+    if (c.enemies.length > 1) {
+      html += `<div style="font-size:0.85em;color:var(--text-dim)">Enemy ${c.currentEnemyIdx + 1} of ${c.enemies.length} (${c.mode})</div>`;
     }
     html += `</div>`;
 
-    if (specialRules) {
-      html += `<div class="special-rules-box"><strong>Special Rules:</strong> ${specialRules}</div>`;
+    if (c.specialRules) {
+      html += `<div class="special-rules-box"><strong>Special Rules:</strong> ${c.specialRules}</div>`;
     }
 
     html += `<div class="combatants">
@@ -992,9 +987,9 @@ function handleCombat(event) {
     </div>`;
 
     // Combat log
-    if (combatLog.length > 0) {
+    if (c.combatLog.length > 0) {
       html += `<div class="combat-log">`;
-      for (const entry of combatLog) {
+      for (const entry of c.combatLog) {
         html += `<div class="round">${entry}</div>`;
       }
       html += `</div>`;
@@ -1002,25 +997,29 @@ function handleCombat(event) {
 
     // Actions
     html += `<div class="combat-actions">`;
-    if (waitingForLuckChoice) {
+    if (c.waitingForLuckChoice) {
       html += `<button class="btn btn-small" onclick="combatTestLuck()">Test Your Luck?</button>`;
       html += `<button class="btn btn-small" onclick="combatSkipLuck()">Skip</button>`;
     } else if (enemy.currentStamina > 0 && playerStamina > 0) {
       html += `<button class="btn" onclick="combatAttack()">Attack</button>`;
-      if (fleeTo) {
+      if (c.fleeTo) {
         html += `<button class="btn btn-danger btn-small" onclick="combatFlee()">Flee</button>`;
       }
     }
     html += `</div>`;
 
-    area.innerHTML = html;
+    c.area.innerHTML = html;
     // Auto-scroll combat log
-    const log = area.querySelector('.combat-log');
+    const log = c.area.querySelector('.combat-log');
     if (log) log.scrollTop = log.scrollHeight;
   }
 
-  // Store combat state for callbacks
-  window._combat = { enemies, currentEnemyIdx, mode, winTo, fleeTo, specialRules, roundNum, combatLog, waitingForLuckChoice, lastRoundResult, renderCombat, area };
+  // Store combat state for callbacks — all mutable state lives here
+  window._combat = {
+    enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules,
+    roundNum: 0, combatLog: [], waitingForLuckChoice: false,
+    lastRoundResult: null, renderCombat, area,
+  };
 
   window.combatAttack = function() {
     const c = window._combat;
