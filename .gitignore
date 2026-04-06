@@ -2,5 +2,9 @@
 !package.json
 !package-lock.json
 !codex.schema.json
+node_modules/
+package.json
+package-lock.json
+01fftd.xml
 books/
 HANDOFF.md

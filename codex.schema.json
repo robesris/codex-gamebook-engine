@@ -336,15 +336,27 @@
 
     "combat_system_detail": {
       "type": "object",
-      "description": "Detailed combat system parameters.",
+      "description": "Detailed combat system parameters. The round_script field contains a Lua script that the emulator executes each combat round.",
       "properties": {
         "description": { "type": "string" },
         "type": {
           "type": "string",
-          "enum": ["attack_strength_comparison", "combat_ratio_table", "single_roll", "alternating_strikes", "none"]
+          "description": "Combat system identifier. The emulator does not interpret this — it executes the round_script."
         },
-        "player_attack_strength": { "type": "string", "description": "Formula for player attack. e.g., '2d6 + current_skill'." },
-        "enemy_attack_strength": { "type": "string", "description": "Formula for enemy attack." },
+        "round_script": {
+          "type": "string",
+          "description": "Lua script executed each combat round. The emulator provides these globals: player (table with .attack, .health, .name), enemy (same), combat (table with .round, .standard_damage, .last_result, .last_damage), roll(formula) function, log(msg) function, lookup(table, col, row) function. The script modifies player.health and enemy.health to apply damage, and sets combat.last_result ('player_wounds_enemy', 'enemy_wounds_player', 'tie', 'simultaneous') and combat.last_damage. Any tables from combat_system.details are available as globals (e.g., combat_results_table)."
+        },
+        "post_round_script": {
+          "type": "string",
+          "description": "Optional Lua script executed when the player chooses the post-round action (e.g., Testing Luck in FF). Same sandbox as round_script, plus player_stats and initial_stats globals containing all player stat values. Can set player.stats_changed = {stat_name = new_value} to modify stats."
+        },
+        "post_round_label": {
+          "type": "string",
+          "description": "Button label for the optional post-round action (e.g., 'Test Your Luck?'). Only shown if post_round_script is defined."
+        },
+        "player_attack_strength": { "type": "string", "description": "Informational: formula for player attack. e.g., '2d6 + current_skill'." },
+        "enemy_attack_strength": { "type": "string", "description": "Informational: formula for enemy attack." },
         "higher_wins": { "type": "boolean" },
         "tie_result": { "type": "string", "enum": ["no_damage", "both_take_damage", "reroll"] },
         "standard_damage": { "type": "integer" },
