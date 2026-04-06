@@ -813,6 +813,14 @@ Some gamebooks hide numbers, letters, or symbols in illustrations. Note these in
 
 Mode: `"simultaneous"` (fight all at once), `"sequential"` (one at a time), or `"player_choice"` (player chooses order).
 
+**Events between combats:** When something must happen between defeating one enemy and fighting the next (e.g., "gain 1 LUCK after defeating the goblin leader, then fight the two remaining guards"), split into separate combat events with the intervening events in between. Set `win_to: null` on the first combat so the emulator continues to the next event rather than navigating away:
+
+```json
+{"type": "combat", "enemies": [{"ref": "goblin_leader"}], "win_to": null},
+{"type": "modify_stat", "stat": "luck", "amount": 1, "reason": "Defeated the leader"},
+{"type": "combat", "enemies": [{"ref": "goblin_guard_1"}, {"ref": "goblin_guard_2"}], "win_to": 205}
+```
+
 ### 8.6 Sections That Redirect Without Choice
 Single-exit sections with no player decision:
 ```json
