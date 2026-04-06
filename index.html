@@ -673,10 +673,9 @@ function updateStatBar() {
 function updateInventory() {
   const list = document.getElementById('inventory-list');
   list.innerHTML = '';
-  const displayItems = state.inventory.filter(i => {
-    // Filter out base equipment for cleaner display
-    return true;
-  });
+  // Hide potion from inventory list — it's shown in the stat bar
+  const potionId = state.potion ? state.potion.toLowerCase().replace(/ /g, '_') : null;
+  const displayItems = state.inventory.filter(i => i !== potionId);
   if (displayItems.length === 0) {
     list.innerHTML = '<li class="empty">Empty</li>';
     return;
