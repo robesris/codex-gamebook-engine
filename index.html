@@ -571,9 +571,8 @@ function setPlayerHealth(val) {
 function getEnemyAttack(enemy) {
   const { attackStat } = getCombatStats();
   if (!attackStat) return 0;
-  // Try exact match, then common variants (lowercase, snake_case)
   const key = attackStat.toLowerCase().replace(/ /g, '_');
-  return enemy[attackStat] ?? enemy[key] ?? enemy.skill ?? enemy.combat_skill ?? 0;
+  return enemy[attackStat] ?? enemy[key] ?? 0;
 }
 
 // Get enemy's health stat value using the game's health_stat name
@@ -581,7 +580,7 @@ function getEnemyHealth(enemy) {
   const { healthStat } = getCombatStats();
   if (!healthStat) return 0;
   const key = healthStat.toLowerCase().replace(/ /g, '_');
-  return enemy[healthStat] ?? enemy[key] ?? enemy.stamina ?? enemy.endurance ?? 0;
+  return enemy[healthStat] ?? enemy[key] ?? 0;
 }
 
 function getItemName(itemId) {
