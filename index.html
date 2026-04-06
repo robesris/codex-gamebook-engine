@@ -1133,16 +1133,16 @@ function handleCombat(event) {
     // Enemy dead
     if (enemy.currentStamina <= 0) {
       c.combatLog.push(`<span class="lucky">${enemy.name} is defeated!</span>`);
-      c.currentEnemyIdx++;
 
-      if (c.currentEnemyIdx < c.enemies.length && (c.mode === 'sequential' || c.mode === 'custom')) {
+      const nextIdx = c.currentEnemyIdx + 1;
+      if (nextIdx < c.enemies.length && (c.mode === 'sequential' || c.mode === 'custom')) {
         // Next enemy
+        c.currentEnemyIdx = nextIdx;
         c.combatLog.push(`<br>--- Next opponent: ${c.enemies[c.currentEnemyIdx].name} ---`);
         c.renderCombat();
         return;
       } else {
-        // All enemies defeated
-        c.renderCombat();
+        // All enemies defeated — don't re-render (index would be out of bounds)
         setTimeout(() => {
           if (c.winTo) navigateTo(c.winTo);
           else processNextEvent();
