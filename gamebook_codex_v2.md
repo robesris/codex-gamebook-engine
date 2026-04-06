@@ -55,21 +55,25 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 4. Check for logical issues — dead-end sections that aren't marked as endings, unreachable sections, stat modifications that reference nonexistent stats
 5. Report findings to the user before making changes
 
-**Minimize the diff.** When fixing issues in an existing JSON file:
-- Do NOT rewrite the entire file from scratch. Fix only what needs fixing.
-- Preserve the original structure, field ordering, formatting, and content wherever it is correct.
-- If a section's text, events, and choices are all correct, do not touch that section.
-- When adding missing fields, add them in the position specified by the schema.
-- When upgrading event types (e.g., replacing a `custom` event with `choose_items`), preserve any correct fields from the original event.
-- Provide a clear summary of what was changed and why, so the user can review the diff.
+**Correctness is the top priority.** The goal is a JSON file that the emulator can play correctly. Every issue you identify MUST be fixed, not just documented. If a section is missing events, conditions, or items that the book text describes, add them. If a `custom` event should be a standard event type, replace it. If character creation steps are incomplete or incorrectly structured, fix them. Do not leave known functional gaps for someone else to address.
 
-**Common issues to look for:**
+**Minimize the diff where possible, but never at the expense of correctness.** When fixing issues:
+- Preserve correct content — don't rewrite sections that are already right.
+- But DO make every change needed to produce a fully functional game file.
+- If in doubt about whether something needs fixing, err on the side of fixing it. A correct file that touches more sections is always better than a broken file with a clean diff.
+- Provide a clear summary of what was changed and why, so the user can review.
+
+**Common issues to look for and FIX:**
 - `custom` events that should use standard event types (`choose_items`, `stat_test`, `roll_dice`, etc.)
 - Missing `is_ending` / `ending_type` on terminal sections
 - Item or enemy refs that don't resolve to catalog entries
 - Stat names inconsistent between `rules.stats`, events, and conditions
 - Missing conditions on choices that the section text describes as conditional
 - Sections with `target: null` choices that should trigger section-level tests
+- Missing `frontmatter` — story introductions, rules explanations, and reference material that the book presents before play begins
+- Missing events for mechanics described in narrative — if the text says "lose 3 STAMINA" or "pick up the Golden Key," there must be corresponding `modify_stat` or `add_item` events
+- Character creation steps that are incomplete, incorrectly conditional, or use invalid action types
+- Item selection mechanics (`choose_items`) encoded as narrative text or `custom` events instead of structured events
 
 ### Step 3b: Read the GBF Specification
 Before generating any JSON output, you MUST read the complete GBF JSON Schema specification (`codex.schema.json`). The schema is the authoritative definition of the output format. If the user provides it alongside the source material, read it in full. If not, the canonical version is available at:
