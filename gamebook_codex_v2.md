@@ -388,6 +388,7 @@ Events are things that happen in a section before or independent of the choices.
 {"type": "combat", "enemies": [{"ref": "enemy_id"}], "mode": "sequential|simultaneous|player_choice", "win_to": 287, "flee_to": 42, "special_rules": "string or null"}
 {"type": "stat_test", "stat": "luck", "method": "2d6_under", "success_to": 200, "failure_to": 340, "deduct_after": true, "deduct_stat": "luck", "deduct_amount": 1}
 {"type": "roll_dice", "dice": "1d6", "results": {"1-2": {"target": 44}, "3-4": {"target": 109}, "5-6": {"target": 278}}}
+{"type": "roll_dice", "dice": "1d6", "apply_to_stat": "stamina", "amount_sign": "negative", "note": "Roll 1d6 and lose that many STAMINA"}
 {"type": "input_number", "prompt": "string", "target": "computed", "note": "string"}
 {"type": "input_text", "prompt": "string", "answers": {"answer1": {"target": 250}}, "case_sensitive": false, "default": {"target": 340}}
 {"type": "eat_meal", "required": true, "penalty_stat": "stamina", "penalty_amount": -3}

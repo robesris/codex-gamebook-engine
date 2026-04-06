@@ -588,6 +588,15 @@
             }
           }
         },
+        "apply_to_stat": {
+          "type": "string",
+          "description": "roll_dice: instead of navigating, apply the roll result as a stat modification. Value is the stat name. Use with amount_sign to control direction."
+        },
+        "amount_sign": {
+          "type": "string",
+          "enum": ["positive", "negative"],
+          "description": "roll_dice + apply_to_stat: whether the roll result is added ('positive') or subtracted ('negative') from the stat. Defaults to 'negative'."
+        },
         "post_combat": { "type": "boolean", "description": "roll_dice: if true, this roll occurs after a combat in the same section." },
 
         "prompt": { "type": "string", "description": "input_number, input_text: prompt text shown to the player." },

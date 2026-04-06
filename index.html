@@ -1587,10 +1587,10 @@ function handleRollDice(event) {
     btn.disabled = true;
     const result = rollDice(dice);
 
-    // Handle "roll and apply to stat" shorthand (e.g., results: "subtract_from_stamina")
-    if (typeof event.results === 'string' || event.apply_to_stat) {
-      const stat = event.apply_to_stat || event.results.replace('subtract_from_', '').replace('add_to_', '');
-      const isAdd = event.results?.startsWith?.('add_to_') || (event.amount_sign === 'positive');
+    // Handle apply_to_stat: roll dice and apply result as stat modification
+    if (event.apply_to_stat) {
+      const stat = event.apply_to_stat;
+      const isAdd = event.amount_sign === 'positive';
       const amount = isAdd ? result.total : -result.total;
 
       if (stat === 'provisions') state.provisions = Math.max(0, state.provisions + amount);
