@@ -299,6 +299,7 @@ Events are things that happen in a section before or independent of the choices.
 {"type": "input_number", "prompt": "string", "target": "computed", "note": "string"}
 {"type": "input_text", "prompt": "string", "answers": {"answer1": {"target": 250}}, "case_sensitive": false, "default": {"target": 340}}
 {"type": "eat_meal", "required": true, "penalty_stat": "stamina", "penalty_amount": -3}
+{"type": "choose_items", "catalog_filter": {"inventory_category": "weapons"}, "count": 3, "add_automatic": ["sword_of_golden_lion"], "exclude": ["sword_of_golden_lion"], "replace_category": true, "description": "Player selects 3 weapons from the Book of Weapons."}
 {"type": "custom", "mechanic_name": "string", "description": "string", "parameters": {}}
 ```
 
@@ -597,7 +598,31 @@ Single-exit sections with no player decision:
 }
 ```
 
-### 8.7 Book-Specific Custom Mechanics
+### 8.7 Mid-Adventure Item/Loadout Selection
+Some gamebooks instruct the player to choose items, spells, or equipment at points during the adventure (not just during character creation). For example, "Turn to the back of the book, read the Book of Weapons, and choose three." Use the `choose_items` event:
+
+```json
+{
+  "type": "choose_items",
+  "catalog_filter": {"inventory_category": "weapons"},
+  "count": 3,
+  "add_automatic": ["sword_of_golden_lion"],
+  "exclude": ["sword_of_golden_lion"],
+  "replace_category": true,
+  "description": "Player selects 3 weapons from the Book of Weapons. The Sword of the Golden Lion is always carried."
+}
+```
+
+Fields:
+- `catalog_filter` — Filter `items_catalog` entries by field values (e.g., `{"inventory_category": "weapons"}`)
+- `count` — How many items the player must choose
+- `add_automatic` (optional) — Items automatically added regardless of player choice
+- `exclude` (optional) — Items to hide from the selection list
+- `replace_category` (optional) — If true, remove all existing items in this category before adding new selections
+
+This event type can also be used in `character_creation` steps for initial loadout selection. It replaces the need for `custom` events to describe item selection.
+
+### 8.8 Book-Specific Custom Mechanics
 For any mechanic that doesn't fit standard event types:
 ```json
 {

@@ -323,6 +323,25 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   border-radius: 8px; padding: 16px; margin-bottom: 16px; text-align: center;
 }
 
+/* --- Choose Items --- */
+.choose-items-area {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; margin-bottom: 16px;
+}
+.choose-items-grid {
+  display: flex; flex-direction: column; gap: 6px; margin: 12px 0;
+}
+.choose-item-btn {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 14px; cursor: pointer;
+  color: var(--text); font-family: inherit; font-size: 0.9em;
+  text-align: left; transition: all 0.15s;
+}
+.choose-item-btn:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+.choose-item-btn.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--text-bright); }
+.choose-item-btn .item-desc { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; }
+.choose-items-count { font-size: 0.85em; color: var(--text-dim); margin-bottom: 8px; }
+
 /* --- Debug Panel --- */
 .debug-toggle {
   position: fixed; bottom: 10px; right: 10px; z-index: 100;
@@ -825,6 +844,9 @@ function processNextEvent() {
     case 'input_text':
       handleInputText(event);
       break;
+    case 'choose_items':
+      handleChooseItems(event);
+      break;
     case 'custom':
       handleCustom(event);
       processNextEvent();
@@ -929,6 +951,93 @@ function handleCustom(event) {
   msg.className = 'event-msg info';
   msg.textContent = event.description || 'Special event';
   content.appendChild(msg);
+}
+
+// ==================== CHOOSE ITEMS ====================
+function handleChooseItems(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'choose-items-area';
+  content.appendChild(area);
+
+  const catalog = gameData.items_catalog || {};
+  const filter = event.catalog_filter || {};
+  const excludeSet = new Set(event.exclude || []);
+  const count = event.count || 1;
+  const addAutomatic = event.add_automatic || [];
+  const replaceCategory = event.replace_category || false;
+
+  // Filter catalog
+  const available = Object.entries(catalog).filter(([id, item]) => {
+    if (excludeSet.has(id)) return false;
+    for (const [key, val] of Object.entries(filter)) {
+      if (item[key] !== val) return false;
+    }
+    return true;
+  });
+
+  const selected = new Set();
+
+  function render() {
+    let html = `<h3>${event.description || 'Choose your items'}</h3>`;
+    html += `<div class="choose-items-count">Selected: ${selected.size} / ${count}</div>`;
+    html += `<div class="choose-items-grid">`;
+    for (const [id, item] of available) {
+      const isSel = selected.has(id);
+      html += `<div class="choose-item-btn ${isSel ? 'selected' : ''}" data-item-id="${id}">
+        <strong>${item.name}</strong>
+        ${item.description ? `<div class="item-desc">${item.description}</div>` : ''}
+      </div>`;
+    }
+    html += `</div>`;
+    if (selected.size === count) {
+      html += `<div class="center mt-1"><button class="btn" id="confirm-items-btn">Confirm</button></div>`;
+    }
+    area.innerHTML = html;
+
+    // Bind clicks
+    area.querySelectorAll('.choose-item-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.itemId;
+        if (selected.has(id)) {
+          selected.delete(id);
+        } else if (selected.size < count) {
+          selected.add(id);
+        }
+        render();
+      });
+    });
+    const confirmBtn = area.querySelector('#confirm-items-btn');
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', () => {
+        // Remove existing items in category if replace_category
+        if (replaceCategory) {
+          const filterKey = Object.keys(filter)[0];
+          const filterVal = filter[filterKey];
+          if (filterKey && filterVal) {
+            state.inventory = state.inventory.filter(itemId => {
+              const catItem = catalog[itemId];
+              return !catItem || catItem[filterKey] !== filterVal;
+            });
+          }
+        }
+        // Add automatic items
+        for (const id of addAutomatic) {
+          if (!state.inventory.includes(id)) state.inventory.push(id);
+        }
+        // Add selected items
+        for (const id of selected) {
+          if (!state.inventory.includes(id)) state.inventory.push(id);
+        }
+        area.innerHTML = `<div class="event-msg gain">Selected: ${[...addAutomatic.map(id => getItemName(id)), ...[...selected].map(id => getItemName(id))].join(', ')}</div>`;
+        updateInventory();
+        updateStatBar();
+        processNextEvent();
+      });
+    }
+  }
+
+  render();
 }
 
 // ==================== COMBAT ====================
