@@ -1,5 +1,6 @@
 *.json
 !package.json
 !package-lock.json
+!codex.schema.json
 books/
 HANDOFF.md

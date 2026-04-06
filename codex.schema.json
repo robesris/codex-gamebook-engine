@@ -1,0 +1,661 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
+  "title": "Gamebook Format (GBF) v1.0.0",
+  "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
+  "type": "object",
+  "required": ["metadata", "rules", "character_creation", "sections"],
+  "additionalProperties": false,
+  "properties": {
+
+    "metadata": {
+      "type": "object",
+      "description": "Bibliographic information and parsing confidence report.",
+      "required": ["title", "author", "total_sections"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Full title of the gamebook."
+        },
+        "series": {
+          "type": ["string", "null"],
+          "description": "Series name (e.g., 'Fighting Fantasy', 'Lone Wolf'), or null if standalone."
+        },
+        "series_number": {
+          "type": ["integer", "null"],
+          "description": "Position within the series, or null."
+        },
+        "author": {
+          "type": "string",
+          "description": "Author(s) of the gamebook."
+        },
+        "illustrator": {
+          "type": ["string", "null"],
+          "description": "Interior illustrator, or null."
+        },
+        "publisher": {
+          "type": ["string", "null"],
+          "description": "Publisher name."
+        },
+        "year": {
+          "type": ["integer", "null"],
+          "description": "Year of publication for this edition."
+        },
+        "series_profile": {
+          "type": "string",
+          "description": "Which rules profile this book follows.",
+          "enum": ["choice_only", "fighting_fantasy", "lone_wolf", "add_adventure", "unknown"]
+        },
+        "total_sections": {
+          "type": "integer",
+          "description": "Expected total number of sections in the book.",
+          "minimum": 1
+        },
+        "dice_type": {
+          "type": "string",
+          "description": "Primary randomization method. e.g., 'd6', 'R10', 'none'."
+        },
+        "codex_version": {
+          "type": ["string", "null"],
+          "description": "Version of the Gamebook Codex used to generate this file, if applicable."
+        },
+        "parser_notes": {
+          "type": ["string", "null"],
+          "description": "Free-text notes about this specific parse (source quality, known issues, edition-specific details)."
+        },
+        "source_quality": {
+          "type": ["string", "null"],
+          "description": "Quality assessment of the source material.",
+          "enum": ["clean_text", "good_scan", "poor_scan", "mixed", null]
+        },
+        "confidence": {
+          "type": "object",
+          "description": "Parsing confidence report.",
+          "properties": {
+            "sections_parsed": {
+              "type": "integer",
+              "description": "Number of sections successfully parsed."
+            },
+            "standard_navigation": {
+              "type": "integer",
+              "description": "Sections with simple turn-to-X choices."
+            },
+            "conditional_navigation": {
+              "type": "integer",
+              "description": "Sections with conditional (item/flag/stat) choices."
+            },
+            "computed_navigation": {
+              "type": "integer",
+              "description": "Sections requiring numeric or text input for navigation."
+            },
+            "flagged_for_review": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "List of human-readable descriptions of issues found during parsing."
+            },
+            "death_endings": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "Section numbers that are death endings."
+            },
+            "victory_endings": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "Section numbers that are victory endings."
+            },
+            "total_enemies": {
+              "type": "integer",
+              "description": "Total unique enemies in the enemies_catalog."
+            },
+            "total_items": {
+              "type": "integer",
+              "description": "Total unique items in the items_catalog."
+            }
+          }
+        }
+      }
+    },
+
+    "rules": {
+      "type": "object",
+      "description": "The complete game system as parsed from the book's rules section. Every field should reflect what the specific book states, not series-level assumptions.",
+      "properties": {
+        "stats": {
+          "type": "array",
+          "description": "All character stats tracked during the game.",
+          "items": {
+            "$ref": "#/definitions/stat_definition"
+          }
+        },
+        "combat_system": {
+          "description": "Combat system identifier or detailed rules object. May be a string shorthand (e.g., 'fighting_fantasy_standard') or a full object.",
+          "oneOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/combat_system_detail" }
+          ]
+        },
+        "combat_rules_detail": {
+          "$ref": "#/definitions/combat_system_detail",
+          "description": "Detailed combat parameters. Used when combat_system is a string shorthand."
+        },
+        "escaping": {
+          "type": "object",
+          "description": "Rules for fleeing from combat.",
+          "properties": {
+            "allowed_only_when_specified": { "type": "boolean" },
+            "flee_damage": { "type": "integer", "description": "STAMINA damage taken when fleeing." },
+            "flee_damage_stat": { "type": "string" },
+            "luck_on_flee_wound_allowed": { "type": "boolean" }
+          }
+        },
+        "skill_test": {
+          "type": "object",
+          "description": "How skill tests work.",
+          "properties": {
+            "method": { "type": "string", "description": "e.g., 'roll_2d6_lte_skill'" },
+            "deduct_after": { "type": "boolean" }
+          }
+        },
+        "luck_test": {
+          "type": "object",
+          "description": "How luck tests work.",
+          "properties": {
+            "method": { "type": "string", "description": "e.g., 'roll_2d6_lte_luck'" },
+            "deduct_after": { "type": "boolean" },
+            "deduct_amount": { "type": "integer" }
+          }
+        },
+        "inventory": {
+          "type": "object",
+          "description": "Inventory management rules.",
+          "properties": {
+            "capacity": { "type": ["integer", "null"] },
+            "categories": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "category_limits": {
+              "type": ["object", "null"],
+              "additionalProperties": { "type": "integer" }
+            }
+          }
+        },
+        "inventory_capacity": {
+          "type": ["integer", "null"],
+          "description": "Shorthand for max inventory size. Null = unlimited."
+        },
+        "multiple_enemies": {
+          "type": "string",
+          "description": "How multi-enemy encounters are handled. e.g., 'as_instructed_per_section'."
+        },
+        "provisions": {
+          "$ref": "#/definitions/provisions_rules"
+        },
+        "potion": {
+          "$ref": "#/definitions/potion_rules"
+        },
+        "abilities": {
+          "type": "object",
+          "description": "Discipline/ability selection system, if applicable.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "choose_count": { "type": "integer" },
+            "available": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" },
+                  "mechanical_effect": { "type": "string" }
+                },
+                "required": ["name"]
+              }
+            }
+          }
+        },
+        "special_mechanics": {
+          "type": "array",
+          "description": "Any book-specific rules not covered by other fields.",
+          "items": { "type": ["string", "object"] }
+        }
+      }
+    },
+
+    "character_creation": {
+      "type": "object",
+      "description": "Ordered steps to create a new character.",
+      "required": ["steps"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/character_creation_step"
+          }
+        },
+        "notes": {
+          "type": ["string", "null"],
+          "description": "Clarifying notes about character creation."
+        }
+      }
+    },
+
+    "sections": {
+      "type": "object",
+      "description": "All game sections, keyed by section number as a string.",
+      "patternProperties": {
+        "^[0-9]+$": {
+          "$ref": "#/definitions/section"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "items_catalog": {
+      "type": "object",
+      "description": "All items that can be found, purchased, or received in the game.",
+      "additionalProperties": {
+        "$ref": "#/definitions/item"
+      }
+    },
+
+    "enemies_catalog": {
+      "type": "object",
+      "description": "All enemies encountered in combat.",
+      "additionalProperties": {
+        "$ref": "#/definitions/enemy"
+      }
+    }
+  },
+
+  "definitions": {
+
+    "stat_definition": {
+      "type": "object",
+      "required": ["name", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Stat name as it appears in the book (e.g., 'skill', 'stamina', 'luck', 'combat_skill', 'endurance')." },
+        "generation": { "type": "string", "description": "Dice formula for initial value. e.g., '1d6+6', '2d6+12', 'R10+10', 'fixed:20'." },
+        "min": { "type": "integer" },
+        "max": { "type": ["integer", "null"] },
+        "initial_is_max": { "type": "boolean", "description": "If true, stat cannot exceed its rolled starting value unless specifically instructed." },
+        "description": { "type": "string" }
+      }
+    },
+
+    "combat_system_detail": {
+      "type": "object",
+      "description": "Detailed combat system parameters.",
+      "properties": {
+        "description": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["attack_strength_comparison", "combat_ratio_table", "single_roll", "alternating_strikes", "none"]
+        },
+        "player_attack_strength": { "type": "string", "description": "Formula for player attack. e.g., '2d6 + current_skill'." },
+        "enemy_attack_strength": { "type": "string", "description": "Formula for enemy attack." },
+        "higher_wins": { "type": "boolean" },
+        "tie_result": { "type": "string", "enum": ["no_damage", "both_take_damage", "reroll"] },
+        "standard_damage": { "type": "integer" },
+        "death_at_stamina": { "type": "integer" },
+        "luck_in_combat": {
+          "type": "object",
+          "properties": {
+            "optional": { "type": "boolean" },
+            "player_wounded_enemy_lucky": { "type": "integer", "description": "Damage dealt when player wounds enemy and is lucky." },
+            "player_wounded_enemy_unlucky": { "type": "integer", "description": "Damage dealt when player wounds enemy and is unlucky." },
+            "enemy_wounded_player_lucky": { "type": "integer", "description": "Damage taken when enemy wounds player and player is lucky." },
+            "enemy_wounded_player_unlucky": { "type": "integer", "description": "Damage taken when enemy wounds player and player is unlucky." }
+          }
+        },
+        "details": {
+          "type": "object",
+          "description": "Additional system-specific parameters.",
+          "additionalProperties": true
+        }
+      }
+    },
+
+    "provisions_rules": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "starting_amount": { "type": "integer" },
+        "heal_amount": { "type": "integer" },
+        "heal_stat": { "type": "string" },
+        "when_usable": {
+          "type": "string",
+          "description": "When provisions can be consumed.",
+          "enum": ["when_instructed", "anytime_outside_combat", "any_time"]
+        }
+      }
+    },
+
+    "potion_rules": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "doses": { "type": "integer" },
+        "when_usable": { "type": "string" },
+        "choose_one_of": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "effect": { "type": "string" },
+              "stat": { "type": "string" },
+              "detail": { "type": "string" }
+            },
+            "required": ["name", "effect", "stat"]
+          }
+        }
+      }
+    },
+
+    "character_creation_step": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["roll_stat", "choose_one", "choose_abilities", "add_item", "set_resource"]
+        },
+        "stat": { "type": "string" },
+        "formula": { "type": "string" },
+        "category": { "type": "string" },
+        "options": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "count": { "type": "integer" },
+        "from": { "type": "string" },
+        "item": { "type": "string" },
+        "resource": { "type": "string" },
+        "amount": { "type": "number" },
+        "source": { "type": "string", "description": "Parser note: where in the source this was confirmed." }
+      }
+    },
+
+    "section": {
+      "type": "object",
+      "required": ["text", "choices", "is_ending"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Full narrative text of the section."
+        },
+        "first_10_words": {
+          "type": ["string", "null"],
+          "description": "First 10 words exactly as they appear in the source, for verification."
+        },
+        "image": {
+          "type": ["string", "null"],
+          "description": "Illustration reference, or null."
+        },
+        "events": {
+          "type": "array",
+          "description": "Events that occur in this section, processed in order.",
+          "items": {
+            "$ref": "#/definitions/event"
+          }
+        },
+        "choices": {
+          "type": "array",
+          "description": "Navigation choices available to the player.",
+          "items": {
+            "$ref": "#/definitions/choice"
+          }
+        },
+        "is_ending": {
+          "type": "boolean",
+          "description": "True if this section has no outgoing navigation (death, victory, or other terminal state)."
+        },
+        "ending_type": {
+          "type": ["string", "null"],
+          "enum": ["death", "victory", "neutral", "continuation", null]
+        },
+        "needs_review": {
+          "type": "boolean",
+          "description": "If true, this section was flagged for human review during parsing."
+        }
+      }
+    },
+
+    "choice": {
+      "type": "object",
+      "required": ["text", "target"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Choice text as it appears in the book."
+        },
+        "target": {
+          "type": "integer",
+          "description": "Section number to navigate to."
+        },
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Condition that must be met for this choice to be available. Null = always available."
+        }
+      }
+    },
+
+    "condition": {
+      "type": "object",
+      "required": ["type"],
+      "description": "A condition that evaluates to true or false based on the player's current state.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "not", "and", "or", "test_failed"]
+        },
+        "item": { "type": "string", "description": "For has_item: item_id to check." },
+        "flag": { "type": "string", "description": "For has_flag: flag name to check." },
+        "stat": { "type": "string", "description": "For stat_gte/stat_lte: stat name." },
+        "value": { "type": "number", "description": "For stat_gte/stat_lte: threshold value." },
+        "ability": { "type": "string", "description": "For has_ability: ability name." },
+        "condition": {
+          "$ref": "#/definitions/condition",
+          "description": "For 'not': the condition to negate."
+        },
+        "conditions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/condition" },
+          "description": "For 'and'/'or': array of sub-conditions."
+        }
+      }
+    },
+
+    "event": {
+      "type": "object",
+      "required": ["type"],
+      "description": "An event that occurs in a section. Events are processed in order before the player makes choices.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "modify_stat",
+            "add_item",
+            "remove_item",
+            "set_flag",
+            "combat",
+            "stat_test",
+            "roll_dice",
+            "input_number",
+            "input_text",
+            "eat_meal",
+            "custom"
+          ]
+        },
+
+        "stat": { "type": "string", "description": "modify_stat, stat_test: which stat." },
+        "amount": { "type": "number", "description": "modify_stat: change amount (positive or negative)." },
+        "reason": { "type": "string", "description": "modify_stat, remove_item: human-readable explanation." },
+        "optional": { "type": "boolean", "description": "modify_stat, add_item: player can choose whether to take/apply this." },
+
+        "item": { "type": "string", "description": "add_item, remove_item: item_id." },
+        "number": { "type": "integer", "description": "add_item: for numbered items (keys etc)." },
+        "cost": { "type": "object", "description": "add_item: cost to acquire (e.g., {\"stat\": \"gold\", \"amount\": 20})." },
+        "note": { "type": "string", "description": "Any event: supplementary parser note." },
+
+        "flag": { "type": "string", "description": "set_flag: flag name to set." },
+
+        "enemy_ref": { "type": "string", "description": "combat (single enemy): reference to enemies_catalog." },
+        "enemies": {
+          "type": "array",
+          "description": "combat (multiple enemies): array of enemy references.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": { "type": "string" }
+            },
+            "required": ["ref"]
+          }
+        },
+        "mode": {
+          "type": "string",
+          "description": "combat: how multiple enemies are fought.",
+          "enum": ["sequential", "simultaneous", "player_choice"]
+        },
+        "win_to": { "type": ["integer", "null"], "description": "combat: section to go to on victory." },
+        "flee_to": { "type": ["integer", "null"], "description": "combat: section to go to when fleeing. Null = cannot flee." },
+        "special_rules": { "type": ["string", "null"], "description": "combat: per-encounter special rules in plain English." },
+        "interrupt_on_first_player_hit": { "type": "boolean", "description": "combat: if true, redirect after player's first successful wound." },
+
+        "method": { "type": "string", "description": "stat_test: test method (e.g., '2d6_under')." },
+        "success_to": { "type": ["integer", "null"], "description": "stat_test, custom: section on success." },
+        "failure_to": { "type": ["integer", "null"], "description": "stat_test, custom: section on failure." },
+        "deduct_after": { "type": "boolean", "description": "stat_test: deduct from stat after testing." },
+        "deduct_stat": { "type": "string", "description": "stat_test: which stat to deduct from." },
+        "deduct_amount": { "type": "integer", "description": "stat_test: how much to deduct." },
+        "failure_penalty": {
+          "type": "object",
+          "description": "stat_test: additional penalty on failure (e.g., stat loss).",
+          "properties": {
+            "stat": { "type": "string" },
+            "amount": { "type": "number" }
+          }
+        },
+        "success_bonus": {
+          "type": "object",
+          "description": "stat_test, roll_dice: additional bonus on success.",
+          "additionalProperties": true
+        },
+
+        "dice": { "type": "string", "description": "roll_dice: dice expression (e.g., '1d6', '2d6')." },
+        "results": {
+          "type": "object",
+          "description": "roll_dice: mapping of result ranges to outcomes.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "target": { "type": "integer" },
+              "text": { "type": "string" }
+            }
+          }
+        },
+        "post_combat": { "type": "boolean", "description": "roll_dice: if true, this roll occurs after a combat in the same section." },
+
+        "prompt": { "type": "string", "description": "input_number, input_text: prompt text shown to the player." },
+        "target": {
+          "description": "input_number: 'computed' means navigate to the entered number.",
+          "type": "string",
+          "enum": ["computed"]
+        },
+        "answers": {
+          "type": "object",
+          "description": "input_text: mapping of accepted answers to outcomes.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "target": { "type": "integer" }
+            }
+          }
+        },
+        "case_sensitive": { "type": "boolean", "description": "input_text: whether answer matching is case-sensitive." },
+        "default": {
+          "type": "object",
+          "description": "input_text: outcome when no answer matches.",
+          "properties": {
+            "target": { "type": "integer" },
+            "text": { "type": "string" }
+          }
+        },
+
+        "required": { "type": "boolean", "description": "eat_meal: if true, eating is mandatory." },
+        "penalty_stat": { "type": "string", "description": "eat_meal: stat penalized if no food available." },
+        "penalty_amount": { "type": "number", "description": "eat_meal: penalty amount if no food." },
+
+        "mechanic_name": { "type": "string", "description": "custom: name for this mechanic." },
+        "description": { "type": "string", "description": "custom: detailed plain-English description of how the mechanic works." },
+        "parameters": {
+          "type": "object",
+          "description": "custom: mechanic-specific parameters.",
+          "additionalProperties": true
+        }
+      }
+    },
+
+    "item": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "description": "Display name of the item." },
+        "type": {
+          "type": "string",
+          "description": "Item category.",
+          "enum": ["weapon", "armor", "key_item", "consumable", "general", "treasure"]
+        },
+        "number": {
+          "type": ["integer", "null"],
+          "description": "For numbered items used in computed navigation (e.g., keys). Null for unnumbered items."
+        },
+        "takes_inventory_slot": { "type": "boolean" },
+        "inventory_category": {
+          "type": ["string", "null"],
+          "description": "Which inventory category this item belongs to (for games with category limits)."
+        },
+        "stat_modifier": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "stat": { "type": "string" },
+                "amount": { "type": "number" },
+                "when": { "type": "string", "enum": ["always", "combat", "equipped"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "description": { "type": "string" }
+      }
+    },
+
+    "enemy": {
+      "type": "object",
+      "required": ["name"],
+      "description": "An enemy encountered in combat. Stats are defined as direct properties matching the game's stat names.",
+      "properties": {
+        "name": { "type": "string" },
+        "skill": { "type": "integer", "description": "Fighting Fantasy: SKILL stat." },
+        "stamina": { "type": "integer", "description": "Fighting Fantasy: STAMINA stat." },
+        "combat_skill": { "type": "integer", "description": "Lone Wolf: COMBAT SKILL." },
+        "endurance": { "type": "integer", "description": "Lone Wolf: ENDURANCE." },
+        "section": { "type": "integer", "description": "Section number where this enemy is encountered." },
+        "special": {
+          "type": ["string", "null"],
+          "description": "Special combat rules for this enemy in plain English."
+        }
+      },
+      "additionalProperties": {
+        "type": ["integer", "string"],
+        "description": "Additional game-specific stats."
+      }
+    }
+  }
+}

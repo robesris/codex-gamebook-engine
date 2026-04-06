@@ -26,6 +26,8 @@ Ask the user to provide their gamebook in one of these formats:
 - **Provide a URL** to a PDF (requires web search/fetch to be enabled)
 - **Upload or paste a text dump** of the book
 - **Provide a URL** to a text version of the book
+- **Upload structured data** (XML, HTML, or other machine-readable format)
+- **Upload an existing GBF JSON file** for review, correction, or upgrade (see Step 3a)
 
 ### Step 3: Assess Source Quality
 Once the source is available, evaluate it:
@@ -34,7 +36,40 @@ Once the source is available, evaluate it:
   - **Vision-only mode**: Read each page as an image using your vision capabilities (slower but more accurate for bad scans)
   - **Hybrid mode**: Extract what text you can programmatically, then use vision to verify and correct problem sections (faster but may miss some errors)
 - If the text is clean (digital PDF or good OCR), proceed with text extraction
+- If it's structured data (XML, HTML), proceed with extraction — structured formats are ideal since they provide clean text with explicit section boundaries
+- If it's an existing GBF JSON file, proceed to Step 3a
 - Ask the user which approach they prefer, or recommend one based on what you see
+
+### Step 3a: Handling Existing GBF JSON Files
+If the user provides a file that is already in Gamebook Format (GBF) JSON — i.e., it has `metadata`, `rules`, `character_creation`, and `sections` top-level keys — treat this as a **review and upgrade** task, not a fresh parse.
+
+**Validate against the schema.** The canonical GBF JSON Schema is available at:
+`https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json`
+
+If the schema is provided alongside the JSON, or if you can fetch it, validate the file against it. If not, validate against the schema specification in Section 2 of this document.
+
+**Assess the file:**
+1. Check the `codex_version` field in metadata (if present) to determine which version of the Codex created it
+2. Validate structural correctness — are all required fields present? Are section targets valid? Do enemy/item refs resolve?
+3. Identify any event types or patterns that are outdated, missing, or incorrectly modeled (e.g., `custom` events that should now use a standard event type like `choose_items`)
+4. Check for logical issues — dead-end sections that aren't marked as endings, unreachable sections, stat modifications that reference nonexistent stats
+5. Report findings to the user before making changes
+
+**Minimize the diff.** When fixing issues in an existing JSON file:
+- Do NOT rewrite the entire file from scratch. Fix only what needs fixing.
+- Preserve the original structure, field ordering, formatting, and content wherever it is correct.
+- If a section's text, events, and choices are all correct, do not touch that section.
+- When adding missing fields, add them in the position specified by the schema.
+- When upgrading event types (e.g., replacing a `custom` event with `choose_items`), preserve any correct fields from the original event.
+- Provide a clear summary of what was changed and why, so the user can review the diff.
+
+**Common issues to look for:**
+- `custom` events that should use standard event types (`choose_items`, `stat_test`, `roll_dice`, etc.)
+- Missing `is_ending` / `ending_type` on terminal sections
+- Item or enemy refs that don't resolve to catalog entries
+- Stat names inconsistent between `rules.stats`, events, and conditions
+- Missing conditions on choices that the section text describes as conditional
+- Sections with `target: null` choices that should trigger section-level tests
 
 ### Step 4: Identify the Book
 Read the title page, copyright page, and any series identification. Determine:
