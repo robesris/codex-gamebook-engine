@@ -323,6 +323,26 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   border-radius: 8px; padding: 16px; margin-bottom: 16px; text-align: center;
 }
 
+/* --- Frontmatter --- */
+.frontmatter-page { margin-bottom: 20px; }
+.frontmatter-page h3 {
+  color: var(--accent); margin-bottom: 12px;
+  border-bottom: 1px solid var(--border); padding-bottom: 6px;
+}
+.frontmatter-page .fm-text {
+  font-size: 1.05em; line-height: 1.8; white-space: pre-wrap;
+}
+.frontmatter-page .fm-text p { margin-bottom: 0.8em; }
+.fm-type-tag {
+  display: inline-block; font-size: 0.7em; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--text-dim); background: rgba(0,0,0,0.2);
+  padding: 2px 8px; border-radius: 3px; margin-bottom: 8px;
+}
+.fm-page-indicator {
+  text-align: center; color: var(--text-dim); font-size: 0.85em;
+  margin-bottom: 12px;
+}
+
 /* --- Choose Items --- */
 .choose-items-area {
   background: var(--bg-card); border: 1px solid var(--border);
@@ -413,6 +433,15 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
     </div>
   </div>
 
+  <!-- FRONTMATTER -->
+  <div id="frontmatter-screen" class="screen">
+    <h1 id="frontmatter-title"></h1>
+    <div id="frontmatter-content"></div>
+    <div class="center mt-3">
+      <button id="frontmatter-next-btn" class="btn btn-large" onclick="nextFrontmatterPage()">Continue</button>
+    </div>
+  </div>
+
   <!-- CHARACTER CREATION -->
   <div id="creation-screen" class="screen">
     <h1 id="game-title"></h1>
@@ -481,6 +510,13 @@ let state = {
 
 // ==================== UTILITY ====================
 function rollDice(formula) {
+  // Handle R10 (Lone Wolf random number table: 0-9)
+  const r10 = formula.match(/^R10(?:\+(\d+))?$/);
+  if (r10) {
+    const bonus = r10[1] ? parseInt(r10[1]) : 0;
+    const roll = Math.floor(Math.random() * 10); // 0-9
+    return { total: roll + bonus, rolls: [roll], bonus };
+  }
   // Parse "NdX+Y" or "NdX"
   const m = formula.match(/(\d+)d(\d+)(?:\+(\d+))?/);
   if (!m) return { total: 0, rolls: [], bonus: 0 };
@@ -528,13 +564,62 @@ document.getElementById('file-input').addEventListener('change', (e) => {
     try {
       gameData = JSON.parse(ev.target.result);
       if (!gameData.sections || !gameData.rules) throw new Error('Invalid game data');
-      startCharacterCreation();
+      startGame();
     } catch (err) {
       document.getElementById('load-error').textContent = 'Error: ' + err.message;
     }
   };
   reader.readAsText(file);
 });
+
+// ==================== CHARACTER CREATION ====================
+// ==================== FRONTMATTER ====================
+let frontmatterPages = [];
+let frontmatterIdx = 0;
+
+function startGame() {
+  const fm = gameData.frontmatter;
+  if (fm?.pages && fm.pages.length > 0) {
+    frontmatterPages = fm.pages;
+    frontmatterIdx = 0;
+    showFrontmatterPage();
+  } else {
+    startCharacterCreation();
+  }
+}
+
+function showFrontmatterPage() {
+  showScreen('frontmatter-screen');
+  const page = frontmatterPages[frontmatterIdx];
+  document.getElementById('frontmatter-title').textContent = gameData.metadata?.title || 'Gamebook';
+
+  const content = document.getElementById('frontmatter-content');
+  const total = frontmatterPages.length;
+  content.innerHTML = `
+    <div class="fm-page-indicator">Page ${frontmatterIdx + 1} of ${total}</div>
+    <div class="frontmatter-page">
+      ${page.type ? `<span class="fm-type-tag">${page.type}</span>` : ''}
+      <h3>${page.title}</h3>
+      <div class="fm-text">${formatText(page.text)}</div>
+    </div>
+  `;
+
+  const btn = document.getElementById('frontmatter-next-btn');
+  if (frontmatterIdx < total - 1) {
+    btn.textContent = 'Continue';
+  } else {
+    btn.textContent = 'Begin Character Creation';
+  }
+}
+
+function nextFrontmatterPage() {
+  frontmatterIdx++;
+  if (frontmatterIdx < frontmatterPages.length) {
+    showFrontmatterPage();
+  } else {
+    startCharacterCreation();
+  }
+}
 
 // ==================== CHARACTER CREATION ====================
 function startCharacterCreation() {
@@ -546,8 +631,10 @@ function startCharacterCreation() {
     flags: new Set(),
     provisions: 0,
     gold: 0,
+    meals: 0,
     potion: null,
     potionDoses: 0,
+    abilities: [],
     currentSection: null,
     visitedSections: new Set(),
   };
@@ -560,9 +647,10 @@ function startCharacterCreation() {
   const rollContainer = document.getElementById('stat-rolls');
   rollContainer.innerHTML = '';
 
-  let potionStep = null;
+  // Process steps that are immediate (rolls, items, resources)
+  // Collect interactive steps (potion choice, ability choice) for later
+  let interactiveSteps = [];
   const items = [];
-  const resources = [];
 
   for (const step of steps) {
     if (step.action === 'roll_stat') {
@@ -572,34 +660,74 @@ function startCharacterCreation() {
 
       const div = document.createElement('div');
       div.className = 'stat-roll';
+      const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
       div.innerHTML = `
         <span class="stat-name">${step.stat}</span>
-        <span class="dice-result">${step.formula} = [${result.rolls.join(', ')}]${result.bonus ? ' + ' + result.bonus : ''}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ' + ' + result.bonus : ''}</span>
         <span class="stat-value">${result.total}</span>
       `;
       rollContainer.appendChild(div);
     } else if (step.action === 'choose_one' && step.category === 'potion') {
-      potionStep = step;
+      interactiveSteps.push({ type: 'potion', step });
+    } else if (step.action === 'choose_abilities') {
+      interactiveSteps.push({ type: 'abilities', step });
     } else if (step.action === 'add_item') {
       items.push(step.item);
     } else if (step.action === 'set_resource') {
-      resources.push(step);
+      if (step.resource === 'provisions') state.provisions = step.amount;
+      else if (step.resource === 'gold') state.gold = step.amount;
+      else if (step.resource === 'meals') state.meals = step.amount;
+    } else if (step.action === 'roll_gold' || step.action === 'roll_equipment' || step.action === 'weaponskill_roll') {
+      // Generic roll steps — roll and display
+      const formula = step.formula || 'R10';
+      const result = rollDice(formula);
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      const label = step.action === 'roll_gold' ? 'Gold' :
+                    step.action === 'roll_equipment' ? 'Starting Item' :
+                    step.action === 'weaponskill_roll' ? 'Weaponskill' : step.action;
+      div.innerHTML = `
+        <span class="stat-name">${label}</span>
+        <span class="dice-result">${formula} = [${result.rolls[0]}]</span>
+        <span class="stat-value">${result.total}</span>
+      `;
+      rollContainer.appendChild(div);
+      if (step.action === 'roll_gold') {
+        state.gold += result.total;
+      }
+      // Store result for display; specific handling would need game-specific logic
+      // which the JSON should encode in the step's note field
+      if (step.note) {
+        const noteDiv = document.createElement('div');
+        noteDiv.className = 'event-msg info';
+        noteDiv.style.marginTop = '4px';
+        noteDiv.style.marginBottom = '8px';
+        noteDiv.textContent = step.note;
+        rollContainer.appendChild(noteDiv);
+      }
     }
   }
 
   // Add starting items
   for (const item of items) {
-    state.inventory.push(item);
+    if (!state.inventory.includes(item)) state.inventory.push(item);
   }
 
-  // Set resources
-  for (const res of resources) {
-    if (res.resource === 'provisions') state.provisions = res.amount;
-    else if (res.resource === 'gold') state.gold = res.amount;
+  // Process interactive steps sequentially
+  processCreationSteps(interactiveSteps, items);
+}
+
+function processCreationSteps(steps, items) {
+  if (steps.length === 0) {
+    showEquipmentAndBegin();
+    return;
   }
 
-  // Show potion choice
-  if (potionStep) {
+  const current = steps.shift();
+  const rollContainer = document.getElementById('stat-rolls');
+
+  if (current.type === 'potion') {
+    const potionStep = current.step;
     const section = document.getElementById('potion-section');
     section.style.display = '';
     const container = document.getElementById('potion-choices');
@@ -612,7 +740,6 @@ function startCharacterCreation() {
       btn.className = 'potion-btn';
       btn.textContent = opt + (def?.detail ? ` — ${def.detail}` : def ? ` — Restores ${def.stat} to initial value` : '');
       btn.addEventListener('click', () => {
-        // Remove previously selected potion from inventory
         if (state.potion) {
           const prevId = state.potion.toLowerCase().replace(/ /g, '_');
           const idx = state.inventory.indexOf(prevId);
@@ -623,16 +750,67 @@ function startCharacterCreation() {
         state.potion = opt;
         state.potionDoses = gameData.rules.potion?.doses || 2;
         state.inventory.push(opt.toLowerCase().replace(/ /g, '_'));
-        showEquipmentAndBegin(items);
+        processCreationSteps(steps, items);
       });
       container.appendChild(btn);
     }
-  } else {
-    showEquipmentAndBegin(items);
+  } else if (current.type === 'abilities') {
+    const abStep = current.step;
+    const abRules = gameData.rules.abilities || {};
+    const available = abRules.available || [];
+    const count = abStep.count || abRules.choose_count || 5;
+    const selected = new Set();
+
+    const section = document.createElement('div');
+    section.className = 'mt-2';
+    section.id = 'abilities-section';
+    rollContainer.parentNode.insertBefore(section, document.getElementById('equipment-section'));
+
+    function renderAbilities() {
+      let html = `<h3>Choose ${count} Disciplines</h3>`;
+      html += `<div class="choose-items-count">Selected: ${selected.size} / ${count}</div>`;
+      html += `<div class="choose-items-grid">`;
+      for (const ab of available) {
+        const isSel = selected.has(ab.name);
+        html += `<div class="choose-item-btn ${isSel ? 'selected' : ''}" data-ability="${ab.name}">
+          <strong>${ab.name}</strong>
+          <div class="item-desc">${ab.description || ''}${ab.mechanical_effect ? ' (' + ab.mechanical_effect + ')' : ''}</div>
+        </div>`;
+      }
+      html += `</div>`;
+      if (selected.size === count) {
+        html += `<div class="center mt-1"><button class="btn" id="confirm-abilities-btn">Confirm Disciplines</button></div>`;
+      }
+      section.innerHTML = html;
+
+      section.querySelectorAll('.choose-item-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const name = btn.dataset.ability;
+          if (selected.has(name)) {
+            selected.delete(name);
+          } else if (selected.size < count) {
+            selected.add(name);
+          }
+          renderAbilities();
+        });
+      });
+      const confirmBtn = section.querySelector('#confirm-abilities-btn');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+          state.abilities = [...selected];
+          for (const name of selected) {
+            state.flags.add('ability_' + name.toLowerCase().replace(/ /g, '_'));
+          }
+          section.innerHTML = `<div class="event-msg gain">Disciplines: ${[...selected].join(', ')}</div>`;
+          processCreationSteps(steps, items);
+        });
+      }
+    }
+    renderAbilities();
   }
 }
 
-function showEquipmentAndBegin(items) {
+function showEquipmentAndBegin() {
   const section = document.getElementById('equipment-section');
   section.style.display = '';
   const list = document.getElementById('equipment-list');
@@ -645,6 +823,21 @@ function showEquipmentAndBegin(items) {
   if (state.provisions > 0) {
     const li = document.createElement('li');
     li.textContent = `Provisions (${state.provisions})`;
+    list.appendChild(li);
+  }
+  if (state.meals > 0) {
+    const li = document.createElement('li');
+    li.textContent = `Meals (${state.meals})`;
+    list.appendChild(li);
+  }
+  if (state.gold > 0) {
+    const li = document.createElement('li');
+    li.textContent = `Gold (${state.gold})`;
+    list.appendChild(li);
+  }
+  if (state.abilities.length > 0) {
+    const li = document.createElement('li');
+    li.textContent = `Disciplines: ${state.abilities.join(', ')}`;
     list.appendChild(li);
   }
   document.getElementById('begin-btn').style.display = '';
@@ -1633,8 +1826,12 @@ function evaluateCondition(cond) {
                   state.stats[cond.stat] || 0;
       return val <= cond.value;
     }
-    case 'has_ability':
-      return state.flags.has(cond.ability);
+    case 'has_ability': {
+      // Check both abilities list and flags (abilities are stored both ways)
+      const abName = cond.ability;
+      return (state.abilities || []).some(a => a.toLowerCase().replace(/ /g, '_') === abName.toLowerCase().replace(/ /g, '_') || a === abName) ||
+             state.flags.has(abName) || state.flags.has('ability_' + abName.toLowerCase().replace(/ /g, '_'));
+    }
     case 'not':
       return !evaluateCondition(cond.condition);
     case 'and':
@@ -1704,8 +1901,10 @@ function playAgain() {
     flags: new Set(),
     provisions: 0,
     gold: 0,
+    meals: 0,
     potion: null,
     potionDoses: 0,
+    abilities: [],
     currentSection: null,
     visitedSections: new Set(),
   };
@@ -1729,7 +1928,9 @@ function updateDebug() {
     <div><span class="debug-label">Initial:</span> ${Object.entries(state.initialStats).map(([k,v]) => k+'='+v).join(', ')}</div>
     <div><span class="debug-label">Provisions:</span> ${state.provisions}</div>
     <div><span class="debug-label">Gold:</span> ${state.gold}</div>
+    <div><span class="debug-label">Meals:</span> ${state.meals || 0}</div>
     <div><span class="debug-label">Potion:</span> ${state.potion || 'none'} (${state.potionDoses} doses)</div>
+    <div><span class="debug-label">Abilities:</span> ${(state.abilities || []).length > 0 ? state.abilities.join(', ') : 'none'}</div>
     <div><span class="debug-label">Flags:</span> ${state.flags.size > 0 ? [...state.flags].join(', ') : 'none'}</div>
     <div><span class="debug-label">Inventory:</span> ${state.inventory.length > 0 ? state.inventory.map(i => getItemName(i)).join(', ') : 'empty'}</div>
     <div><span class="debug-label">Last test:</span> ${window._lastTestResult === null ? 'n/a' : window._lastTestResult ? 'success' : 'failure'}</div>
@@ -1748,6 +1949,8 @@ function serializeState() {
     gold: state.gold,
     potion: state.potion,
     potionDoses: state.potionDoses,
+    abilities: [...(state.abilities || [])],
+    meals: state.meals ?? 0,
     currentSection: state.currentSection,
     visitedSections: [...state.visitedSections],
     _lastTestResult: window._lastTestResult ?? null,
@@ -1761,8 +1964,10 @@ function deserializeState(obj) {
   state.flags = new Set(obj.flags || []);
   state.provisions = obj.provisions ?? 0;
   state.gold = obj.gold ?? 0;
+  state.meals = obj.meals ?? 0;
   state.potion = obj.potion || null;
   state.potionDoses = obj.potionDoses ?? 0;
+  state.abilities = obj.abilities || [];
   state.currentSection = obj.currentSection || null;
   state.visitedSections = new Set(obj.visitedSections || []);
   window._lastTestResult = obj._lastTestResult ?? null;

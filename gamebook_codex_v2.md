@@ -203,6 +203,7 @@ The output is a single JSON file with the following top-level structure:
 ```json
 {
   "metadata": { },
+  "frontmatter": { },
   "rules": { },
   "character_creation": { },
   "sections": { },
@@ -210,6 +211,43 @@ The output is a single JSON file with the following top-level structure:
   "enemies_catalog": { }
 }
 ```
+
+### 2.0 frontmatter
+
+The frontmatter object contains all introductory and supplementary material that appears before the numbered sections: story background, rules explanations, world-building, maps, rumors, and any other content the reader is expected to see before beginning play. This material is often essential context — "The Story So Far" in Lone Wolf, "Doorknocker Row" (Rumours) in Fighting Fantasy, etc.
+
+Frontmatter is presented to the player as readable pages *before* character creation begins. The emulator displays them in order, and the player clicks through them before rolling stats.
+
+```json
+{
+  "frontmatter": {
+    "pages": [
+      {
+        "title": "string — page title (e.g., 'The Story So Far', 'Rules', 'Rumours')",
+        "text": "string — full text content of this page",
+        "type": "string — story, rules, reference, flavor"
+      }
+    ]
+  }
+}
+```
+
+**What to include:**
+- Story introduction / background ("The Story So Far", prologues, setting descriptions)
+- Rules explanation as written in the book (the reader is expected to read these)
+- Reference material the player may consult during play (rumors tables, maps described in text, background lore)
+- Flavor text (dedications, author notes) — optional, include if substantive
+
+**What NOT to include:**
+- Copyright notices, publishing metadata (already in `metadata`)
+- Character creation instructions (already in `character_creation`)
+- The stat/combat rules in mechanical form (already in `rules`) — but DO include the narrative rules explanation as the player would read it
+
+**Type values:**
+- `story` — narrative background the player reads for context
+- `rules` — rules explanation as presented in the book
+- `reference` — material the player may consult during play (rumor tables, etc.)
+- `flavor` — dedications, author notes, non-essential material
 
 ### 2.1 metadata
 

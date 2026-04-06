@@ -116,6 +116,36 @@
       }
     },
 
+    "frontmatter": {
+      "type": "object",
+      "description": "Introductory and supplementary material presented before the numbered sections: story background, rules explanations, reference material.",
+      "properties": {
+        "pages": {
+          "type": "array",
+          "description": "Ordered list of frontmatter pages displayed before character creation.",
+          "items": {
+            "type": "object",
+            "required": ["title", "text"],
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "Page title (e.g., 'The Story So Far', 'Rules', 'Rumours')."
+              },
+              "text": {
+                "type": "string",
+                "description": "Full text content of this page."
+              },
+              "type": {
+                "type": "string",
+                "description": "Category of frontmatter content.",
+                "enum": ["story", "rules", "reference", "flavor"]
+              }
+            }
+          }
+        }
+      }
+    },
+
     "rules": {
       "type": "object",
       "description": "The complete game system as parsed from the book's rules section. Every field should reflect what the specific book states, not series-level assumptions.",
