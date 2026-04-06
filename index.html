@@ -519,6 +519,21 @@ document.getElementById('file-input').addEventListener('change', (e) => {
 
 // ==================== CHARACTER CREATION ====================
 function startCharacterCreation() {
+  // Reset state for a fresh character
+  state = {
+    stats: {},
+    initialStats: {},
+    inventory: [],
+    flags: new Set(),
+    provisions: 0,
+    gold: 0,
+    potion: null,
+    potionDoses: 0,
+    currentSection: null,
+    visitedSections: new Set(),
+  };
+  window._lastTestResult = null;
+
   showScreen('creation-screen');
   document.getElementById('game-title').textContent = gameData.metadata?.title || 'Gamebook';
 
