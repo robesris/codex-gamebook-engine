@@ -540,6 +540,55 @@ function getEnemy(ref) {
   return gameData.enemies_catalog[ref] || null;
 }
 
+// Resolve combat stat names — games use different names for the attack and health stats
+function getCombatStats() {
+  const stats = gameData.rules.stats || [];
+  const csType = gameData.rules.combat_system?.type ||
+                 gameData.rules.combat_rules_detail?.type ||
+                 (typeof gameData.rules.combat_system === 'string' ? gameData.rules.combat_system : null);
+
+  // Try to identify attack and health stats from the rules
+  // Look for common patterns: skill/stamina (FF), combat_skill/endurance (LW), etc.
+  const statNames = stats.map(s => s.name.toLowerCase());
+
+  let attackStat = stats.find(s => /skill|combat/i.test(s.name))?.name;
+  let healthStat = stats.find(s => /stamina|endurance|hp|hit/i.test(s.name))?.name;
+
+  // Fallback: first stat is attack, second is health
+  if (!attackStat && stats.length >= 1) attackStat = stats[0].name;
+  if (!healthStat && stats.length >= 2) healthStat = stats[1].name;
+
+  return { attackStat, healthStat };
+}
+
+// Get the player's current attack stat value
+function getPlayerAttack() {
+  const { attackStat } = getCombatStats();
+  return attackStat ? (state.stats[attackStat] || 0) : 0;
+}
+
+// Get the player's current health stat value
+function getPlayerHealth() {
+  const { healthStat } = getCombatStats();
+  return healthStat ? (state.stats[healthStat] || 0) : 0;
+}
+
+// Set the player's health stat
+function setPlayerHealth(val) {
+  const { healthStat } = getCombatStats();
+  if (healthStat) state.stats[healthStat] = val;
+}
+
+// Get enemy's attack stat (tries skill, combat_skill, COMBAT SKILL, etc.)
+function getEnemyAttack(enemy) {
+  return enemy.skill ?? enemy.combat_skill ?? enemy['COMBAT SKILL'] ?? 0;
+}
+
+// Get enemy's health stat (tries stamina, endurance, ENDURANCE, etc.)
+function getEnemyHealth(enemy) {
+  return enemy.stamina ?? enemy.endurance ?? enemy['ENDURANCE'] ?? 0;
+}
+
 function getItemName(itemId) {
   const cat = gameData.items_catalog[itemId];
   return cat ? cat.name : itemId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -939,8 +988,9 @@ function navigateTo(sectionId) {
   }
 
   // Check for death
-  if ((state.stats.stamina !== undefined && state.stats.stamina <= 0)) {
-    showEnding({ text: 'Your STAMINA has reached zero. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
+  const { healthStat: _hs } = getCombatStats();
+  if (_hs && state.stats[_hs] !== undefined && state.stats[_hs] <= 0) {
+    showEnding({ text: `Your ${_hs} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] });
     return;
   }
 
@@ -1086,8 +1136,9 @@ function handleModifyStat(event) {
   updateStatBar();
 
   // Check for death
-  if (state.stats.stamina !== undefined && state.stats.stamina <= 0) {
-    showEnding({ text: 'Your STAMINA has reached zero. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
+  const { healthStat: _hs2 } = getCombatStats();
+  if (_hs2 && state.stats[_hs2] !== undefined && state.stats[_hs2] <= 0) {
+    showEnding({ text: `Your ${_hs2} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] });
   }
 }
 
@@ -1246,11 +1297,11 @@ function handleCombat(event) {
   if (event.enemies) {
     enemies = event.enemies.map(e => {
       const data = getEnemy(e.ref);
-      return { ...data, ref: e.ref, currentStamina: data.stamina };
+      return { ...data, ref: e.ref, currentHealth: getEnemyHealth(data) };
     });
   } else if (event.enemy_ref) {
     const data = getEnemy(event.enemy_ref);
-    enemies = [{ ...data, ref: event.enemy_ref, currentStamina: data.stamina }];
+    enemies = [{ ...data, ref: event.enemy_ref, currentHealth: getEnemyHealth(data) }];
   }
 
   const mode = event.mode || 'sequential';
@@ -1261,9 +1312,12 @@ function handleCombat(event) {
   function renderCombat() {
     const c = window._combat;
     const enemy = c.enemies[c.currentEnemyIdx];
-    const playerStamina = state.stats.stamina || 0;
-    const playerMaxStamina = state.initialStats.stamina || playerStamina;
-    const enemyMaxStamina = getEnemy(enemy.ref)?.stamina || enemy.stamina;
+    const { attackStat, healthStat } = getCombatStats();
+    const playerHealth = getPlayerHealth();
+    const playerMaxHealth = state.initialStats[healthStat] || playerHealth;
+    const playerAttack = getPlayerAttack();
+    const enemyMaxHealth = getEnemyHealth(getEnemy(enemy.ref) || enemy);
+    const enemyAttack = getEnemyAttack(enemy);
 
     let html = `<div class="combat-header"><h3>COMBAT</h3>`;
     if (c.enemies.length > 1) {
@@ -1278,14 +1332,14 @@ function handleCombat(event) {
     html += `<div class="combatants">
       <div class="combatant player">
         <div class="name" style="color:var(--stat-skill)">You</div>
-        <div class="stats-line">SKILL ${state.stats.skill || 0} | STAMINA ${playerStamina}</div>
-        <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, playerStamina / playerMaxStamina * 100)}%"></div></div>
+        <div class="stats-line">${attackStat} ${playerAttack} | ${healthStat} ${playerHealth}</div>
+        <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, playerHealth / playerMaxHealth * 100)}%"></div></div>
       </div>
       <div style="font-size:1.5em;color:var(--text-dim)">vs</div>
       <div class="combatant enemy">
         <div class="name" style="color:var(--danger)">${enemy.name}</div>
-        <div class="stats-line">SKILL ${enemy.skill} | STAMINA ${enemy.currentStamina}</div>
-        <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, enemy.currentStamina / enemyMaxStamina * 100)}%"></div></div>
+        <div class="stats-line">${attackStat} ${enemyAttack} | ${healthStat} ${enemy.currentHealth}</div>
+        <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, enemy.currentHealth / enemyMaxHealth * 100)}%"></div></div>
       </div>
     </div>`;
 
@@ -1303,7 +1357,7 @@ function handleCombat(event) {
     if (c.waitingForLuckChoice) {
       html += `<button class="btn btn-small" onclick="combatTestLuck()">Test Your Luck?</button>`;
       html += `<button class="btn btn-small" onclick="combatSkipLuck()">Skip</button>`;
-    } else if (enemy.currentStamina > 0 && playerStamina > 0) {
+    } else if (enemy.currentHealth > 0 && playerHealth > 0) {
       html += `<button class="btn" onclick="combatAttack()">Attack</button>`;
       if (c.fleeTo) {
         html += `<button class="btn btn-danger btn-small" onclick="combatFlee()">Flee</button>`;
@@ -1327,35 +1381,40 @@ function handleCombat(event) {
   window.combatAttack = function() {
     const c = window._combat;
     const enemy = c.enemies[c.currentEnemyIdx];
+    const { attackStat, healthStat } = getCombatStats();
     c.roundNum++;
 
     const playerRoll = roll2d6();
     const enemyRoll = roll2d6();
-    const playerAS = playerRoll.total + (state.stats.skill || 0);
-    const enemyAS = enemyRoll.total + enemy.skill;
+    const pAttack = getPlayerAttack();
+    const eAttack = getEnemyAttack(enemy);
+    const playerAS = playerRoll.total + pAttack;
+    const enemyAS = enemyRoll.total + eAttack;
 
     const dmg = gameData.rules.combat_rules_detail?.standard_damage || 2;
     let result = '';
 
     if (playerAS > enemyAS) {
-      enemy.currentStamina = Math.max(0, enemy.currentStamina - dmg);
-      result = `<span class="hit">Round ${c.roundNum}: You [${playerRoll.rolls}]+${state.stats.skill}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${enemy.skill}=${enemyAS} — You wound ${enemy.name}! (-${dmg} STA)</span>`;
+      enemy.currentHealth = Math.max(0, enemy.currentHealth - dmg);
+      result = `<span class="hit">Round ${c.roundNum}: You [${playerRoll.rolls}]+${pAttack}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${eAttack}=${enemyAS} — You wound ${enemy.name}! (-${dmg})</span>`;
       c.lastRoundResult = { winner: 'player', damage: dmg, enemy };
     } else if (enemyAS > playerAS) {
-      state.stats.stamina = Math.max(0, (state.stats.stamina || 0) - dmg);
-      result = `<span class="hit">Round ${c.roundNum}: You [${playerRoll.rolls}]+${state.stats.skill}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${enemy.skill}=${enemyAS} — ${enemy.name} wounds you! (-${dmg} STA)</span>`;
+      setPlayerHealth(Math.max(0, getPlayerHealth() - dmg));
+      result = `<span class="hit">Round ${c.roundNum}: You [${playerRoll.rolls}]+${pAttack}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${eAttack}=${enemyAS} — ${enemy.name} wounds you! (-${dmg})</span>`;
       c.lastRoundResult = { winner: 'enemy', damage: dmg, enemy };
     } else {
-      result = `<span class="miss">Round ${c.roundNum}: You [${playerRoll.rolls}]+${state.stats.skill}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${enemy.skill}=${enemyAS} — Clash! No damage.</span>`;
+      result = `<span class="miss">Round ${c.roundNum}: You [${playerRoll.rolls}]+${pAttack}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${eAttack}=${enemyAS} — Clash! No damage.</span>`;
       c.lastRoundResult = null;
     }
 
     c.combatLog.push(result);
     updateStatBar();
 
-    // Check for luck option
+    // Check for luck option (FF-specific, only if rules define it)
     const luckRules = gameData.rules.combat_rules_detail?.luck_in_combat;
-    if (luckRules?.optional && c.lastRoundResult && (state.stats.luck || 0) > 0) {
+    const luckStat = (gameData.rules.stats || []).find(s => /luck/i.test(s.name));
+    const luckVal = luckStat ? (state.stats[luckStat.name] || 0) : 0;
+    if (luckRules?.optional && c.lastRoundResult && luckVal > 0) {
       c.waitingForLuckChoice = true;
     } else {
       c.waitingForLuckChoice = false;
@@ -1386,21 +1445,22 @@ function handleCombat(event) {
     if (lr.winner === 'player') {
       if (lucky) {
         const extraDmg = luckRules.player_wounded_enemy_lucky - lr.damage;
-        lr.enemy.currentStamina = Math.max(0, lr.enemy.currentStamina - extraDmg);
+        lr.enemy.currentHealth = Math.max(0, lr.enemy.currentHealth - extraDmg);
         msg = `<span class="lucky">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Lucky! Extra damage! (${luckRules.player_wounded_enemy_lucky} total)</span>`;
       } else {
         const restore = lr.damage - luckRules.player_wounded_enemy_unlucky;
-        lr.enemy.currentStamina = lr.enemy.currentStamina + restore;
+        lr.enemy.currentHealth = lr.enemy.currentHealth + restore;
         msg = `<span class="hit">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Unlucky! Weak blow. (${luckRules.player_wounded_enemy_unlucky} total)</span>`;
       }
     } else {
+      const { healthStat } = getCombatStats();
       if (lucky) {
         const restore = lr.damage - luckRules.enemy_wounded_player_lucky;
-        state.stats.stamina = Math.min(state.initialStats.stamina, (state.stats.stamina || 0) + restore);
+        setPlayerHealth(Math.min(state.initialStats[healthStat] || 0, getPlayerHealth() + restore));
         msg = `<span class="lucky">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Lucky! Glancing blow. (${luckRules.enemy_wounded_player_lucky} damage)</span>`;
       } else {
         const extraDmg = luckRules.enemy_wounded_player_unlucky - lr.damage;
-        state.stats.stamina = Math.max(0, (state.stats.stamina || 0) - extraDmg);
+        setPlayerHealth(Math.max(0, getPlayerHealth() - extraDmg));
         msg = `<span class="hit">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Unlucky! Deeper wound! (${luckRules.enemy_wounded_player_unlucky} damage)</span>`;
       }
     }
@@ -1424,7 +1484,7 @@ function handleCombat(event) {
     const enemy = c.enemies[c.currentEnemyIdx];
 
     // Player dead
-    if ((state.stats.stamina || 0) <= 0) {
+    if (getPlayerHealth() <= 0) {
       c.combatLog.push('<span class="hit">You have been slain!</span>');
       c.renderCombat();
       setTimeout(() => {
@@ -1434,7 +1494,7 @@ function handleCombat(event) {
     }
 
     // Enemy dead
-    if (enemy.currentStamina <= 0) {
+    if (enemy.currentHealth <= 0) {
       c.combatLog.push(`<span class="lucky">${enemy.name} is defeated!</span>`);
 
       const nextIdx = c.currentEnemyIdx + 1;
@@ -1462,17 +1522,20 @@ function handleCombat(event) {
     const fleeRules = gameData.rules.escaping || {};
     const fleeDmg = fleeRules.flee_damage || 2;
 
-    state.stats.stamina = Math.max(0, (state.stats.stamina || 0) - fleeDmg);
-    c.combatLog.push(`<span class="hit">You flee! The enemy strikes as you run. (-${fleeDmg} STA)</span>`);
+    setPlayerHealth(Math.max(0, getPlayerHealth() - fleeDmg));
+    const { healthStat } = getCombatStats();
+    c.combatLog.push(`<span class="hit">You flee! The enemy strikes as you run. (-${fleeDmg} ${healthStat})</span>`);
     updateStatBar();
 
-    if ((state.stats.stamina || 0) <= 0) {
+    if (getPlayerHealth() <= 0) {
       c.checkCombatEnd();
       return;
     }
 
     // Offer luck test on flee wound if allowed
-    if (fleeRules.luck_on_flee_wound_allowed && (state.stats.luck || 0) > 0) {
+    const luckStat = (gameData.rules.stats || []).find(s => /luck/i.test(s.name));
+    const luckVal = luckStat ? (state.stats[luckStat.name] || 0) : 0;
+    if (fleeRules.luck_on_flee_wound_allowed && luckVal > 0) {
       c.lastRoundResult = { winner: 'enemy', damage: fleeDmg, enemy: c.enemies[c.currentEnemyIdx] };
       c.waitingForLuckChoice = true;
       c.renderCombat();
@@ -1610,8 +1673,9 @@ function handleRollDice(event) {
       updateStatBar();
 
       // Check for death
-      if (state.stats.stamina !== undefined && state.stats.stamina <= 0) {
-        setTimeout(() => showEnding({ text: 'Your STAMINA has reached zero. Your adventure is over.', ending_type: 'death', events: [], choices: [] }), 1000);
+      const { healthStat: _hs3 } = getCombatStats();
+      if (_hs3 && state.stats[_hs3] !== undefined && state.stats[_hs3] <= 0) {
+        setTimeout(() => showEnding({ text: `Your ${_hs3} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] }), 1000);
         return;
       }
 

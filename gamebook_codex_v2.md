@@ -337,7 +337,7 @@ The rules object describes the game system as parsed from the book. Do not assum
   "abilities": {
     "enabled": "boolean",
     "choose_count": "number — how many the player picks",
-    "available": ["array of ability objects with name, description, and mechanical effect"]
+    "available": ["array of ability objects with name, description (FULL book text, not a summary), and mechanical effect"]
   },
   "special_mechanics": ["array of any book-specific rules not covered above"]
 }
