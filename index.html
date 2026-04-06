@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codex Emulator</title>
+<style>
+:root {
+  --bg: #1a1510;
+  --bg-card: #2a2318;
+  --bg-card-hover: #342c20;
+  --text: #d4c5a9;
+  --text-dim: #8a7e6a;
+  --text-bright: #f0e6cc;
+  --accent: #c4964a;
+  --accent-dim: #8a6a30;
+  --danger: #a83232;
+  --danger-bg: #3a1515;
+  --success: #3a8a3a;
+  --success-bg: #152a15;
+  --border: #3a3228;
+  --border-light: #4a4238;
+  --stat-skill: #5a9adb;
+  --stat-stamina: #d45a5a;
+  --stat-luck: #c4964a;
+  --stat-provisions: #6aaa6a;
+  --stat-gold: #d4b44a;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Georgia', 'Times New Roman', serif;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1, h2, h3 {
+  color: var(--text-bright);
+  font-weight: normal;
+}
+
+h1 { font-size: 2em; margin-bottom: 0.5em; text-align: center; }
+h2 { font-size: 1.4em; margin-bottom: 0.5em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h3 { font-size: 1.1em; margin-bottom: 0.4em; }
+
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* --- Load Screen --- */
+#load-screen { text-align: center; padding-top: 15vh; }
+#load-screen h1 { font-size: 2.5em; color: var(--accent); margin-bottom: 0.2em; }
+#load-screen .subtitle { color: var(--text-dim); margin-bottom: 2em; font-style: italic; }
+
+.file-picker-area {
+  border: 2px dashed var(--border-light);
+  border-radius: 12px;
+  padding: 40px;
+  margin: 20px auto;
+  max-width: 400px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.file-picker-area:hover { border-color: var(--accent); }
+.file-picker-area input { display: none; }
+.file-picker-area p { color: var(--text-dim); }
+
+/* --- Character Creation --- */
+.stat-roll {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 16px; margin-bottom: 10px;
+}
+.stat-roll .stat-name {
+  font-weight: bold; min-width: 100px; text-transform: uppercase;
+  font-size: 0.85em; letter-spacing: 1px;
+}
+.stat-roll .dice-result { color: var(--text-dim); font-size: 0.9em; }
+.stat-roll .stat-value { color: var(--accent); font-size: 1.3em; font-weight: bold; margin-left: auto; }
+
+.potion-choices { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.potion-btn {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 12px 16px; border-radius: 8px; cursor: pointer; text-align: left;
+  font-family: inherit; font-size: 0.95em; transition: all 0.15s;
+}
+.potion-btn:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+.potion-btn.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--text-bright); }
+
+.equipment-list {
+  list-style: none; padding: 0; margin: 12px 0;
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.equipment-list li {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 12px; font-size: 0.9em;
+}
+
+.btn {
+  display: inline-block; background: var(--accent-dim); color: var(--text-bright);
+  border: 1px solid var(--accent); border-radius: 8px;
+  padding: 10px 24px; cursor: pointer; font-family: inherit;
+  font-size: 1em; transition: all 0.15s; text-align: center;
+}
+.btn:hover { background: var(--accent); color: var(--bg); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--accent-dim); color: var(--text-bright); }
+.btn-large { padding: 14px 36px; font-size: 1.1em; }
+.btn-danger { background: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { background: #c44; }
+.btn-small { padding: 6px 14px; font-size: 0.85em; }
+.btn-success { background: var(--success); border-color: var(--success); }
+.btn-success:hover { background: #4a4; }
+
+.center { text-align: center; }
+.mt-1 { margin-top: 10px; }
+.mt-2 { margin-top: 20px; }
+.mt-3 { margin-top: 30px; }
+.mb-1 { margin-bottom: 10px; }
+
+/* --- Stat Bar --- */
+.stat-bar {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;
+  position: sticky; top: 0; z-index: 10;
+}
+.stat-item {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.85em; padding: 2px 8px;
+  border-radius: 4px; background: rgba(0,0,0,0.2);
+}
+.stat-item .stat-label {
+  text-transform: uppercase; font-size: 0.75em; letter-spacing: 1px;
+  color: var(--text-dim);
+}
+.stat-item .stat-val { font-weight: bold; font-size: 1.1em; }
+.stat-item.skill .stat-val { color: var(--stat-skill); }
+.stat-item.stamina .stat-val { color: var(--stat-stamina); }
+.stat-item.luck .stat-val { color: var(--stat-luck); }
+.stat-item.provisions .stat-val { color: var(--stat-provisions); }
+.stat-item.gold .stat-val { color: var(--stat-gold); }
+
+.stat-bar-actions {
+  margin-left: auto; display: flex; gap: 6px; align-items: center;
+}
+
+/* --- Inventory Panel --- */
+.inventory-toggle {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; margin-bottom: 16px; overflow: hidden;
+}
+.inventory-header {
+  padding: 10px 14px; cursor: pointer; display: flex;
+  align-items: center; justify-content: space-between;
+  font-size: 0.9em; color: var(--text-dim);
+}
+.inventory-header:hover { background: var(--bg-card-hover); }
+.inventory-body {
+  padding: 0 14px 12px; display: none;
+}
+.inventory-toggle.open .inventory-body { display: block; }
+.inventory-items {
+  list-style: none; display: flex; flex-wrap: wrap; gap: 6px;
+}
+.inventory-items li {
+  background: rgba(0,0,0,0.2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 3px 10px; font-size: 0.85em;
+}
+.inventory-items .empty { color: var(--text-dim); font-style: italic; }
+
+/* --- Section Text --- */
+.section-header {
+  color: var(--text-dim); font-size: 0.85em; margin-bottom: 8px;
+}
+.section-text {
+  margin-bottom: 20px; white-space: pre-wrap;
+  font-size: 1.05em;
+}
+.section-text p { margin-bottom: 0.8em; }
+
+/* --- Choices --- */
+.choices { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.choice-btn {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 16px; cursor: pointer;
+  color: var(--text); font-family: inherit; font-size: 0.95em;
+  text-align: left; transition: all 0.15s; position: relative;
+}
+.choice-btn:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+.choice-btn.disabled {
+  opacity: 0.4; cursor: not-allowed;
+  border-style: dashed;
+}
+.choice-btn.disabled:hover { border-color: var(--border); background: var(--bg-card); }
+.choice-btn .condition-tooltip {
+  display: none; position: absolute; bottom: 100%; left: 10px;
+  background: #111; border: 1px solid var(--border-light); color: var(--text-dim);
+  padding: 6px 10px; border-radius: 6px; font-size: 0.8em;
+  white-space: nowrap; margin-bottom: 6px; z-index: 20;
+}
+.choice-btn.disabled:hover .condition-tooltip { display: block; }
+
+/* --- Combat --- */
+.combat-area {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; margin-bottom: 16px;
+}
+.combat-header { text-align: center; margin-bottom: 12px; }
+.combat-header h3 { color: var(--danger); font-size: 1.2em; }
+
+.combatants {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; margin-bottom: 16px;
+}
+.combatant {
+  flex: 1; text-align: center; padding: 10px;
+  border-radius: 8px; background: rgba(0,0,0,0.2);
+}
+.combatant .name { font-weight: bold; margin-bottom: 4px; }
+.combatant .hp-bar {
+  height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin: 6px 0;
+}
+.combatant .hp-fill {
+  height: 100%; border-radius: 4px; transition: width 0.3s;
+}
+.combatant.player .hp-fill { background: var(--stat-stamina); }
+.combatant.enemy .hp-fill { background: var(--danger); }
+.combatant .stats-line { font-size: 0.85em; color: var(--text-dim); }
+
+.combat-log {
+  max-height: 200px; overflow-y: auto; margin-bottom: 12px;
+  font-size: 0.9em; border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; background: rgba(0,0,0,0.2);
+}
+.combat-log .round { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.combat-log .round:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.combat-log .hit { color: var(--danger); }
+.combat-log .miss { color: var(--text-dim); }
+.combat-log .lucky { color: var(--stat-luck); }
+
+.combat-actions { text-align: center; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+.special-rules-box {
+  background: rgba(196, 150, 74, 0.1); border: 1px solid var(--accent-dim);
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 12px;
+  font-size: 0.85em; color: var(--accent);
+}
+.special-rules-box strong { color: var(--text-bright); }
+
+/* --- Stat Test / Dice Roll --- */
+.test-area, .dice-roll-area {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; margin-bottom: 16px; text-align: center;
+}
+.dice-display {
+  font-size: 2em; color: var(--accent); margin: 12px 0;
+  font-weight: bold;
+}
+.test-result { margin: 12px 0; font-size: 1.1em; }
+.test-result.success { color: var(--success); }
+.test-result.failure { color: var(--danger); }
+
+/* --- Input --- */
+.input-area {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; margin-bottom: 16px;
+}
+.input-area input[type="text"], .input-area input[type="number"] {
+  background: rgba(0,0,0,0.3); border: 1px solid var(--border-light);
+  color: var(--text-bright); padding: 10px 14px; border-radius: 6px;
+  font-family: inherit; font-size: 1em; width: 200px; text-align: center;
+}
+.input-area input:focus { outline: none; border-color: var(--accent); }
+
+/* --- Ending --- */
+.ending-death {
+  border: 2px solid var(--danger); background: var(--danger-bg);
+  border-radius: 12px; padding: 24px; text-align: center;
+}
+.ending-victory {
+  border: 2px solid var(--stat-gold); background: rgba(60, 50, 20, 0.5);
+  border-radius: 12px; padding: 24px; text-align: center;
+}
+.ending-death h2 { color: var(--danger); }
+.ending-victory h2 { color: var(--stat-gold); }
+
+/* --- Event Log --- */
+.event-msg {
+  background: rgba(0,0,0,0.2); border-left: 3px solid var(--accent);
+  padding: 8px 12px; margin-bottom: 8px; font-size: 0.9em;
+  border-radius: 0 6px 6px 0;
+}
+.event-msg.gain { border-left-color: var(--success); }
+.event-msg.loss { border-left-color: var(--danger); }
+.event-msg.info { border-left-color: var(--stat-skill); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
+
+/* Potion use button in stat bar */
+.potion-info {
+  font-size: 0.8em; color: var(--text-dim);
+  background: rgba(0,0,0,0.2); border-radius: 4px;
+  padding: 2px 8px; cursor: pointer;
+}
+.potion-info:hover { color: var(--accent); }
+
+/* Eat meal area */
+.eat-meal-area {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px; margin-bottom: 16px; text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- LOAD SCREEN -->
+  <div id="load-screen" class="screen active">
+    <h1>Codex Emulator</h1>
+    <p class="subtitle">A universal gamebook engine</p>
+    <div class="file-picker-area" id="file-picker">
+      <p>Click to load a game data file (.json)</p>
+      <input type="file" id="file-input" accept=".json">
+    </div>
+    <p id="load-error" style="color: var(--danger); margin-top: 12px;"></p>
+  </div>
+
+  <!-- CHARACTER CREATION -->
+  <div id="creation-screen" class="screen">
+    <h1 id="game-title"></h1>
+    <h2>Character Creation</h2>
+    <div id="stat-rolls"></div>
+    <div id="potion-section" class="mt-2" style="display:none;">
+      <h3>Choose Your Potion</h3>
+      <p style="font-size:0.9em; color:var(--text-dim); margin-bottom:8px;">You may take one potion with you on your adventure (2 doses).</p>
+      <div id="potion-choices" class="potion-choices"></div>
+    </div>
+    <div id="equipment-section" class="mt-2" style="display:none;">
+      <h3>Starting Equipment</h3>
+      <ul id="equipment-list" class="equipment-list"></ul>
+    </div>
+    <div class="center mt-3">
+      <button id="begin-btn" class="btn btn-large" style="display:none;" onclick="beginAdventure()">Begin Adventure</button>
+    </div>
+  </div>
+
+  <!-- GAME SCREEN -->
+  <div id="game-screen" class="screen">
+    <div class="stat-bar" id="stat-bar"></div>
+    <div class="inventory-toggle" id="inventory-panel">
+      <div class="inventory-header" onclick="toggleInventory()">
+        <span>Inventory</span>
+        <span id="inv-arrow">&#9654;</span>
+      </div>
+      <div class="inventory-body">
+        <ul class="inventory-items" id="inventory-list"></ul>
+      </div>
+    </div>
+    <div id="game-content"></div>
+  </div>
+
+  <!-- ENDING SCREEN -->
+  <div id="ending-screen" class="screen"></div>
+
+</div>
+
+<script>
+// ==================== GAME STATE ====================
+let gameData = null;
+let state = {
+  stats: {},
+  initialStats: {},
+  inventory: [],
+  flags: new Set(),
+  provisions: 0,
+  gold: 0,
+  potion: null,
+  potionDoses: 0,
+  currentSection: null,
+  visitedSections: new Set(),
+};
+
+// ==================== UTILITY ====================
+function rollDice(formula) {
+  // Parse "NdX+Y" or "NdX"
+  const m = formula.match(/(\d+)d(\d+)(?:\+(\d+))?/);
+  if (!m) return { total: 0, rolls: [], bonus: 0 };
+  const count = parseInt(m[1]);
+  const sides = parseInt(m[2]);
+  const bonus = m[3] ? parseInt(m[3]) : 0;
+  const rolls = [];
+  for (let i = 0; i < count; i++) {
+    rolls.push(Math.floor(Math.random() * sides) + 1);
+  }
+  const total = rolls.reduce((a, b) => a + b, 0) + bonus;
+  return { total, rolls, bonus };
+}
+
+function roll2d6() {
+  const r = rollDice('2d6');
+  return r;
+}
+
+function getEnemy(ref) {
+  return gameData.enemies_catalog[ref] || null;
+}
+
+function getItemName(itemId) {
+  const cat = gameData.items_catalog[itemId];
+  return cat ? cat.name : itemId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+// ==================== FILE LOADING ====================
+document.getElementById('file-picker').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+
+document.getElementById('file-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      gameData = JSON.parse(ev.target.result);
+      if (!gameData.sections || !gameData.rules) throw new Error('Invalid game data');
+      startCharacterCreation();
+    } catch (err) {
+      document.getElementById('load-error').textContent = 'Error: ' + err.message;
+    }
+  };
+  reader.readAsText(file);
+});
+
+// ==================== CHARACTER CREATION ====================
+function startCharacterCreation() {
+  showScreen('creation-screen');
+  document.getElementById('game-title').textContent = gameData.metadata?.title || 'Gamebook';
+
+  const steps = gameData.character_creation?.steps || [];
+  const rollContainer = document.getElementById('stat-rolls');
+  rollContainer.innerHTML = '';
+
+  let potionStep = null;
+  const items = [];
+  const resources = [];
+
+  for (const step of steps) {
+    if (step.action === 'roll_stat') {
+      const result = rollDice(step.formula);
+      state.stats[step.stat] = result.total;
+      state.initialStats[step.stat] = result.total;
+
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      div.innerHTML = `
+        <span class="stat-name">${step.stat}</span>
+        <span class="dice-result">${step.formula} = [${result.rolls.join(', ')}]${result.bonus ? ' + ' + result.bonus : ''}</span>
+        <span class="stat-value">${result.total}</span>
+      `;
+      rollContainer.appendChild(div);
+    } else if (step.action === 'choose_one' && step.category === 'potion') {
+      potionStep = step;
+    } else if (step.action === 'add_item') {
+      items.push(step.item);
+    } else if (step.action === 'set_resource') {
+      resources.push(step);
+    }
+  }
+
+  // Add starting items
+  for (const item of items) {
+    state.inventory.push(item);
+  }
+
+  // Set resources
+  for (const res of resources) {
+    if (res.resource === 'provisions') state.provisions = res.amount;
+    else if (res.resource === 'gold') state.gold = res.amount;
+  }
+
+  // Show potion choice
+  if (potionStep) {
+    const section = document.getElementById('potion-section');
+    section.style.display = '';
+    const container = document.getElementById('potion-choices');
+    container.innerHTML = '';
+    const potionDefs = gameData.rules.potion?.choose_one_of || [];
+
+    for (const opt of potionStep.options) {
+      const def = potionDefs.find(p => p.name === opt);
+      const btn = document.createElement('button');
+      btn.className = 'potion-btn';
+      btn.textContent = opt + (def?.detail ? ` — ${def.detail}` : def ? ` — Restores ${def.stat} to initial value` : '');
+      btn.addEventListener('click', () => {
+        // Remove previously selected potion from inventory
+        if (state.potion) {
+          const prevId = state.potion.toLowerCase().replace(/ /g, '_');
+          const idx = state.inventory.indexOf(prevId);
+          if (idx >= 0) state.inventory.splice(idx, 1);
+        }
+        container.querySelectorAll('.potion-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        state.potion = opt;
+        state.potionDoses = gameData.rules.potion?.doses || 2;
+        state.inventory.push(opt.toLowerCase().replace(/ /g, '_'));
+        showEquipmentAndBegin(items);
+      });
+      container.appendChild(btn);
+    }
+  } else {
+    showEquipmentAndBegin(items);
+  }
+}
+
+function showEquipmentAndBegin(items) {
+  const section = document.getElementById('equipment-section');
+  section.style.display = '';
+  const list = document.getElementById('equipment-list');
+  list.innerHTML = '';
+  for (const item of state.inventory) {
+    const li = document.createElement('li');
+    li.textContent = getItemName(item);
+    list.appendChild(li);
+  }
+  if (state.provisions > 0) {
+    const li = document.createElement('li');
+    li.textContent = `Provisions (${state.provisions})`;
+    list.appendChild(li);
+  }
+  document.getElementById('begin-btn').style.display = '';
+}
+
+// ==================== BEGIN ADVENTURE ====================
+function beginAdventure() {
+  showScreen('game-screen');
+  navigateTo('1');
+}
+
+// ==================== STAT BAR ====================
+function updateStatBar() {
+  const bar = document.getElementById('stat-bar');
+  const statDefs = gameData.rules.stats || [];
+
+  let html = '';
+  for (const sd of statDefs) {
+    const val = state.stats[sd.name] || 0;
+    const initial = state.initialStats[sd.name] || val;
+    html += `<div class="stat-item ${sd.name}">
+      <span class="stat-label">${sd.name}</span>
+      <span class="stat-val">${val}/${initial}</span>
+    </div>`;
+  }
+
+  html += `<div class="stat-item provisions">
+    <span class="stat-label">Provisions</span>
+    <span class="stat-val">${state.provisions}</span>
+  </div>`;
+  html += `<div class="stat-item gold">
+    <span class="stat-label">Gold</span>
+    <span class="stat-val">${state.gold}</span>
+  </div>`;
+
+  if (state.potion && state.potionDoses > 0) {
+    html += `<div class="stat-bar-actions">
+      <span class="potion-info" onclick="usePotion()" title="Click to drink">${state.potion} (${state.potionDoses})</span>
+    </div>`;
+  }
+
+  bar.innerHTML = html;
+}
+
+function updateInventory() {
+  const list = document.getElementById('inventory-list');
+  list.innerHTML = '';
+  const displayItems = state.inventory.filter(i => {
+    // Filter out base equipment for cleaner display
+    return true;
+  });
+  if (displayItems.length === 0) {
+    list.innerHTML = '<li class="empty">Empty</li>';
+    return;
+  }
+  for (const item of displayItems) {
+    const li = document.createElement('li');
+    li.textContent = getItemName(item);
+    list.appendChild(li);
+  }
+}
+
+function toggleInventory() {
+  const panel = document.getElementById('inventory-panel');
+  panel.classList.toggle('open');
+  document.getElementById('inv-arrow').textContent = panel.classList.contains('open') ? '\u25BC' : '\u25B6';
+}
+
+// ==================== POTION USE ====================
+function usePotion() {
+  if (!state.potion || state.potionDoses <= 0) return;
+  const potionDefs = gameData.rules.potion?.choose_one_of || [];
+  const def = potionDefs.find(p => p.name === state.potion);
+  if (!def) return;
+
+  state.potionDoses--;
+
+  if (def.effect === 'restore_to_initial') {
+    state.stats[def.stat] = state.initialStats[def.stat];
+  } else if (def.effect === 'restore_to_initial_plus_one') {
+    state.initialStats[def.stat] = (state.initialStats[def.stat] || 0) + 1;
+    state.stats[def.stat] = state.initialStats[def.stat];
+  }
+
+  if (state.potionDoses <= 0) {
+    const idx = state.inventory.indexOf(state.potion.toLowerCase().replace(/ /g, '_'));
+    if (idx >= 0) state.inventory.splice(idx, 1);
+  }
+
+  updateStatBar();
+  updateInventory();
+}
+
+// ==================== NAVIGATION ====================
+function navigateTo(sectionId) {
+  const sid = String(sectionId);
+  const section = gameData.sections[sid];
+  if (!section) {
+    document.getElementById('game-content').innerHTML = `<p style="color:var(--danger)">Section ${sid} not found!</p>`;
+    return;
+  }
+
+  state.currentSection = sid;
+  state.visitedSections.add(sid);
+
+  // Check for ending
+  if (section.is_ending) {
+    showEnding(section);
+    return;
+  }
+
+  // Check for death
+  if ((state.stats.stamina !== undefined && state.stats.stamina <= 0)) {
+    showEnding({ text: 'Your STAMINA has reached zero. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
+    return;
+  }
+
+  updateStatBar();
+  updateInventory();
+
+  const content = document.getElementById('game-content');
+  content.innerHTML = '';
+
+  // Section header
+  const header = document.createElement('div');
+  header.className = 'section-header';
+  header.textContent = `Section ${sid}`;
+  content.appendChild(header);
+
+  // Section text
+  const textDiv = document.createElement('div');
+  textDiv.className = 'section-text';
+  textDiv.innerHTML = formatText(section.text);
+  content.appendChild(textDiv);
+
+  // Process events
+  processEvents(section.events || [], section.choices || []);
+}
+
+function formatText(text) {
+  if (!text) return '';
+  return text.split('\n\n').map(p => `<p>${p}</p>`).join('');
+}
+
+// ==================== EVENT PROCESSING ====================
+let pendingEvents = [];
+let pendingChoices = [];
+
+function processEvents(events, choices) {
+  pendingEvents = [...events];
+  pendingChoices = choices;
+  processNextEvent();
+}
+
+function processNextEvent() {
+  if (pendingEvents.length === 0) {
+    // All events processed, show choices
+    showChoices(pendingChoices);
+    return;
+  }
+
+  const event = pendingEvents.shift();
+  const content = document.getElementById('game-content');
+
+  switch (event.type) {
+    case 'modify_stat':
+      handleModifyStat(event);
+      processNextEvent();
+      break;
+    case 'add_item':
+      handleAddItem(event);
+      processNextEvent();
+      break;
+    case 'remove_item':
+      handleRemoveItem(event);
+      processNextEvent();
+      break;
+    case 'set_flag':
+      handleSetFlag(event);
+      processNextEvent();
+      break;
+    case 'combat':
+      handleCombat(event);
+      break;
+    case 'stat_test':
+      handleStatTest(event);
+      break;
+    case 'roll_dice':
+      handleRollDice(event);
+      break;
+    case 'eat_meal':
+      handleEatMeal(event);
+      break;
+    case 'input_number':
+      handleInputNumber(event);
+      break;
+    case 'input_text':
+      handleInputText(event);
+      break;
+    case 'custom':
+      handleCustom(event);
+      processNextEvent();
+      break;
+    default:
+      processNextEvent();
+  }
+}
+
+// --- Modify Stat ---
+function handleModifyStat(event) {
+  const stat = event.stat;
+  const amount = event.amount || 0;
+  const content = document.getElementById('game-content');
+
+  if (stat === 'provisions') {
+    state.provisions = Math.max(0, state.provisions + amount);
+  } else if (stat === 'gold') {
+    state.gold = Math.max(0, state.gold + amount);
+  } else {
+    const old = state.stats[stat] || 0;
+    let newVal = old + amount;
+    // Respect initial max if applicable
+    const statDef = (gameData.rules.stats || []).find(s => s.name === stat);
+    if (statDef?.initial_is_max && state.initialStats[stat] !== undefined) {
+      newVal = Math.min(newVal, state.initialStats[stat]);
+    }
+    if (statDef?.min !== undefined && statDef?.min !== null) {
+      newVal = Math.max(newVal, statDef.min);
+    }
+    state.stats[stat] = newVal;
+  }
+
+  // Check for special: set to value instead of delta
+  if (event.set_to !== undefined) {
+    if (stat === 'provisions') state.provisions = event.set_to;
+    else if (stat === 'gold') state.gold = event.set_to;
+    else state.stats[stat] = event.set_to;
+  }
+
+  // Check for modify_initial
+  if (event.modify_initial) {
+    state.initialStats[stat] = (state.initialStats[stat] || 0) + (event.modify_initial_amount || amount);
+    // Also apply to current
+    state.stats[stat] = (state.stats[stat] || 0) + (event.modify_initial_amount || 0);
+  }
+
+  const msg = document.createElement('div');
+  msg.className = 'event-msg ' + (amount >= 0 ? 'gain' : 'loss');
+  const sign = amount >= 0 ? '+' : '';
+  msg.textContent = `${stat.toUpperCase()} ${sign}${amount}`;
+  content.appendChild(msg);
+
+  updateStatBar();
+
+  // Check for death
+  if (state.stats.stamina !== undefined && state.stats.stamina <= 0) {
+    showEnding({ text: 'Your STAMINA has reached zero. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
+  }
+}
+
+// --- Add Item ---
+function handleAddItem(event) {
+  const item = event.item;
+  if (!state.inventory.includes(item)) {
+    state.inventory.push(item);
+  }
+  const content = document.getElementById('game-content');
+  const msg = document.createElement('div');
+  msg.className = 'event-msg gain';
+  msg.textContent = `Acquired: ${getItemName(item)}`;
+  content.appendChild(msg);
+  updateInventory();
+}
+
+// --- Remove Item ---
+function handleRemoveItem(event) {
+  const idx = state.inventory.indexOf(event.item);
+  if (idx >= 0) state.inventory.splice(idx, 1);
+  const content = document.getElementById('game-content');
+  const msg = document.createElement('div');
+  msg.className = 'event-msg loss';
+  msg.textContent = `Lost: ${getItemName(event.item)}`;
+  content.appendChild(msg);
+  updateInventory();
+}
+
+// --- Set Flag ---
+function handleSetFlag(event) {
+  state.flags.add(event.flag);
+  const content = document.getElementById('game-content');
+  const msg = document.createElement('div');
+  msg.className = 'event-msg info';
+  msg.textContent = `\u2691 ${event.flag.replace(/_/g, ' ')}`;
+  content.appendChild(msg);
+}
+
+// --- Custom ---
+function handleCustom(event) {
+  const content = document.getElementById('game-content');
+  const msg = document.createElement('div');
+  msg.className = 'event-msg info';
+  msg.textContent = event.description || 'Special event';
+  content.appendChild(msg);
+}
+
+// ==================== COMBAT ====================
+function handleCombat(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'combat-area';
+  content.appendChild(area);
+
+  // Resolve enemies list
+  let enemies = [];
+  if (event.enemies) {
+    enemies = event.enemies.map(e => {
+      const data = getEnemy(e.ref);
+      return { ...data, ref: e.ref, currentStamina: data.stamina };
+    });
+  } else if (event.enemy_ref) {
+    const data = getEnemy(event.enemy_ref);
+    enemies = [{ ...data, ref: event.enemy_ref, currentStamina: data.stamina }];
+  }
+
+  const mode = event.mode || 'sequential';
+  const winTo = event.win_to;
+  const fleeTo = event.flee_to || null;
+  const specialRules = event.special_rules || null;
+
+  let currentEnemyIdx = 0;
+  let roundNum = 0;
+  let combatLog = [];
+  let waitingForLuckChoice = false;
+  let lastRoundResult = null;
+
+  function renderCombat() {
+    const enemy = enemies[currentEnemyIdx];
+    const playerStamina = state.stats.stamina || 0;
+    const playerMaxStamina = state.initialStats.stamina || playerStamina;
+    const enemyMaxStamina = getEnemy(enemy.ref)?.stamina || enemy.stamina;
+
+    let html = `<div class="combat-header"><h3>COMBAT</h3>`;
+    if (enemies.length > 1) {
+      html += `<div style="font-size:0.85em;color:var(--text-dim)">Enemy ${currentEnemyIdx + 1} of ${enemies.length} (${mode})</div>`;
+    }
+    html += `</div>`;
+
+    if (specialRules) {
+      html += `<div class="special-rules-box"><strong>Special Rules:</strong> ${specialRules}</div>`;
+    }
+
+    html += `<div class="combatants">
+      <div class="combatant player">
+        <div class="name" style="color:var(--stat-skill)">You</div>
+        <div class="stats-line">SKILL ${state.stats.skill || 0} | STAMINA ${playerStamina}</div>
+        <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, playerStamina / playerMaxStamina * 100)}%"></div></div>
+      </div>
+      <div style="font-size:1.5em;color:var(--text-dim)">vs</div>
+      <div class="combatant enemy">
+        <div class="name" style="color:var(--danger)">${enemy.name}</div>
+        <div class="stats-line">SKILL ${enemy.skill} | STAMINA ${enemy.currentStamina}</div>
+        <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, enemy.currentStamina / enemyMaxStamina * 100)}%"></div></div>
+      </div>
+    </div>`;
+
+    // Combat log
+    if (combatLog.length > 0) {
+      html += `<div class="combat-log">`;
+      for (const entry of combatLog) {
+        html += `<div class="round">${entry}</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // Actions
+    html += `<div class="combat-actions">`;
+    if (waitingForLuckChoice) {
+      html += `<button class="btn btn-small" onclick="combatTestLuck()">Test Your Luck?</button>`;
+      html += `<button class="btn btn-small" onclick="combatSkipLuck()">Skip</button>`;
+    } else if (enemy.currentStamina > 0 && playerStamina > 0) {
+      html += `<button class="btn" onclick="combatAttack()">Attack</button>`;
+      if (fleeTo) {
+        html += `<button class="btn btn-danger btn-small" onclick="combatFlee()">Flee</button>`;
+      }
+    }
+    html += `</div>`;
+
+    area.innerHTML = html;
+    // Auto-scroll combat log
+    const log = area.querySelector('.combat-log');
+    if (log) log.scrollTop = log.scrollHeight;
+  }
+
+  // Store combat state for callbacks
+  window._combat = { enemies, currentEnemyIdx, mode, winTo, fleeTo, specialRules, roundNum, combatLog, waitingForLuckChoice, lastRoundResult, renderCombat, area };
+
+  window.combatAttack = function() {
+    const c = window._combat;
+    const enemy = c.enemies[c.currentEnemyIdx];
+    c.roundNum++;
+
+    const playerRoll = roll2d6();
+    const enemyRoll = roll2d6();
+    const playerAS = playerRoll.total + (state.stats.skill || 0);
+    const enemyAS = enemyRoll.total + enemy.skill;
+
+    const dmg = gameData.rules.combat_rules_detail?.standard_damage || 2;
+    let result = '';
+
+    if (playerAS > enemyAS) {
+      enemy.currentStamina = Math.max(0, enemy.currentStamina - dmg);
+      result = `<span class="hit">Round ${c.roundNum}: You [${playerRoll.rolls}]+${state.stats.skill}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${enemy.skill}=${enemyAS} — You wound ${enemy.name}! (-${dmg} STA)</span>`;
+      c.lastRoundResult = { winner: 'player', damage: dmg, enemy };
+    } else if (enemyAS > playerAS) {
+      state.stats.stamina = Math.max(0, (state.stats.stamina || 0) - dmg);
+      result = `<span class="hit">Round ${c.roundNum}: You [${playerRoll.rolls}]+${state.stats.skill}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${enemy.skill}=${enemyAS} — ${enemy.name} wounds you! (-${dmg} STA)</span>`;
+      c.lastRoundResult = { winner: 'enemy', damage: dmg, enemy };
+    } else {
+      result = `<span class="miss">Round ${c.roundNum}: You [${playerRoll.rolls}]+${state.stats.skill}=${playerAS} vs ${enemy.name} [${enemyRoll.rolls}]+${enemy.skill}=${enemyAS} — Clash! No damage.</span>`;
+      c.lastRoundResult = null;
+    }
+
+    c.combatLog.push(result);
+    updateStatBar();
+
+    // Check for luck option
+    const luckRules = gameData.rules.combat_rules_detail?.luck_in_combat;
+    if (luckRules?.optional && c.lastRoundResult && (state.stats.luck || 0) > 0) {
+      c.waitingForLuckChoice = true;
+    } else {
+      c.waitingForLuckChoice = false;
+      checkCombatEnd();
+      return;
+    }
+
+    c.renderCombat();
+  };
+
+  window.combatTestLuck = function() {
+    const c = window._combat;
+    const lr = c.lastRoundResult;
+    if (!lr) { c.waitingForLuckChoice = false; c.renderCombat(); return; }
+
+    const luckRoll = roll2d6();
+    const currentLuck = state.stats.luck || 0;
+    const lucky = luckRoll.total <= currentLuck;
+
+    // Deduct luck
+    if (gameData.rules.luck_test?.deduct_after) {
+      state.stats.luck = Math.max(0, currentLuck - (gameData.rules.luck_test.deduct_amount || 1));
+    }
+
+    const luckRules = gameData.rules.combat_rules_detail.luck_in_combat;
+    let msg = '';
+
+    if (lr.winner === 'player') {
+      if (lucky) {
+        const extraDmg = luckRules.player_wounded_enemy_lucky - lr.damage;
+        lr.enemy.currentStamina = Math.max(0, lr.enemy.currentStamina - extraDmg);
+        msg = `<span class="lucky">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Lucky! Extra damage! (${luckRules.player_wounded_enemy_lucky} total)</span>`;
+      } else {
+        const restore = lr.damage - luckRules.player_wounded_enemy_unlucky;
+        lr.enemy.currentStamina = lr.enemy.currentStamina + restore;
+        msg = `<span class="hit">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Unlucky! Weak blow. (${luckRules.player_wounded_enemy_unlucky} total)</span>`;
+      }
+    } else {
+      if (lucky) {
+        const restore = lr.damage - luckRules.enemy_wounded_player_lucky;
+        state.stats.stamina = Math.min(state.initialStats.stamina, (state.stats.stamina || 0) + restore);
+        msg = `<span class="lucky">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Lucky! Glancing blow. (${luckRules.enemy_wounded_player_lucky} damage)</span>`;
+      } else {
+        const extraDmg = luckRules.enemy_wounded_player_unlucky - lr.damage;
+        state.stats.stamina = Math.max(0, (state.stats.stamina || 0) - extraDmg);
+        msg = `<span class="hit">Luck test: [${luckRoll.rolls}]=${luckRoll.total} vs ${currentLuck} — Unlucky! Deeper wound! (${luckRules.enemy_wounded_player_unlucky} damage)</span>`;
+      }
+    }
+
+    c.combatLog.push(msg);
+    c.waitingForLuckChoice = false;
+    c.lastRoundResult = null;
+    updateStatBar();
+    checkCombatEnd();
+  };
+
+  window.combatSkipLuck = function() {
+    const c = window._combat;
+    c.waitingForLuckChoice = false;
+    c.lastRoundResult = null;
+    checkCombatEnd();
+  };
+
+  function checkCombatEnd() {
+    const c = window._combat;
+    const enemy = c.enemies[c.currentEnemyIdx];
+
+    // Player dead
+    if ((state.stats.stamina || 0) <= 0) {
+      c.combatLog.push('<span class="hit">You have been slain!</span>');
+      c.renderCombat();
+      setTimeout(() => {
+        showEnding({ text: 'You have fallen in combat. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
+      }, 1000);
+      return;
+    }
+
+    // Enemy dead
+    if (enemy.currentStamina <= 0) {
+      c.combatLog.push(`<span class="lucky">${enemy.name} is defeated!</span>`);
+      c.currentEnemyIdx++;
+
+      if (c.currentEnemyIdx < c.enemies.length && (c.mode === 'sequential' || c.mode === 'custom')) {
+        // Next enemy
+        c.combatLog.push(`<br>--- Next opponent: ${c.enemies[c.currentEnemyIdx].name} ---`);
+        c.renderCombat();
+        return;
+      } else {
+        // All enemies defeated
+        c.renderCombat();
+        setTimeout(() => {
+          if (c.winTo) navigateTo(c.winTo);
+          else processNextEvent();
+        }, 500);
+        return;
+      }
+    }
+
+    c.renderCombat();
+  }
+
+  window.combatFlee = function() {
+    const c = window._combat;
+    const fleeRules = gameData.rules.escaping || {};
+    const fleeDmg = fleeRules.flee_damage || 2;
+
+    state.stats.stamina = Math.max(0, (state.stats.stamina || 0) - fleeDmg);
+    c.combatLog.push(`<span class="hit">You flee! The enemy strikes as you run. (-${fleeDmg} STA)</span>`);
+    updateStatBar();
+
+    if ((state.stats.stamina || 0) <= 0) {
+      checkCombatEnd();
+      return;
+    }
+
+    // Offer luck test on flee wound if allowed
+    if (fleeRules.luck_on_flee_wound_allowed && (state.stats.luck || 0) > 0) {
+      c.lastRoundResult = { winner: 'enemy', damage: fleeDmg, enemy: c.enemies[c.currentEnemyIdx] };
+      c.waitingForLuckChoice = true;
+      c.renderCombat();
+      // Override skip to navigate after
+      const origSkip = window.combatSkipLuck;
+      window.combatSkipLuck = function() {
+        c.waitingForLuckChoice = false;
+        c.renderCombat();
+        window.combatSkipLuck = origSkip;
+        navigateTo(c.fleeTo);
+      };
+      const origLuck = window.combatTestLuck;
+      const savedTestLuck = window.combatTestLuck;
+      window.combatTestLuck = function() {
+        savedTestLuck();
+        // After luck test on flee, navigate
+        window.combatTestLuck = origLuck;
+        window.combatSkipLuck = origSkip;
+        setTimeout(() => navigateTo(c.fleeTo), 500);
+      };
+      return;
+    }
+
+    c.renderCombat();
+    setTimeout(() => navigateTo(c.fleeTo), 500);
+  };
+
+  renderCombat();
+}
+
+// ==================== STAT TEST ====================
+function handleStatTest(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'test-area';
+  content.appendChild(area);
+
+  const stat = event.stat;
+  const statVal = state.stats[stat] || 0;
+
+  area.innerHTML = `
+    <h3>Test Your ${stat.charAt(0).toUpperCase() + stat.slice(1)}</h3>
+    <p style="color:var(--text-dim)">Roll 2d6. Succeed if &le; your current ${stat.toUpperCase()} (${statVal})</p>
+    <div class="mt-2">
+      <button class="btn" onclick="resolveStatTest(this)">Roll</button>
+    </div>
+  `;
+
+  window.resolveStatTest = function(btn) {
+    btn.disabled = true;
+    const result = roll2d6();
+    const success = result.total <= statVal;
+
+    // Deduct if needed
+    if (event.deduct_after) {
+      const deductStat = event.deduct_stat || stat;
+      const deductAmt = event.deduct_amount || 1;
+      state.stats[deductStat] = Math.max(0, (state.stats[deductStat] || 0) - deductAmt);
+      updateStatBar();
+    }
+
+    area.innerHTML = `
+      <h3>Test Your ${stat.charAt(0).toUpperCase() + stat.slice(1)}</h3>
+      <div class="dice-display">[${result.rolls.join(', ')}] = ${result.total}</div>
+      <div class="test-result ${success ? 'success' : 'failure'}">
+        ${result.total} vs ${statVal} — ${success ? 'Success!' : 'Failed!'}
+      </div>
+      ${event.deduct_after ? `<p style="font-size:0.85em;color:var(--text-dim)">${(event.deduct_stat || stat).toUpperCase()} reduced by ${event.deduct_amount || 1}</p>` : ''}
+    `;
+
+    // Set a flag for test_failed conditions
+    window._lastTestResult = success;
+
+    setTimeout(() => {
+      if (success && event.success_to) {
+        navigateTo(event.success_to);
+      } else if (!success && event.failure_to) {
+        navigateTo(event.failure_to);
+      } else {
+        // No navigation target, continue events
+        processNextEvent();
+      }
+    }, 1000);
+  };
+}
+
+// ==================== DICE ROLL ====================
+function handleRollDice(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'dice-roll-area';
+  content.appendChild(area);
+
+  const dice = event.dice || '2d6';
+
+  area.innerHTML = `
+    <h3>${event.prompt || 'Roll the Dice'}</h3>
+    <p style="color:var(--text-dim)">Roll ${dice}</p>
+    <div class="mt-2">
+      <button class="btn" onclick="resolveRollDice(this)">Roll</button>
+    </div>
+  `;
+
+  window.resolveRollDice = function(btn) {
+    btn.disabled = true;
+    const result = rollDice(dice);
+
+    // Find matching result
+    let target = null;
+    let resultText = '';
+    const results = event.results || {};
+    if (results[String(result.total)]) {
+      target = results[String(result.total)].target;
+      resultText = results[String(result.total)].text || '';
+    } else {
+      // Check range keys like "1-2"
+      for (const [key, val] of Object.entries(results)) {
+        if (key.includes('-')) {
+          const [lo, hi] = key.split('-').map(Number);
+          if (result.total >= lo && result.total <= hi) {
+            target = val.target;
+            resultText = val.text || '';
+            break;
+          }
+        }
+      }
+    }
+
+    area.innerHTML = `
+      <h3>${event.prompt || 'Roll the Dice'}</h3>
+      <div class="dice-display">[${result.rolls.join(', ')}] = ${result.total}</div>
+      ${resultText ? `<p>${resultText}</p>` : ''}
+    `;
+
+    if (target) {
+      setTimeout(() => navigateTo(target), 1000);
+    } else {
+      area.innerHTML += `<p style="color:var(--danger)">No result for ${result.total}</p>`;
+      processNextEvent();
+    }
+  };
+}
+
+// ==================== EAT MEAL ====================
+function handleEatMeal(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'eat-meal-area';
+  content.appendChild(area);
+
+  const provRules = gameData.rules.provisions || {};
+  const healAmount = event.heal_amount || provRules.heal_amount || 4;
+  const healStat = event.heal_stat || provRules.heal_stat || 'stamina';
+
+  const isRequired = event.required === true;
+
+  if (state.provisions > 0) {
+    area.innerHTML = `
+      <h3>Eat a Meal</h3>
+      <p>${isRequired ? 'You must eat a meal here.' : 'You may eat a meal'} to restore ${healAmount} ${healStat.toUpperCase()}.</p>
+      <p style="color:var(--text-dim)">Provisions remaining: ${state.provisions}</p>
+      <div class="mt-1">
+        <button class="btn btn-success btn-small" onclick="doEatMeal(${healAmount}, '${healStat}')">Eat</button>
+        ${isRequired ? '' : '<button class="btn btn-small" onclick="skipMeal()">Skip</button>'}
+      </div>
+    `;
+  } else {
+    area.innerHTML = `
+      <p style="color:var(--text-dim)">You have no provisions to eat.</p>
+    `;
+    setTimeout(() => processNextEvent(), 500);
+    return;
+  }
+
+  window.doEatMeal = function(heal, stat) {
+    state.provisions--;
+    const old = state.stats[stat] || 0;
+    let newVal = old + heal;
+    const statDef = (gameData.rules.stats || []).find(s => s.name === stat);
+    if (statDef?.initial_is_max && state.initialStats[stat] !== undefined) {
+      newVal = Math.min(newVal, state.initialStats[stat]);
+    }
+    state.stats[stat] = newVal;
+
+    area.innerHTML = `
+      <p>You eat a meal. <span style="color:var(--stat-provisions)">+${heal} ${stat.toUpperCase()}</span></p>
+    `;
+    updateStatBar();
+    processNextEvent();
+  };
+
+  window.skipMeal = function() {
+    area.innerHTML = `<p style="color:var(--text-dim)">You decide not to eat.</p>`;
+    processNextEvent();
+  };
+}
+
+// ==================== INPUT NUMBER ====================
+function handleInputNumber(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'input-area';
+  content.appendChild(area);
+
+  area.innerHTML = `
+    <h3>${event.prompt || 'Enter a number'}</h3>
+    ${event.note ? `<p style="font-size:0.85em;color:var(--text-dim);margin-bottom:8px">${event.note}</p>` : ''}
+    <div class="mt-1" style="display:flex;gap:8px;align-items:center;justify-content:center;">
+      <input type="number" id="number-input" min="1" placeholder="Enter number...">
+      <button class="btn btn-small" onclick="submitNumber()">Submit</button>
+    </div>
+  `;
+
+  window.submitNumber = function() {
+    const val = document.getElementById('number-input').value;
+    if (!val) return;
+    const num = parseInt(val);
+    if (isNaN(num)) return;
+
+    if (event.target === 'computed') {
+      // Navigate to the entered number as a section
+      navigateTo(num);
+    } else if (event.target) {
+      navigateTo(event.target);
+    } else {
+      navigateTo(num);
+    }
+  };
+}
+
+// ==================== INPUT TEXT ====================
+function handleInputText(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'input-area';
+  content.appendChild(area);
+
+  area.innerHTML = `
+    <h3>${event.prompt || 'Enter text'}</h3>
+    <div class="mt-1" style="display:flex;gap:8px;align-items:center;justify-content:center;">
+      <input type="text" id="text-input" placeholder="Enter text...">
+      <button class="btn btn-small" onclick="submitText()">Submit</button>
+    </div>
+  `;
+
+  window.submitText = function() {
+    const val = document.getElementById('text-input').value.trim();
+    if (!val) return;
+
+    const results = event.results || {};
+    const match = results[val.toLowerCase()] || results[val];
+    if (match) {
+      navigateTo(match.target || match);
+    } else if (event.default_to) {
+      navigateTo(event.default_to);
+    } else {
+      processNextEvent();
+    }
+  };
+}
+
+// ==================== CHOICES ====================
+function showChoices(choices) {
+  if (!choices || choices.length === 0) return;
+
+  const content = document.getElementById('game-content');
+  const div = document.createElement('div');
+  div.className = 'choices';
+  content.appendChild(div);
+
+  for (const choice of choices) {
+    const btn = document.createElement('button');
+    btn.className = 'choice-btn';
+    btn.textContent = choice.text;
+
+    const condMet = evaluateCondition(choice.condition);
+
+    if (!condMet) {
+      btn.classList.add('disabled');
+      const tooltip = document.createElement('span');
+      tooltip.className = 'condition-tooltip';
+      tooltip.textContent = describeCondition(choice.condition);
+      btn.appendChild(tooltip);
+      btn.addEventListener('click', (e) => e.preventDefault());
+    } else {
+      btn.addEventListener('click', () => navigateTo(choice.target));
+    }
+
+    div.appendChild(btn);
+  }
+}
+
+// ==================== CONDITION EVALUATION ====================
+function evaluateCondition(cond) {
+  if (!cond) return true;
+
+  switch (cond.type) {
+    case 'has_item':
+      return state.inventory.includes(cond.item);
+    case 'has_flag':
+      return state.flags.has(cond.flag);
+    case 'stat_gte': {
+      const val = cond.stat === 'provisions' ? state.provisions :
+                  cond.stat === 'gold' ? state.gold :
+                  state.stats[cond.stat] || 0;
+      return val >= cond.value;
+    }
+    case 'stat_lte': {
+      const val = cond.stat === 'provisions' ? state.provisions :
+                  cond.stat === 'gold' ? state.gold :
+                  state.stats[cond.stat] || 0;
+      return val <= cond.value;
+    }
+    case 'has_ability':
+      return state.flags.has(cond.ability);
+    case 'not':
+      return !evaluateCondition(cond.condition);
+    case 'and':
+      return (cond.conditions || []).every(c => evaluateCondition(c));
+    case 'or':
+      return (cond.conditions || []).some(c => evaluateCondition(c));
+    case 'test_failed':
+      return window._lastTestResult === false;
+    case 'test_succeeded':
+      return window._lastTestResult === true;
+    default:
+      return true;
+  }
+}
+
+function describeCondition(cond) {
+  if (!cond) return '';
+  switch (cond.type) {
+    case 'has_item':
+      return `Requires: ${getItemName(cond.item)}`;
+    case 'has_flag':
+      return `Requires: ${cond.flag.replace(/_/g, ' ')}`;
+    case 'stat_gte':
+      return `Requires: ${cond.stat.toUpperCase()} \u2265 ${cond.value}`;
+    case 'stat_lte':
+      return `Requires: ${cond.stat.toUpperCase()} \u2264 ${cond.value}`;
+    case 'has_ability':
+      return `Requires ability: ${cond.ability}`;
+    case 'not':
+      return `Must NOT: ${describeCondition(cond.condition)}`;
+    case 'and':
+      return (cond.conditions || []).map(describeCondition).join(' AND ');
+    case 'or':
+      return (cond.conditions || []).map(describeCondition).join(' OR ');
+    case 'test_failed':
+      return 'Requires: failed the test';
+    case 'test_succeeded':
+      return 'Requires: passed the test';
+    default:
+      return 'Condition not met';
+  }
+}
+
+// ==================== ENDINGS ====================
+function showEnding(section) {
+  showScreen('ending-screen');
+  const screen = document.getElementById('ending-screen');
+  const isVictory = section.ending_type === 'victory';
+  const isDeath = section.ending_type === 'death';
+
+  screen.innerHTML = `
+    <div class="${isDeath ? 'ending-death' : isVictory ? 'ending-victory' : 'ending-death'} mt-3">
+      <h2>${isVictory ? 'VICTORY!' : 'YOUR ADVENTURE ENDS'}</h2>
+      <div class="section-text mt-2">${formatText(section.text)}</div>
+      <div class="mt-3">
+        <button class="btn btn-large" onclick="playAgain()">Play Again</button>
+      </div>
+    </div>
+  `;
+}
+
+function playAgain() {
+  state = {
+    stats: {},
+    initialStats: {},
+    inventory: [],
+    flags: new Set(),
+    provisions: 0,
+    gold: 0,
+    potion: null,
+    potionDoses: 0,
+    currentSection: null,
+    visitedSections: new Set(),
+  };
+  window._lastTestResult = null;
+  showScreen('load-screen');
+}
+</script>
+</body>
+</html>
