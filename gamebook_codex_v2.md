@@ -77,6 +77,14 @@ Before generating any JSON output, you MUST read the complete GBF JSON Schema sp
 
 **The schema takes precedence over examples in this document.** The inline JSON examples in this Codex are illustrative and may not reflect the latest schema. If there is any conflict between an example in this document and the schema specification, always defer to the schema.
 
+**Use the schema as a guide for what to encode, not just how to encode it.** The schema defines every field, event type, and structural element that the emulator can handle. When parsing a book, actively look for content that maps to schema-defined structures — even if this Codex document doesn't explicitly mention the pattern. For example:
+- The schema defines `frontmatter` — so look for introductory text, story background, and rules explanations to include
+- The schema defines `choose_items` events — so when the book says "choose three weapons from the list," use that event type rather than a `custom` event
+- The schema defines `apply_to_stat` on `roll_dice` events — so when the book says "roll one die and lose that many STAMINA," encode it as a stat-application roll, not a navigation roll
+- The schema defines `abilities` in character creation — so when the book offers skill/discipline selection, encode it as `choose_abilities`
+
+Think of the schema as a menu of capabilities. If the book contains a mechanic and the schema has a way to represent it, use the structured representation rather than falling back to `custom` events or narrative-only descriptions.
+
 Do not begin generating JSON output until you have read and understood the schema. This ensures your output validates correctly and uses the latest field definitions, event types, and structural conventions.
 
 ### Step 4: Identify the Book
@@ -112,7 +120,7 @@ When you encounter ambiguous text, unclear section references, or anything you'r
 For each section you parse, you should be able to point to where in the source document you read it. If you find yourself "knowing" what a section says without having read it from the document, STOP — you are hallucinating.
 
 ### Rule 5: Schema Is Authoritative
-The GBF JSON Schema (`codex.schema.json`) is the single source of truth for the output format. You must read it completely before generating any output. If any JSON example in this Codex document conflicts with the schema, the schema wins. Do not rely on examples alone — always verify field names, types, required fields, and structural conventions against the schema.
+The GBF JSON Schema (`codex.schema.json`) is the single source of truth for the output format. You must read it completely before generating any output. If any JSON example in this Codex document conflicts with the schema, the schema wins. Do not rely on examples alone — always verify field names, types, required fields, and structural conventions against the schema. Treat the schema as a menu of capabilities: if the book contains a mechanic and the schema defines a way to represent it, use the structured representation rather than `custom` events or narrative-only descriptions.
 
 ---
 
