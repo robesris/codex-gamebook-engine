@@ -667,8 +667,8 @@ function startCharacterCreation() {
         <span class="stat-value">${result.total}</span>
       `;
       rollContainer.appendChild(div);
-    } else if (step.action === 'choose_one' && step.category === 'potion') {
-      interactiveSteps.push({ type: 'potion', step });
+    } else if (step.action === 'choose_one') {
+      interactiveSteps.push({ type: 'choose_one', step });
     } else if (step.action === 'choose_abilities') {
       interactiveSteps.push({ type: 'abilities', step });
     } else if (step.action === 'add_item') {
@@ -677,34 +677,6 @@ function startCharacterCreation() {
       if (step.resource === 'provisions') state.provisions = step.amount;
       else if (step.resource === 'gold') state.gold = step.amount;
       else if (step.resource === 'meals') state.meals = step.amount;
-    } else if (step.action === 'roll_gold' || step.action === 'roll_equipment' || step.action === 'weaponskill_roll') {
-      // Generic roll steps — roll and display
-      const formula = step.formula || 'R10';
-      const result = rollDice(formula);
-      const div = document.createElement('div');
-      div.className = 'stat-roll';
-      const label = step.action === 'roll_gold' ? 'Gold' :
-                    step.action === 'roll_equipment' ? 'Starting Item' :
-                    step.action === 'weaponskill_roll' ? 'Weaponskill' : step.action;
-      div.innerHTML = `
-        <span class="stat-name">${label}</span>
-        <span class="dice-result">${formula} = [${result.rolls[0]}]</span>
-        <span class="stat-value">${result.total}</span>
-      `;
-      rollContainer.appendChild(div);
-      if (step.action === 'roll_gold') {
-        state.gold += result.total;
-      }
-      // Store result for display; specific handling would need game-specific logic
-      // which the JSON should encode in the step's note field
-      if (step.note) {
-        const noteDiv = document.createElement('div');
-        noteDiv.className = 'event-msg info';
-        noteDiv.style.marginTop = '4px';
-        noteDiv.style.marginBottom = '8px';
-        noteDiv.textContent = step.note;
-        rollContainer.appendChild(noteDiv);
-      }
     }
   }
 
@@ -726,30 +698,48 @@ function processCreationSteps(steps, items) {
   const current = steps.shift();
   const rollContainer = document.getElementById('stat-rolls');
 
-  if (current.type === 'potion') {
-    const potionStep = current.step;
+  if (current.type === 'choose_one') {
+    const choiceStep = current.step;
+    const category = choiceStep.category || 'choice';
+    const options = choiceStep.options || [];
+
+    // Check if this is a potion choice (special handling for potion mechanics)
+    const isPotion = category === 'potion';
+    const potionDefs = isPotion ? (gameData.rules.potion?.choose_one_of || []) : [];
+
     const section = document.getElementById('potion-section');
     section.style.display = '';
+    // Repurpose the potion section UI for any choose_one
+    section.querySelector('h3').textContent = isPotion ? 'Choose Your Potion' : `Choose: ${category.charAt(0).toUpperCase() + category.slice(1)}`;
+    section.querySelector('p').textContent = isPotion
+      ? `You may take one potion with you on your adventure (${gameData.rules.potion?.doses || 2} doses).`
+      : `Select one option.`;
     const container = document.getElementById('potion-choices');
     container.innerHTML = '';
-    const potionDefs = gameData.rules.potion?.choose_one_of || [];
 
-    for (const opt of potionStep.options) {
+    for (const opt of options) {
       const def = potionDefs.find(p => p.name === opt);
       const btn = document.createElement('button');
       btn.className = 'potion-btn';
       btn.textContent = opt + (def?.detail ? ` — ${def.detail}` : def ? ` — Restores ${def.stat} to initial value` : '');
       btn.addEventListener('click', () => {
-        if (state.potion) {
-          const prevId = state.potion.toLowerCase().replace(/ /g, '_');
-          const idx = state.inventory.indexOf(prevId);
-          if (idx >= 0) state.inventory.splice(idx, 1);
-        }
         container.querySelectorAll('.potion-btn').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
-        state.potion = opt;
-        state.potionDoses = gameData.rules.potion?.doses || 2;
-        state.inventory.push(opt.toLowerCase().replace(/ /g, '_'));
+
+        if (isPotion) {
+          if (state.potion) {
+            const prevId = state.potion.toLowerCase().replace(/ /g, '_');
+            const idx = state.inventory.indexOf(prevId);
+            if (idx >= 0) state.inventory.splice(idx, 1);
+          }
+          state.potion = opt;
+          state.potionDoses = gameData.rules.potion?.doses || 2;
+          state.inventory.push(opt.toLowerCase().replace(/ /g, '_'));
+        } else {
+          // Generic choose_one: set a flag for the choice
+          const flagName = category + '_' + opt.toLowerCase().replace(/ /g, '_');
+          state.flags.add(flagName);
+        }
         processCreationSteps(steps, items);
       });
       container.appendChild(btn);
