@@ -71,6 +71,14 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 - Missing conditions on choices that the section text describes as conditional
 - Sections with `target: null` choices that should trigger section-level tests
 
+### Step 3b: Read the GBF Specification
+Before generating any JSON output, you MUST read the complete GBF JSON Schema specification (`codex.schema.json`). The schema is the authoritative definition of the output format. If the user provides it alongside the source material, read it in full. If not, the canonical version is available at:
+`https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json`
+
+**The schema takes precedence over examples in this document.** The inline JSON examples in this Codex are illustrative and may not reflect the latest schema. If there is any conflict between an example in this document and the schema specification, always defer to the schema.
+
+Do not begin generating JSON output until you have read and understood the schema. This ensures your output validates correctly and uses the latest field definitions, event types, and structural conventions.
+
 ### Step 4: Identify the Book
 Read the title page, copyright page, and any series identification. Determine:
 - Title, Author, Publisher, Year
@@ -102,6 +110,9 @@ When you encounter ambiguous text, unclear section references, or anything you'r
 
 ### Rule 4: Verify From Source
 For each section you parse, you should be able to point to where in the source document you read it. If you find yourself "knowing" what a section says without having read it from the document, STOP — you are hallucinating.
+
+### Rule 5: Schema Is Authoritative
+The GBF JSON Schema (`codex.schema.json`) is the single source of truth for the output format. You must read it completely before generating any output. If any JSON example in this Codex document conflicts with the schema, the schema wins. Do not rely on examples alone — always verify field names, types, required fields, and structural conventions against the schema.
 
 ---
 
