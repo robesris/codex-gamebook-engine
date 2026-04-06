@@ -814,8 +814,19 @@ After generating the complete output, confirm:
 - [ ] Computed navigation events have clear explanatory notes
 - [ ] Custom events have sufficient implementation detail
 - [ ] Conditional choices have well-defined, parseable conditions
+- [ ] `rules.attack_stat` and `rules.health_stat` are set and match stat names in `rules.stats`
+- [ ] Every enemy in `enemies_catalog` has fields matching `attack_stat` and `health_stat` (the emulator uses these exact field names — mismatches will break combat)
+- [ ] Stat names are used consistently everywhere: `rules.stats[].name`, `attack_stat`, `health_stat`, `modify_stat` events, `stat_test` events, `stat_gte`/`stat_lte` conditions, and enemy catalog entries must all use the same names
 - [ ] The confidence report accurately lists any issues
 - [ ] NO section text was reconstructed from training data
+
+### Emulator compatibility
+The emulator is a strict reference implementation that only supports schema-defined structures. It does NOT guess, infer, or work around missing or inconsistent data. If the JSON file has ambiguities or inconsistencies that a human reader could resolve from context but a machine cannot, those are **must-fix issues that will break playability**. It is your job to identify and resolve these at parse time. Common examples:
+- Stat names that differ between the rules definition and enemy entries (e.g., `"COMBAT SKILL"` in rules but `"combat_skill"` on enemies)
+- Missing `attack_stat` or `health_stat` declarations
+- Events referencing stats that don't exist in `rules.stats`
+- Enemy refs in combat events that don't exist in `enemies_catalog`
+- `choose_items` filters that don't match any items in `items_catalog`
 
 ---
 
