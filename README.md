@@ -36,13 +36,7 @@ You'll need an AI chat that supports file uploads. The included `gamebook_codex_
 
 ## Running Locally
 
-No build step required. Just serve the files:
-
-```
-python3 -m http.server 8080
-```
-
-Then open `http://localhost:8080`.
+No build step required. Just open `index.html` directly in your browser — no server needed.
 
 ## Features
 
