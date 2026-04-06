@@ -466,6 +466,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
     <div class="stat-bar" id="stat-bar"></div>
     <div class="save-bar">
       <button onclick="saveGame()">Save</button>
+      <button onclick="loadSavedGame()">Load</button>
       <button onclick="exportState()">Export</button>
       <button onclick="document.getElementById('import-game-input').click()">Import</button>
       <input type="file" id="import-game-input" accept=".json" style="display:none;">
@@ -608,7 +609,13 @@ document.getElementById('file-input').addEventListener('change', (e) => {
     try {
       gameData = JSON.parse(ev.target.result);
       if (!gameData.sections || !gameData.rules) throw new Error('Invalid game data');
-      startGame();
+      // Check for existing save before starting new game
+      const existingSave = localStorage.getItem(getSaveKey());
+      if (existingSave) {
+        offerSaveRestore(JSON.parse(existingSave));
+      } else {
+        startGame();
+      }
     } catch (err) {
       document.getElementById('load-error').textContent = 'Error: ' + err.message;
     }
@@ -799,6 +806,31 @@ const LuaEngine = (function() {
 // ==================== FRONTMATTER ====================
 let frontmatterPages = [];
 let frontmatterIdx = 0;
+
+function offerSaveRestore(save) {
+  showScreen('load-screen');
+  const title = gameData.metadata?.title || 'Unknown';
+  const date = new Date(save.timestamp);
+  const timeStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const section = save.state?.currentSection || '?';
+
+  const area = document.getElementById('continue-area');
+  area.style.display = '';
+  area.innerHTML = `
+    <h3>Save Found</h3>
+    <p style="font-size:0.9em;color:var(--text-dim);margin-bottom:12px;">${title} — Section ${section} (${timeStr})</p>
+    <div style="display:flex;gap:10px;justify-content:center;">
+      <button class="btn" onclick="restoreSave()">Continue Saved Game</button>
+      <button class="btn btn-small" onclick="startGame()">New Game</button>
+    </div>
+  `;
+
+  window.restoreSave = function() {
+    const raw = localStorage.getItem(getSaveKey());
+    if (!raw) return;
+    loadGame(JSON.parse(raw));
+  };
+}
 
 function startGame() {
   const fm = gameData.frontmatter;
@@ -2459,6 +2491,17 @@ function saveGame() {
   };
   localStorage.setItem(getSaveKey(), JSON.stringify(save));
   flashStatus('Saved');
+}
+
+function loadSavedGame() {
+  const raw = localStorage.getItem(getSaveKey());
+  if (!raw) {
+    flashStatus('No save found');
+    return;
+  }
+  const save = JSON.parse(raw);
+  loadGame(save);
+  flashStatus('Loaded');
 }
 
 function loadGame(saveJson) {
