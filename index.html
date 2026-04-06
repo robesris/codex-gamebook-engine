@@ -1018,7 +1018,7 @@ function handleCombat(event) {
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules,
     roundNum: 0, combatLog: [], waitingForLuckChoice: false,
-    lastRoundResult: null, renderCombat, area,
+    lastRoundResult: null, renderCombat, checkCombatEnd, area,
   };
 
   window.combatAttack = function() {
@@ -1056,7 +1056,7 @@ function handleCombat(event) {
       c.waitingForLuckChoice = true;
     } else {
       c.waitingForLuckChoice = false;
-      checkCombatEnd();
+      c.checkCombatEnd();
       return;
     }
 
@@ -1106,14 +1106,14 @@ function handleCombat(event) {
     c.waitingForLuckChoice = false;
     c.lastRoundResult = null;
     updateStatBar();
-    checkCombatEnd();
+    c.checkCombatEnd();
   };
 
   window.combatSkipLuck = function() {
     const c = window._combat;
     c.waitingForLuckChoice = false;
     c.lastRoundResult = null;
-    checkCombatEnd();
+    c.checkCombatEnd();
   };
 
   function checkCombatEnd() {
@@ -1164,7 +1164,7 @@ function handleCombat(event) {
     updateStatBar();
 
     if ((state.stats.stamina || 0) <= 0) {
-      checkCombatEnd();
+      c.checkCombatEnd();
       return;
     }
 
