@@ -321,8 +321,11 @@ The rules object describes the game system as parsed from the book. Do not assum
   "health_stat": "string — which stat is used for health/hit points (must match a stat name above, e.g., 'stamina', 'ENDURANCE'). Character dies when this reaches 0.",
   "combat_system": {
     "description": "string — plain English description of how combat works in this book",
-    "type": "string — e.g., attack_strength_comparison, combat_ratio_table, single_roll, alternating_strikes, none",
-    "details": "object — system-specific parameters (see series profiles for examples)"
+    "type": "string — informational label (e.g., attack_strength_comparison, combat_ratio_table)",
+    "round_script": "string — Lua script executed each combat round (see Combat Scripting below)",
+    "post_round_script": "string or null — optional Lua script for post-round actions (e.g., luck tests)",
+    "post_round_label": "string or null — button label for post-round action (e.g., 'Test Your Luck?')",
+    "details": "object — additional data available to Lua scripts as globals (e.g., combat_results_table, luck_in_combat)"
   },
   "inventory": {
     "capacity": "number or null — max items, or null if unlimited",
@@ -636,6 +639,109 @@ If the book does not belong to any of the series listed above, or if you cannot 
 6. Use series_profile `"unknown"` and note the actual series name in metadata if identifiable
 
 The output schema is flexible enough to represent any gamebook system. Use the `custom` event type for any mechanics that don't fit the standard event types. Provide enough detail in custom events that a developer could implement the mechanic from your description alone.
+
+---
+
+## 7.5. COMBAT SCRIPTING WITH LUA
+
+Combat mechanics are encoded as **Lua scripts** in the game data, not hardcoded in the emulator. This allows the same emulator to run any combat system — Fighting Fantasy's attack strength comparison, Lone Wolf's Combat Ratio Table, or any other system — without modification.
+
+### How It Works
+
+The `combat_system` (or `combat_rules_detail`) object in the game data contains:
+- `round_script` — a Lua script executed each combat round
+- `post_round_script` (optional) — a Lua script for optional post-round actions (e.g., Testing Luck in FF)
+- `post_round_label` (optional) — the button label for the post-round action
+- `details` — an object whose keys become global Lua variables (e.g., `combat_results_table`, `luck_in_combat`)
+
+### Sandbox API
+
+The emulator provides these globals to Lua scripts:
+
+| Global | Type | Description |
+|--------|------|-------------|
+| `player` | table | `{attack=N, health=N, name="You"}` — modify `.health` to deal/heal damage |
+| `enemy` | table | `{attack=N, health=N, name="..."}` — modify `.health` to deal damage |
+| `combat` | table | `{round=N, standard_damage=N, last_result="", last_damage=0}` |
+| `roll(formula)` | function | Returns `{total=N, rolls={...}, text="..."}`. Supports `"2d6"`, `"1d6"`, `"R10"`, etc. |
+| `log(msg)` | function | Adds a message to the combat log displayed to the player |
+| `lookup(table, col, row)` | function | Looks up `table[col][row]` — useful for result tables |
+| `player_stats` | table | All player stats (only in `post_round_script`) |
+| `initial_stats` | table | Initial stat values (only in `post_round_script`) |
+
+Any keys in `combat_system.details` are also available as globals (e.g., `combat_results_table`, `luck_in_combat`).
+
+### Round Script Contract
+
+After execution, the emulator reads:
+- `player.health` — new player health value
+- `enemy.health` — new enemy health value
+- `combat.last_result` — one of: `"player_wounds_enemy"`, `"enemy_wounds_player"`, `"tie"`, `"simultaneous"`
+- `combat.last_damage` — damage amount (used by post-round scripts)
+
+### Post-Round Script Contract
+
+After execution, the emulator reads the same fields plus:
+- `player.stats_changed` — optional table of `{stat_name = new_value}` to update player stats (e.g., deducting Luck)
+
+### Example: Fighting Fantasy
+
+```lua
+local player_roll = roll('2d6')
+local enemy_roll = roll('2d6')
+local player_as = player_roll.total + player.attack
+local enemy_as = enemy_roll.total + enemy.attack
+local dmg = combat.standard_damage or 2
+
+if player_as > enemy_as then
+  enemy.health = enemy.health - dmg
+  log('Round ' .. combat.round .. ': You ' .. player_as .. ' vs ' .. enemy.name .. ' ' .. enemy_as .. ' — You wound!')
+  combat.last_result = 'player_wounds_enemy'
+  combat.last_damage = dmg
+elseif enemy_as > player_as then
+  player.health = player.health - dmg
+  log('Round ' .. combat.round .. ': You ' .. player_as .. ' vs ' .. enemy.name .. ' ' .. enemy_as .. ' — Wounded!')
+  combat.last_result = 'enemy_wounds_player'
+  combat.last_damage = dmg
+else
+  log('Round ' .. combat.round .. ': Clash! No damage.')
+  combat.last_result = 'tie'
+  combat.last_damage = 0
+end
+```
+
+### Example: Lone Wolf (Combat Ratio Table)
+
+```lua
+local ratio = player.attack - enemy.attack
+local r = roll('R10')
+local rval = r.rolls[1]
+
+-- Map ratio to CRT column key
+local cr_key
+if ratio <= -11 then cr_key = '-11_or_lower'
+elseif ratio >= 11 then cr_key = '11_or_higher'
+-- ... (map all ranges to keys matching combat_results_table)
+end
+
+local entry = combat_results_table[cr_key] and combat_results_table[cr_key][tostring(rval)]
+local e_loss = entry and entry.E or 0
+local p_loss = entry and entry.LW or 0
+
+enemy.health = enemy.health - e_loss
+player.health = player.health - p_loss
+
+log('Round ' .. combat.round .. ': Ratio ' .. ratio .. ', R10=[' .. rval .. '] — ' ..
+    enemy.name .. ' -' .. e_loss .. ', You -' .. p_loss)
+combat.last_result = 'simultaneous'
+combat.last_damage = 0
+```
+
+### Writing Combat Scripts
+
+When parsing a book, you MUST write the `round_script` (and `post_round_script` if applicable) as Lua code that implements the book's combat rules. The emulator does not interpret the `type` field — it only executes the scripts. A game file without a `round_script` will have non-functional combat.
+
+Keep scripts concise and readable. Use `log()` to provide the player with clear round-by-round feedback. Store any lookup tables (like the Combat Results Table) in `combat_system.details` rather than hardcoding them in the script.
 
 ---
 
