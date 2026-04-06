@@ -41,7 +41,9 @@ Once the source is available, evaluate it:
 - Ask the user which approach they prefer, or recommend one based on what you see
 
 ### Step 3a: Handling Existing GBF JSON Files
-If the user provides a file that is already in Gamebook Format (GBF) JSON — i.e., it has `metadata`, `rules`, `character_creation`, and `sections` top-level keys — treat this as a **review and upgrade** task, not a fresh parse.
+If the user provides a file that is already in Gamebook Format (GBF) JSON — i.e., it has `metadata`, `rules`, `character_creation`, and `sections` top-level keys — your job is the same as with any other source format: **produce a complete, correct, playable game file.** The existing JSON is your source material. The section text IS the book text — read it and encode every mechanic it describes, just as you would when parsing a raw PDF or text file.
+
+Do not treat this as a light review pass. An existing JSON file may have been created manually, by an earlier version of the Codex, or by a different model — and may have significant gaps. Sections may contain narrative text that describes game mechanics (item pickups, stat changes, dice rolls, combat, conditions) without corresponding structured events. Your job is to read every section's text and ensure the events, choices, and conditions fully represent what the text describes.
 
 **Validate against the schema.** The canonical GBF JSON Schema is available at:
 `https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json`
@@ -51,9 +53,9 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 **Assess the file:**
 1. Check the `codex_version` field in metadata (if present) to determine which version of the Codex created it
 2. Validate structural correctness — are all required fields present? Are section targets valid? Do enemy/item refs resolve?
-3. Identify any event types or patterns that are outdated, missing, or incorrectly modeled (e.g., `custom` events that should now use a standard event type like `choose_items`)
-4. Check for logical issues — dead-end sections that aren't marked as endings, unreachable sections, stat modifications that reference nonexistent stats
-5. Report findings to the user before making changes
+3. **Read every section's text** and verify that all mechanics described in the narrative have corresponding structured events. If the text says "you find a Sword," there must be an `add_item` event. If it says "lose 3 STAMINA," there must be a `modify_stat` event. If it says "roll one die," there must be a `roll_dice` event. This is the most important step — narrative text without corresponding events means the emulator cannot execute the game correctly.
+4. Identify any event types or patterns that are outdated, missing, or incorrectly modeled (e.g., `custom` events that should now use a standard event type like `choose_items`)
+5. Check for logical issues — dead-end sections that aren't marked as endings, unreachable sections, stat modifications that reference nonexistent stats
 
 **Correctness is the top priority.** The goal is a JSON file that the emulator can play correctly. Every issue you identify MUST be fixed, not just documented. If a section is missing events, conditions, or items that the book text describes, add them. If a `custom` event should be a standard event type, replace it. If character creation steps are incomplete or incorrectly structured, fix them. Do not leave known functional gaps for someone else to address.
 
@@ -64,6 +66,7 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 - Provide a clear summary of what was changed and why, so the user can review.
 
 **Common issues to look for and FIX:**
+- **Narrative text describing mechanics without corresponding events** — this is the most common and most critical issue. Every stat change, item pickup, item loss, gold change, flag set, dice roll, combat encounter, stat test, and meal described in section text must have a matching structured event.
 - `custom` events that should use standard event types (`choose_items`, `stat_test`, `roll_dice`, etc.)
 - Missing `is_ending` / `ending_type` on terminal sections
 - Item or enemy refs that don't resolve to catalog entries
@@ -71,9 +74,9 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 - Missing conditions on choices that the section text describes as conditional
 - Sections with `target: null` choices that should trigger section-level tests
 - Missing `frontmatter` — story introductions, rules explanations, and reference material that the book presents before play begins
-- Missing events for mechanics described in narrative — if the text says "lose 3 STAMINA" or "pick up the Golden Key," there must be corresponding `modify_stat` or `add_item` events
 - Character creation steps that are incomplete, incorrectly conditional, or use invalid action types
 - Item selection mechanics (`choose_items`) encoded as narrative text or `custom` events instead of structured events
+- Dice rolls described in text as "roll one die and lose that many STAMINA" without a corresponding `roll_dice` event with `apply_to_stat`
 
 ### Step 3b: Read the GBF Specification
 Before generating any JSON output, you MUST read the complete GBF JSON Schema specification (`codex.schema.json`). The schema is the authoritative definition of the output format. If the user provides it alongside the source material, read it in full. If not, the canonical version is available at:
