@@ -296,7 +296,7 @@ Frontmatter is presented to the player as readable pages *before* character crea
 
 ### 2.2 rules
 
-The rules object describes the game system as parsed from the book. Do not assume defaults — read the actual rules section and encode what it says.
+The rules object describes the game system as parsed from the book. Do not assume defaults — read the actual rules section and encode what it says. **The example below shows common fields; see the schema for the complete definition.**
 
 ```json
 {
@@ -338,7 +338,7 @@ The rules object describes the game system as parsed from the book. Do not assum
 
 ### 2.3 character_creation
 
-Describes the character setup process in the order the player performs it.
+Describes the character setup process in the order the player performs it. **The example below shows common step types; see the schema for all valid action types and their fields.**
 
 ```json
 {
@@ -380,6 +380,8 @@ The heart of the game data. Each section is keyed by its number as a string.
 
 Events are things that happen in a section before or independent of the choices. They are processed in order.
 
+**The following are illustrative examples, not an exhaustive list.** The GBF JSON Schema is the complete reference for all supported event types, their fields, and valid values. Always consult the schema for the full set of options and field definitions.
+
 ```json
 {"type": "modify_stat", "stat": "stamina", "amount": -2, "reason": "string"}
 {"type": "add_item", "item": "item_id", "number": 137}
@@ -398,6 +400,8 @@ Events are things that happen in a section before or independent of the choices.
 
 #### Condition Types
 
+**Illustrative examples — see the schema for the complete list of condition types and their fields.**
+
 ```json
 {"type": "has_item", "item": "item_id"}
 {"type": "has_flag", "flag": "flag_name"}
@@ -410,6 +414,8 @@ Events are things that happen in a section before or independent of the choices.
 ```
 
 ### 2.5 items_catalog
+
+**Example structure — see the schema for all fields and valid enum values.**
 
 ```json
 {
@@ -426,6 +432,8 @@ Events are things that happen in a section before or independent of the choices.
 ```
 
 ### 2.6 enemies_catalog
+
+**Example structure — see the schema for all fields.**
 
 ```json
 {
