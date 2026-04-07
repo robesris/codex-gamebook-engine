@@ -1763,19 +1763,16 @@ function handleCombat(event) {
       name: 'You',
       ...state.stats,
     };
-    // Apply equipment modifiers from inventory items with when:"combat"
+    // Apply passive equipment modifiers (when:"always") — e.g., armor, shields
+    // Weapon bonuses (when:"combat") are NOT applied automatically — the Lua
+    // script must decide which weapon is active using the inventory/items globals
     const catalog = gameData.items_catalog || {};
     for (const itemId of state.inventory) {
       const item = catalog[itemId];
-      if (item?.stat_modifier && (item.stat_modifier.when === 'combat' || item.stat_modifier.when === 'always')) {
-        // Copy all modifier fields onto player (e.g., hit_threshold, damage_bonus, armor)
+      if (item?.stat_modifier && item.stat_modifier.when === 'always') {
         for (const [k, v] of Object.entries(item.stat_modifier)) {
-          if (k !== 'when' && k !== 'effect' && k !== 'stat' && k !== 'amount') {
-            playerData[k] = v;
-          }
-          // Standard stat modifier: stat + amount
-          if (k === 'stat' && item.stat_modifier.amount) {
-            playerData[item.stat_modifier.stat] = (playerData[item.stat_modifier.stat] || 0) + item.stat_modifier.amount;
+          if (k !== 'when' && k !== 'effect') {
+            playerData[k] = (typeof playerData[k] === 'number') ? playerData[k] + v : v;
           }
         }
       }
@@ -1796,12 +1793,15 @@ function handleCombat(event) {
       last_damage: 0,
     };
 
-    // Pass any extra details from combat_system.details as global context
-    const extraContext = {};
+    // Pass extra context: combat_system.details, inventory, and items catalog
+    const extraContext = {
+      inventory: [...state.inventory],
+      items_catalog: catalog,
+    };
     const details = cs?.details || {};
     for (const [key, val] of Object.entries(details)) {
-      if (key !== 'standard_damage' && typeof val === 'object') {
-        extraContext[key] = val;
+      if (key !== 'standard_damage') {
+        extraContext[key] = typeof val === 'object' ? val : val;
       }
     }
 

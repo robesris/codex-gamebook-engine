@@ -671,6 +671,8 @@ The emulator provides these globals to Lua scripts:
 | `roll(formula)` | function | Returns `{total=N, rolls={...}, text="..."}`. Supports `"2d6"`, `"1d6"`, `"R10"`, `"2d6*4"`, etc. |
 | `log(msg)` | function | Adds a message to the combat log displayed to the player |
 | `lookup(table, col, row)` | function | Looks up `table[col][row]` — useful for result tables |
+| `inventory` | table | Array of item IDs the player currently carries |
+| `items_catalog` | table | Full items catalog from the game data — look up item details by ID |
 | `player_stats` | table | All player stats (only in `post_round_script`) |
 | `initial_stats` | table | Initial stat values (only in `post_round_script`) |
 
@@ -678,7 +680,23 @@ Any keys in `combat_system.details` are also available as globals (e.g., `combat
 
 **Enemy catalog fields in Lua:** Since all enemy catalog fields are passed to the `enemy` table, you can store combat-relevant properties directly on the enemy (e.g., `hit_threshold`, `armor`, `weapon_bonus`, `damage_bonus`). The Lua script can access them as `enemy.armor`, etc. This means the `enemies_catalog` should include any fields the combat script needs — not just the stat fields matching `attack_stat` and `health_stat`.
 
-**Equipment modifiers in combat:** The emulator automatically applies `stat_modifier` fields from the player's inventory items (where `when` is `"combat"` or `"always"`) onto the `player` table before running the Lua script. For example, if the player carries a weapon with `"stat_modifier": {"hit_threshold": 4, "damage_bonus": 5, "when": "combat"}`, the Lua script can access `player.hit_threshold` (4) and `player.damage_bonus` (5) directly. This means items in the `items_catalog` should encode their combat effects as named fields in `stat_modifier`, matching the field names the `round_script` expects.
+**Equipment modifiers in combat:** The emulator automatically applies `stat_modifier` fields from passive equipment (items with `when: "always"`, such as armor or shields) onto the `player` table. However, **weapon bonuses** (`when: "combat"`) are NOT applied automatically — because a player may carry multiple weapons but only use one at a time. Instead, the `inventory` (array of item IDs) and `items_catalog` (full catalog) are available as Lua globals. The `round_script` is responsible for determining which weapon is active and applying its bonuses. For example:
+
+```lua
+-- Check if player has the magic sword and apply its bonus
+if inventory then
+  for i = 1, #inventory do
+    local item = items_catalog[inventory[i]]
+    if item and item.stat_modifier and item.stat_modifier.hit_threshold then
+      player.hit_threshold = item.stat_modifier.hit_threshold
+      player.damage_bonus = item.stat_modifier.damage_bonus or 0
+      break  -- use first matching weapon
+    end
+  end
+end
+```
+
+This means the `round_script` has full control over weapon selection logic — it can pick the best weapon, the first weapon, or let the combat system's conventions determine which applies.
 
 **Games without `attack_stat`:** Some combat systems (e.g., threshold-based systems) don't use a traditional attack stat. In these cases, `attack_stat` may be null and `player.attack`/`enemy.attack` will be 0. The Lua script should use game-specific fields instead (e.g., `player.hit_threshold`). The emulator will omit the attack stat from the combat display when `attack_stat` is null.
 
