@@ -1763,6 +1763,23 @@ function handleCombat(event) {
       name: 'You',
       ...state.stats,
     };
+    // Apply equipment modifiers from inventory items with when:"combat"
+    const catalog = gameData.items_catalog || {};
+    for (const itemId of state.inventory) {
+      const item = catalog[itemId];
+      if (item?.stat_modifier && (item.stat_modifier.when === 'combat' || item.stat_modifier.when === 'always')) {
+        // Copy all modifier fields onto player (e.g., hit_threshold, damage_bonus, armor)
+        for (const [k, v] of Object.entries(item.stat_modifier)) {
+          if (k !== 'when' && k !== 'effect' && k !== 'stat' && k !== 'amount') {
+            playerData[k] = v;
+          }
+          // Standard stat modifier: stat + amount
+          if (k === 'stat' && item.stat_modifier.amount) {
+            playerData[item.stat_modifier.stat] = (playerData[item.stat_modifier.stat] || 0) + item.stat_modifier.amount;
+          }
+        }
+      }
+    }
     const enemyCatalogEntry = getEnemy(enemy.ref) || {};
     const enemyData = {
       attack: getEnemyAttack(enemy),
