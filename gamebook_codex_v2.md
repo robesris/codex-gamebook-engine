@@ -214,8 +214,8 @@ The emulator should support all standard dice types (d4, d6, d8, d10, d12, d20),
 ### 1.9 Abilities and Disciplines
 Some gamebooks allow the player to choose special abilities, skills, or disciplines during character creation. These typically:
 - Are chosen from a list (player picks N from M options)
-- Open conditional paths ("If you have the Sixth Sense discipline, turn to 216")
-- Provide passive stat bonuses ("Mindblast adds +2 to Combat Skill")
+- Open conditional paths ("If you have the Stealth discipline, turn to 216")
+- Provide passive stat bonuses ("Battle Focus adds +2 to Combat Skill")
 - Grant special actions at certain points in the story
 
 This pattern appears in Lone Wolf (Kai Disciplines), some Fighting Fantasy books (e.g., superpower choice in Appointment with F.E.A.R.), AD&D Adventure Gamebooks (class abilities and spells), and others.
@@ -240,7 +240,7 @@ The output is a single JSON file with the following top-level structure:
 
 ### 2.0 frontmatter
 
-The frontmatter object contains all introductory and supplementary material that appears before the numbered sections: story background, rules explanations, world-building, maps, rumors, and any other content the reader is expected to see before beginning play. This material is often essential context — "The Story So Far" in Lone Wolf, "Doorknocker Row" (Rumours) in Fighting Fantasy, etc.
+The frontmatter object contains all introductory and supplementary material that appears before the numbered sections: story background, rules explanations, world-building, maps, rumors, and any other content the reader is expected to see before beginning play. This material is often essential context — many gamebooks include background story, tavern rumors, or world lore that the player is expected to read before starting.
 
 Frontmatter is presented to the player as readable pages *before* character creation begins. The emulator displays them in order, and the player clicks through them before rolling stats.
 
@@ -259,9 +259,9 @@ Frontmatter is presented to the player as readable pages *before* character crea
 ```
 
 **What to include:**
-- Story introduction / background ("The Story So Far", prologues, setting descriptions)
+- Story introduction / background (prologues, setting descriptions, "the story so far" sections)
 - Rules explanation as written in the book (the reader is expected to read these)
-- Reference material the player may consult during play (rumors tables, maps described in text, background lore)
+- Reference material the player may consult during play (rumor tables, maps described in text, background lore)
 - Flavor text (dedications, author notes) — optional, include if substantive
 
 **What NOT to include:**
@@ -408,7 +408,7 @@ Events are things that happen in a section before or independent of the choices.
 {"type": "input_number", "prompt": "string", "target": "computed", "note": "string"}
 {"type": "input_text", "prompt": "string", "answers": {"answer1": {"target": 250}}, "case_sensitive": false, "default": {"target": 340}}
 {"type": "eat_meal", "required": true, "penalty_stat": "stamina", "penalty_amount": -3}
-{"type": "choose_items", "catalog_filter": {"inventory_category": "weapons"}, "count": 3, "add_automatic": ["sword_of_golden_lion"], "exclude": ["sword_of_golden_lion"], "replace_category": true, "description": "Player selects 3 weapons from the Book of Weapons."}
+{"type": "choose_items", "catalog_filter": {"inventory_category": "weapons"}, "count": 3, "add_automatic": ["enchanted_blade"], "exclude": ["enchanted_blade"], "replace_category": true, "description": "Player selects 3 weapons from the armory."}
 {"type": "script", "description": "Roll 1d6. Odd = lose 3 SKILL, 1 STAMINA. Even = lose 1 SKILL, 2 STAMINA.", "script_code": "-- Lua code here (see Combat Scripting section for sandbox API)"}
 {"type": "custom", "mechanic_name": "string", "description": "string", "parameters": {}}
 ```
@@ -564,16 +564,16 @@ These are examples of mechanics that deviate from the standard FF system. Watch 
 **Kai Disciplines (Books 1-5):**
 The player chooses 5 disciplines from a list of 10 at character creation. After completing each book, the player gains one additional discipline. The 10 Kai Disciplines are:
 
-1. **Camouflage** — Ability to remain undetected in natural surroundings
-2. **Hunting** — Ability to find food; no need for a Meal when instructed to eat
-3. **Sixth Sense** — Warns of danger; opens certain conditional paths
-4. **Tracking** — Ability to follow trails and read tracks
-5. **Healing** — Restores 1 ENDURANCE per section without combat (up to Initial max)
-6. **Weaponskill** — Choose a weapon type; +2 COMBAT SKILL when carrying that weapon
-7. **Mindshield** — Immune to psychic/Mindblast attacks that deduct ENDURANCE
-8. **Mindblast** — +2 COMBAT SKILL in combat (unless enemy is immune)
-9. **Animal Kinship** — Communicate with and sometimes control animals
-10. **Mind Over Matter** — Move small objects with concentration
+1. **Camouflage** — Stealth/concealment in natural or urban settings
+2. **Hunting** — Find food in the wild; exempt from Meal requirements
+3. **Sixth Sense** — Danger awareness; opens conditional paths
+4. **Tracking** — Pathfinding and reading trails/tracks
+5. **Healing** — Passive ENDURANCE restoration between combats
+6. **Weaponskill** — Mastery of one weapon type (determined by R10 roll); combat bonus when carrying it
+7. **Mindshield** — Immunity to psychic attacks
+8. **Mindblast** — Psychic combat bonus (some enemies are immune)
+9. **Animal Kinship** — Animal communication and influence
+10. **Mind Over Matter** — Telekinesis of small objects
 
 Note: Books 6-12 introduce Magnakai Disciplines (upgraded set of 10), and Books 13-20 introduce Grand Master Disciplines. Parse the specific book's rules section to determine which discipline set applies.
 
@@ -590,18 +590,18 @@ The Combat Results Table is a fixed lookup table for the entire series. It shoul
 Important: When the player rolls 0 on the random number table, they take 0 ENDURANCE damage regardless of Combat Ratio.
 
 **Inventory:**
-- **Weapons**: Maximum 2 weapons
-- **Backpack Items**: Maximum 8 items. If backpack is lost, all items in it are lost.
-- **Special Items**: No enforced limit, but typically only a few exist per book
-- **Belt Pouch**: Holds Gold Crowns (currency). Maximum 50 Gold Crowns.
-- **Meals**: Required when the text instructs you to eat. Without a Meal and without the Hunting discipline, lose 3 ENDURANCE.
+- **Weapons**: Max 2
+- **Backpack Items**: Max 8 (lost if backpack is lost)
+- **Special Items**: No enforced limit
+- **Belt Pouch**: Currency (Gold Crowns), max 50
+- **Meals**: Consumed when instructed; penalty of 3 ENDURANCE if no Meal and no Hunting discipline
 
 **Healing:**
-- With the Healing discipline: restore 1 ENDURANCE per section without combat (up to Initial max)
-- Various items (Laumspur potion, etc.) restore ENDURANCE when used
+- Healing discipline: +1 ENDURANCE per non-combat section (capped at initial value)
+- Certain items restore ENDURANCE when used
 
 **Evasion:**
-- Some combats allow evasion. Calculate that round normally but ignore damage to the enemy. Only the player takes damage. Then proceed to the evasion section.
+- When permitted, resolve the round normally but only the player takes damage (enemy damage is ignored). Then navigate to the evasion section.
 
 **Cross-Book Continuity:**
 - Characters carry between books with stats, disciplines, and certain inventory
@@ -751,12 +751,12 @@ Keep scripts concise and readable. Use `log()` to provide the player with clear 
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
 
 ### 8.1 Computed Navigation
-When the text instructs the player to compute a section number (e.g., "add together the numbers on your keys and turn to that section"):
+When the text instructs the player to compute a section number (e.g., "add together the numbers on your tokens and turn to that section"):
 
 ```json
 {
   "type": "input_number",
-  "prompt": "Add together the numbers on your three keys and turn to that section",
+  "prompt": "Add together the numbers on your three tokens and turn to that section",
   "target": "computed",
   "note": "Player enters a number; emulator navigates to that section. If section doesn't exist, display an error."
 }
@@ -830,17 +830,17 @@ Single-exit sections with no player decision:
 ```
 
 ### 8.7 Mid-Adventure Item/Loadout Selection
-Some gamebooks instruct the player to choose items, spells, or equipment at points during the adventure (not just during character creation). For example, "Turn to the back of the book, read the Book of Weapons, and choose three." Use the `choose_items` event:
+Some gamebooks instruct the player to choose items, spells, or equipment at points during the adventure (not just during character creation). For example, "Turn to the armory list and choose three weapons." Use the `choose_items` event:
 
 ```json
 {
   "type": "choose_items",
   "catalog_filter": {"inventory_category": "weapons"},
   "count": 3,
-  "add_automatic": ["sword_of_golden_lion"],
-  "exclude": ["sword_of_golden_lion"],
+  "add_automatic": ["enchanted_blade"],
+  "exclude": ["enchanted_blade"],
   "replace_category": true,
-  "description": "Player selects 3 weapons from the Book of Weapons. The Sword of the Golden Lion is always carried."
+  "description": "Player selects 3 weapons from the armory. The Enchanted Blade is always carried."
 }
 ```
 
