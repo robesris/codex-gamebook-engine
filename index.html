@@ -2096,20 +2096,23 @@ function handleRollDice(event) {
     }
 
     // Standard result table lookup
+    let matched = false;
     let target = null;
     let resultText = '';
     const results = event.results || {};
     if (results[String(result.total)]) {
+      matched = true;
       target = results[String(result.total)].target;
-      resultText = results[String(result.total)].text || '';
+      resultText = results[String(result.total)].text || results[String(result.total)].note || '';
     } else {
       // Check range keys like "1-2"
       for (const [key, val] of Object.entries(results)) {
         if (key.includes('-')) {
           const [lo, hi] = key.split('-').map(Number);
           if (result.total >= lo && result.total <= hi) {
+            matched = true;
             target = val.target;
-            resultText = val.text || '';
+            resultText = val.text || val.note || '';
             break;
           }
         }
@@ -2124,6 +2127,9 @@ function handleRollDice(event) {
 
     if (target) {
       setTimeout(() => navigateTo(target), 1000);
+    } else if (matched) {
+      // Matched a result but target is null — continue to next event/choices
+      setTimeout(() => processNextEvent(), 1000);
     } else {
       area.innerHTML += `<p style="color:var(--danger)">No result for ${result.total}</p>`;
       processNextEvent();
