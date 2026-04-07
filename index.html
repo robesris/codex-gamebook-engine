@@ -519,18 +519,22 @@ function rollDice(formula) {
     const roll = Math.floor(Math.random() * 10); // 0-9
     return { total: roll + bonus, rolls: [roll], bonus };
   }
-  // Parse "NdX+Y" or "NdX"
-  const m = formula.match(/(\d+)d(\d+)(?:\+(\d+))?/);
+  // Parse "NdX+Y", "NdX*Y", "NdX-Y", or "NdX"
+  const m = formula.match(/(\d+)d(\d+)(?:([+\-*])(\d+))?/);
   if (!m) return { total: 0, rolls: [], bonus: 0 };
   const count = parseInt(m[1]);
   const sides = parseInt(m[2]);
-  const bonus = m[3] ? parseInt(m[3]) : 0;
+  const op = m[3] || '+';
+  const modifier = m[4] ? parseInt(m[4]) : 0;
   const rolls = [];
   for (let i = 0; i < count; i++) {
     rolls.push(Math.floor(Math.random() * sides) + 1);
   }
-  const total = rolls.reduce((a, b) => a + b, 0) + bonus;
-  return { total, rolls, bonus };
+  const sum = rolls.reduce((a, b) => a + b, 0);
+  const total = op === '*' ? sum * modifier :
+                op === '-' ? sum - modifier :
+                sum + modifier;
+  return { total, rolls, bonus: modifier, op };
 }
 
 function roll2d6() {
@@ -918,7 +922,7 @@ function startCharacterCreation() {
       const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
       div.innerHTML = `
         <span class="stat-name">${step.stat}</span>
-        <span class="dice-result">${rollLabel}${result.bonus ? ' + ' + result.bonus : ''}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
         <span class="stat-value">${result.total}</span>
       `;
       rollContainer.appendChild(div);
