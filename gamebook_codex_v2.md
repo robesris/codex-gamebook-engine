@@ -117,6 +117,8 @@ Run verification checks on the complete output. Deliver the JSON file to the use
 ### Rule 1: Source Fidelity
 You MUST parse ONLY from the provided source material. Every piece of text, every section number, every stat block, every choice target must come from what you can see in the document. If you cannot read something, flag it as unreadable. Do NOT fill gaps from your training data. Do NOT reconstruct text from memory. An empty section marked "[UNREADABLE]" is infinitely preferable to a plausible-looking section that doesn't match the source.
 
+**Preserve the book's spelling and terminology exactly.** Do not normalize British to American spelling or vice versa. If the book says "armour," the JSON says "armour." If it says "armor," the JSON says "armor." The same applies to stat names, item names, enemy names, and all narrative text. The schema accepts both spelling variants where applicable (e.g., item type `"armor"` and `"armour"` are both valid).
+
 ### Rule 2: No Hallucination
 Your training data may contain information about well-known gamebooks. You must IGNORE this knowledge when parsing. The user's specific edition may differ from what you've seen in training. Page numbers, section text, enemy stats, and item details can vary between editions and printings. Only the document in front of you is authoritative.
 
@@ -438,7 +440,7 @@ Events are things that happen in a section before or independent of the choices.
 {
   "item_id": {
     "name": "string — display name",
-    "type": "string — weapon, armor, key_item, consumable, general, treasure",
+    "type": "string — weapon, armor/armour, key_item, consumable, general, treasure",
     "number": "number or null — for numbered items used in computed navigation",
     "takes_inventory_slot": "boolean",
     "inventory_category": "string or null — which category slot it uses",

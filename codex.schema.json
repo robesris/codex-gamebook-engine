@@ -687,7 +687,7 @@
         "type": {
           "type": "string",
           "description": "Item category.",
-          "enum": ["weapon", "armor", "key_item", "consumable", "general", "treasure"]
+          "enum": ["weapon", "armor", "armour", "key_item", "consumable", "general", "treasure"]
         },
         "number": {
           "type": ["integer", "null"],
