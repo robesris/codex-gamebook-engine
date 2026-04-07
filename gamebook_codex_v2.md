@@ -665,16 +665,20 @@ The emulator provides these globals to Lua scripts:
 
 | Global | Type | Description |
 |--------|------|-------------|
-| `player` | table | `{attack=N, health=N, name="You"}` — modify `.health` to deal/heal damage |
-| `enemy` | table | `{attack=N, health=N, name="..."}` — modify `.health` to deal damage |
+| `player` | table | Contains `attack` (from `attack_stat`, or 0 if none), `health` (from `health_stat`), `name` ("You"), **plus all player stats by name** (e.g., `player.skill`, `player["COMBAT SKILL"]`, `player["LIFE POINTS"]`). Modify `.health` to deal/heal damage. |
+| `enemy` | table | Contains `attack`, `health`, `name`, **plus all fields from the enemy's catalog entry** (e.g., `enemy.armor`, `enemy.hit_threshold`, `enemy.special`). Modify `.health` to deal damage. |
 | `combat` | table | `{round=N, standard_damage=N, last_result="", last_damage=0}` |
-| `roll(formula)` | function | Returns `{total=N, rolls={...}, text="..."}`. Supports `"2d6"`, `"1d6"`, `"R10"`, etc. |
+| `roll(formula)` | function | Returns `{total=N, rolls={...}, text="..."}`. Supports `"2d6"`, `"1d6"`, `"R10"`, `"2d6*4"`, etc. |
 | `log(msg)` | function | Adds a message to the combat log displayed to the player |
 | `lookup(table, col, row)` | function | Looks up `table[col][row]` — useful for result tables |
 | `player_stats` | table | All player stats (only in `post_round_script`) |
 | `initial_stats` | table | Initial stat values (only in `post_round_script`) |
 
 Any keys in `combat_system.details` are also available as globals (e.g., `combat_results_table`, `luck_in_combat`).
+
+**Enemy catalog fields in Lua:** Since all enemy catalog fields are passed to the `enemy` table, you can store combat-relevant properties directly on the enemy (e.g., `hit_threshold`, `armor`, `weapon_bonus`, `damage_bonus`). The Lua script can access them as `enemy.armor`, etc. This means the `enemies_catalog` should include any fields the combat script needs — not just the stat fields matching `attack_stat` and `health_stat`.
+
+**Games without `attack_stat`:** Some combat systems (e.g., threshold-based systems) don't use a traditional attack stat. In these cases, `attack_stat` may be null and `player.attack`/`enemy.attack` will be 0. The Lua script should use game-specific fields instead (e.g., `enemy.hit_threshold`). The emulator will omit the attack stat from the combat display when `attack_stat` is null.
 
 ### Round Script Contract
 
@@ -934,7 +938,8 @@ After generating the complete output, confirm:
 - [ ] Custom events have sufficient implementation detail
 - [ ] Conditional choices have well-defined, parseable conditions
 - [ ] `rules.attack_stat` and `rules.health_stat` are set and match stat names in `rules.stats`
-- [ ] Every enemy in `enemies_catalog` has fields matching `attack_stat` and `health_stat` (the emulator uses these exact field names — mismatches will break combat)
+- [ ] Every enemy in `enemies_catalog` has fields matching `attack_stat` (if applicable) and `health_stat` (the emulator uses these exact field names — mismatches will break combat)
+- [ ] Every enemy has all fields that the `round_script` accesses (e.g., `armor`, `hit_threshold`, `damage_bonus`) — the Lua script receives the full enemy catalog entry
 - [ ] Stat names are used consistently everywhere: `rules.stats[].name`, `attack_stat`, `health_stat`, `modify_stat` events, `stat_test` events, `stat_gte`/`stat_lte` conditions, and enemy catalog entries must all use the same names
 - [ ] The confidence report accurately lists any issues
 - [ ] NO section text was reconstructed from training data
