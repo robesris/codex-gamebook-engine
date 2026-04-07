@@ -1686,16 +1686,19 @@ function handleCombat(event) {
       html += `<div class="special-rules-box"><strong>Special Rules:</strong> ${c.specialRules}</div>`;
     }
 
+    const playerStatLine = (attackStat ? `${attackStat} ${playerAttack} | ` : '') + `${healthStat} ${playerHealth}`;
+    const enemyStatLine = (attackStat ? `${attackStat} ${enemyAttack} | ` : '') + `${healthStat} ${enemy.currentHealth}`;
+
     html += `<div class="combatants">
       <div class="combatant player">
         <div class="name" style="color:var(--stat-skill)">You</div>
-        <div class="stats-line">${attackStat} ${playerAttack} | ${healthStat} ${playerHealth}</div>
+        <div class="stats-line">${playerStatLine}</div>
         <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, playerHealth / playerMaxHealth * 100)}%"></div></div>
       </div>
       <div style="font-size:1.5em;color:var(--text-dim)">vs</div>
       <div class="combatant enemy">
         <div class="name" style="color:var(--danger)">${enemy.name}</div>
-        <div class="stats-line">${attackStat} ${enemyAttack} | ${healthStat} ${enemy.currentHealth}</div>
+        <div class="stats-line">${enemyStatLine}</div>
         <div class="hp-bar"><div class="hp-fill" style="width:${Math.max(0, enemy.currentHealth / enemyMaxHealth * 100)}%"></div></div>
       </div>
     </div>`;
@@ -1753,16 +1756,22 @@ function handleCombat(event) {
     }
 
     // Build context for the Lua script
+    // Pass all player stats and all enemy fields so scripts can access anything they need
     const playerData = {
       attack: getPlayerAttack(),
       health: getPlayerHealth(),
       name: 'You',
+      ...state.stats,
     };
+    const enemyCatalogEntry = getEnemy(enemy.ref) || {};
     const enemyData = {
       attack: getEnemyAttack(enemy),
       health: enemy.currentHealth,
       name: enemy.name,
+      ...enemyCatalogEntry,
     };
+    // Ensure health is the current value, not the catalog max
+    enemyData.health = enemy.currentHealth;
     const combatData = {
       round: c.roundNum,
       standard_damage: cs?.details?.standard_damage || gameData.rules.combat_rules_detail?.standard_damage || 2,
