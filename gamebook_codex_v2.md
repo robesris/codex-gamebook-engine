@@ -969,7 +969,44 @@ If the text says "and then turn to N" after the stat application, let the sectio
 
 **Bounds:** Like all loops, gambling scripts MUST cap their total iterations and MUST stop when gold reaches zero.
 
-### Pattern 7.6.7 — When to prefer `custom` after all
+### Pattern 7.6.7 — Time-of-day / wall-clock checks
+
+**Narrative trigger examples:**
+- "If you are reading this on a Sunday night, turn to 23. Otherwise turn to 77."
+- "Check the time. If it's between noon and 6 p.m., the sun dazzles your enemies — turn to 40. Any other time, turn to 91."
+- "Are you reading this on a Saturday morning?"
+
+**Why not a dice roll:** These mechanics are a form of pseudo-randomness that uses the reader's real-world situation as the entropy source. The book is explicitly asking for the current day/hour, not for a dice outcome. Replacing the clock with a coin flip would subtly change the player's experience (and the test harness can't distinguish the two from the outside anyway).
+
+**Encoding:** Use a `script` event that calls the sandbox function `get_clock()`. This returns a table `{wday = 1..7 (1=Sunday, 7=Saturday), hour = 0..23, minute = 0..59}`. Branch on those fields and set `player.navigate_to` accordingly. Do NOT call `os.date`, `os.time`, or any other `os.*` function — the `os` library is not exposed to the sandbox. `get_clock()` is the only supported way to read the current time.
+
+**Canonical `script` shape:**
+
+```lua
+local t = get_clock()
+local wday = t.wday    -- 1..7, 1=Sunday
+local hour = t.hour    -- 0..23
+local fail = false
+-- "Sunday night" in the book text means wday == 1 (Sun) and hour >= 18
+if wday == 1 and hour >= 18 then fail = true end
+-- "Monday morning" means wday == 2 (Mon) and hour < 12
+if wday == 2 and hour < 12 then fail = true end
+if fail then
+  log('The magic is too weak at this hour; the spell fails.')
+  player.navigate_to = 23
+else
+  log('The stars are with you; the spell works.')
+  player.navigate_to = 77
+end
+```
+
+**Determinism in tests:** The emulator reads the real clock by default, which means a time-of-day script is non-deterministic across test runs. To exercise a specific branch, a playbook can use the universal action `set_clock <wday> <hour> [minute]` before entering the scripted section. `set_clock 2 10` forces get_clock() to return Monday 10:00. Calling `set_clock` with no arguments reverts to the real clock. The forced value persists until overridden; it is not consumed by a single script call.
+
+**Day-of-week convention:** `wday = 1` is Sunday, `wday = 7` is Saturday. This matches the standard Lua `os.date('*t').wday` convention and the ISO 8601-friendly "Sun = 1" layout. Always double-check your numbering when encoding a day name from the book text — off-by-one errors silently invert the branch.
+
+**Hour convention:** `hour` is 0..23. Interpret "morning" as `hour < 12`, "afternoon" as `12 <= hour < 18`, "evening/night" as `hour >= 18`, unless the book text is more specific. When the book says "midnight," treat it as `hour == 0`; "noon" as `hour == 12`. If the book text draws a sharper line (e.g., "between 3 p.m. and 5 p.m."), encode the exact range.
+
+### Pattern 7.6.8 — When to prefer `custom` after all
 
 Use `custom` **only** if the mechanic meets all of the following:
 - It cannot be expressed as a sequence of existing event types.
