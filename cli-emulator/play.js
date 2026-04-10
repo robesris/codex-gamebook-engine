@@ -518,6 +518,14 @@ function handleEvent(event, state, book) {
     case 'modify_stat': {
       const stat = event.stat;
       const amount = event.amount || 0;
+      // If modify_initial is set, also apply the delta to initialStats
+      // so the change is permanent — healing cannot restore past the
+      // new (lower) ceiling. See codex / schema modify_initial field.
+      // Applied first, before the current-value update, so that a
+      // statDef.initial_is_max clamp uses the new ceiling.
+      if (event.modify_initial && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+        state.initialStats[stat] = (state.initialStats[stat] || 0) + amount;
+      }
       if (stat === 'provisions') state.provisions = Math.max(0, state.provisions + amount);
       else if (stat === 'gold') state.gold = Math.max(0, state.gold + amount);
       else if (stat === 'meals') state.meals = Math.max(0, state.meals + amount);
@@ -533,7 +541,7 @@ function handleEvent(event, state, book) {
         }
         state.stats[stat] = newVal;
       }
-      state.log.push(`${stat} ${amount >= 0 ? '+' : ''}${amount}${event.reason ? ' (' + event.reason + ')' : ''}`);
+      state.log.push(`${stat} ${amount >= 0 ? '+' : ''}${amount}${event.modify_initial ? ' (permanent, initial updated)' : ''}${event.reason ? ' (' + event.reason + ')' : ''}`);
       return 'continue';
     }
     case 'add_item':

@@ -566,6 +566,7 @@
         "amount": { "type": "number", "description": "modify_stat: change amount (positive or negative)." },
         "reason": { "type": "string", "description": "modify_stat, remove_item: human-readable explanation." },
         "optional": { "type": "boolean", "description": "modify_stat, add_item: player can choose whether to take/apply this." },
+        "modify_initial": { "type": "boolean", "description": "modify_stat: when true, also apply `amount` to `initialStats[stat]` so the adjustment is permanent (reduces or raises the stat's ceiling). Use for book mechanics that say 'your INITIAL stat is reduced by N' or 'increase your INITIAL stat by N'. When false (or absent) the modify_stat only adjusts the current value, which healing can restore up to the unchanged initial." },
 
         "item": { "type": "string", "description": "add_item, remove_item: item_id." },
         "number": { "type": "integer", "description": "add_item: for numbered items (keys etc)." },
