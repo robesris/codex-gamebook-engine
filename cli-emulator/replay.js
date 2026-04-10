@@ -238,9 +238,11 @@ function checkExpect(expr, state, book) {
   if (m) return state.pause?.type === m[1];
 
   // stat:NAME=N or stat:NAME>=N etc
-  m = expr.match(/^stat:(\S+?)(=|>=|<=|>|<)(.+)$/);
+  // Stat names may contain spaces (e.g. Lone Wolf "COMBAT SKILL"). The
+  // regex captures everything up to the final comparison operator.
+  m = expr.match(/^stat:(.+?)(>=|<=|=|>|<)(.+)$/);
   if (m) {
-    const stat = m[1];
+    const stat = m[1].trim();
     const op = m[2];
     const val = parseInt(m[3]);
     const cur = state.stats[stat];
