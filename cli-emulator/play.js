@@ -129,7 +129,7 @@ function readTable(L, idx) {
   return obj;
 }
 
-function runScript(scriptCode, context, forcedRolls) {
+function runScript(scriptCode, context, forcedRolls, forcedClock) {
   const L = createSandbox();
   const logs = [];
   const rollsUsed = [...(forcedRolls || [])];
@@ -177,6 +177,36 @@ function runScript(scriptCode, context, forcedRolls) {
     return 1;
   });
   lua.lua_setglobal(L, to_luastring('lookup'));
+
+  // get_clock() returns {wday=1..7 (1=Sun), hour=0..23, minute=0..59}.
+  // If forcedClock is supplied by the playbook via set_clock, use it;
+  // otherwise fall back to the real wall clock. This lets scripts encode
+  // "if reading on Sunday night" type mechanics deterministically in tests.
+  lua.lua_pushjsfunction(L, function(L) {
+    let wday, hour, minute;
+    if (forcedClock && typeof forcedClock === 'object') {
+      wday = forcedClock.wday;
+      hour = forcedClock.hour;
+      minute = forcedClock.minute !== undefined ? forcedClock.minute : 0;
+    } else {
+      const d = new Date();
+      wday = d.getDay() + 1; // JS 0..6 (Sun..Sat) -> 1..7
+      hour = d.getHours();
+      minute = d.getMinutes();
+    }
+    lua.lua_createtable(L, 0, 3);
+    lua.lua_pushstring(L, to_luastring('wday'));
+    lua.lua_pushnumber(L, wday);
+    lua.lua_settable(L, -3);
+    lua.lua_pushstring(L, to_luastring('hour'));
+    lua.lua_pushnumber(L, hour);
+    lua.lua_settable(L, -3);
+    lua.lua_pushstring(L, to_luastring('minute'));
+    lua.lua_pushnumber(L, minute);
+    lua.lua_settable(L, -3);
+    return 1;
+  });
+  lua.lua_setglobal(L, to_luastring('get_clock'));
 
   // Push all context variables as globals
   for (const [key, val] of Object.entries(context || {})) {
@@ -266,6 +296,11 @@ function initialState(bookPath) {
     // array of numbers (one set per expected roll() call in the script). The
     // queue is FIFO: the next script event consumes and clears it.
     forcedScriptRolls: [],
+    // Forced wall-clock value for scripts that call get_clock() (time-of-day
+    // mechanics). When set, get_clock() returns this instead of real Date.
+    // Shape: {wday: 1..7 (1=Sun), hour: 0..23, minute: 0..59}. Null means
+    // use the real clock.
+    forcedClock: null,
   };
 }
 
@@ -526,7 +561,7 @@ function runScriptEvent(event, state, book) {
     ? state.forcedScriptRolls
     : null;
   if (forcedRolls) state.forcedScriptRolls = [];
-  const result = runScript(event.script_code || '', context, forcedRolls);
+  const result = runScript(event.script_code || '', context, forcedRolls, state.forcedClock);
   if (result.error) {
     state.log.push(`Script error: ${result.error}`);
     state.pause = { type: 'error', message: 'Script error: ' + result.error };
@@ -698,6 +733,23 @@ function applyAction(state, book, action, args) {
       state.forcedScriptRolls.push(a.split(',').map(Number));
     }
     state.log.push(`Queued ${args.length} forced roll set(s) for next script event`);
+    return state;
+  }
+  if (action === 'set_clock') {
+    // Force the wall-clock value that get_clock() will return in subsequent
+    // script events. Args: <wday> <hour> [minute]. wday is 1..7 (1=Sun,
+    // 7=Sat) to match the os.date('*t') convention. Use clear_clock (or
+    // set_clock with no args) to revert to the real clock.
+    if (args.length === 0) {
+      state.forcedClock = null;
+      state.log.push('Cleared forced clock (get_clock will use real time)');
+    } else {
+      const wday = parseInt(args[0], 10);
+      const hour = parseInt(args[1], 10);
+      const minute = args.length > 2 ? parseInt(args[2], 10) : 0;
+      state.forcedClock = { wday, hour, minute };
+      state.log.push(`Forced clock: wday=${wday} hour=${hour} minute=${minute}`);
+    }
     return state;
   }
   if (action === 'manual_set') {
