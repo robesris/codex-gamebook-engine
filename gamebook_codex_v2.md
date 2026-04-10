@@ -1000,7 +1000,7 @@ else
 end
 ```
 
-**Determinism in tests:** The emulator reads the real clock by default, which means a time-of-day script is non-deterministic across test runs. To exercise a specific branch, a playbook can use the universal action `set_clock <wday> <hour> [minute]` before entering the scripted section. `set_clock 2 10` forces get_clock() to return Monday 10:00. Calling `set_clock` with no arguments reverts to the real clock. The forced value persists until overridden; it is not consumed by a single script call.
+**Non-determinism:** Because `get_clock()` reads the real wall clock by default, a time-of-day script produces a different branch depending on when it runs. That is the intended behaviour — the book's mechanic is explicitly "whatever day/time it is when the player gets here." Do not attempt to neutralise it by substituting a dice roll or hard-coding a branch; the fidelity comes from preserving the real-clock lookup.
 
 **Day-of-week convention:** `wday = 1` is Sunday, `wday = 7` is Saturday. This matches the standard Lua `os.date('*t').wday` convention and the ISO 8601-friendly "Sun = 1" layout. Always double-check your numbering when encoding a day name from the book text — off-by-one errors silently invert the branch.
 
