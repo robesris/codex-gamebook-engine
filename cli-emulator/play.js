@@ -132,7 +132,11 @@ function readTable(L, idx) {
 function runScript(scriptCode, context, forcedRolls, forcedClock) {
   const L = createSandbox();
   const logs = [];
-  const rollsUsed = [...(forcedRolls || [])];
+  // Use forcedRolls by reference when it's a genuine queue (array) so that
+  // chained script events (see runScriptEvent) share the same draw pile.
+  // Fall back to a private copy for callers that pass an array literal
+  // for a one-shot use (runCombatRound / runPostRound).
+  const rollsUsed = Array.isArray(forcedRolls) ? forcedRolls : [];
 
   // roll(formula) function — uses forced rolls if available
   lua.lua_pushjsfunction(L, function(L) {
@@ -556,12 +560,16 @@ function runScriptEvent(event, state, book) {
     flags: [...state.flags],
     items_catalog: book.items_catalog || {},
   };
-  // Consume any playbook-queued forced rolls for this script event.
-  const forcedRolls = Array.isArray(state.forcedScriptRolls) && state.forcedScriptRolls.length > 0
-    ? state.forcedScriptRolls
-    : null;
-  if (forcedRolls) state.forcedScriptRolls = [];
-  const result = runScript(event.script_code || '', context, forcedRolls, state.forcedClock);
+  // Pass the playbook-queued forced rolls by reference so that chained
+  // scripts (where one script sets player.navigate_to and the destination
+  // section also has a script event) all draw from the same queue. The
+  // alternative — consuming and clearing the queue before each script —
+  // would mean only the first script in a chain got forced rolls, which
+  // is surprising and forces the playbook author to stop the chain.
+  // Individual roll() calls inside runScript still shift from the queue,
+  // so over-queueing leaves leftover values that the next script event
+  // (in this chain or the next navigation) will pick up.
+  const result = runScript(event.script_code || '', context, state.forcedScriptRolls, state.forcedClock);
   if (result.error) {
     state.log.push(`Script error: ${result.error}`);
     state.pause = { type: 'error', message: 'Script error: ' + result.error };
