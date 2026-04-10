@@ -1087,7 +1087,63 @@ A single emulator may implement both and switch between them per-session (e.g. a
 
 **Compatibility note:** An earlier version of this pattern (superseded) used an `input_number` event with `target: "computed"` in the return section and required the player to type the reference unconditionally. A book JSON using that older encoding still validates against the schema and still works in any emulator that supports `input_number` — the two encodings are functionally equivalent for purist-style playback. New parses should always emit `return_to_caller` because it gives reference emulators the information they need for auto-return while still degrading gracefully to the manual prompt.
 
-### Pattern 7.6.9 — When to prefer `custom` after all
+### Pattern 7.6.9 — Random-branch sections with per-branch side effects
+
+**Narrative trigger examples:**
+- "Pick a number from the Random Number Table. If the number is 4 or lower, you have fallen. Lose 2 ENDURANCE points and turn to 140. If the number is 5 or higher, you do not fall. Turn to 323."
+- "Roll one die. If you roll 1-3, the arrow hits you and you lose 4 STAMINA — turn to 67. If you roll 4-6, the arrow misses — turn to 89."
+- "Roll two dice. If the total is 7 or higher, you dodge the falling rubble and turn to 205. If the total is 6 or lower, you are trapped and must also remove 2 Meals from your backpack — turn to 312."
+- A Lone Wolf section whose description says "pick a number... if X, lose Y and turn to T1; otherwise turn to T2" where the "lose Y" side effect applies only on one branch.
+
+**Why not `roll_dice` with a `results` table:** The `results` form is correct for pure navigation rolls where the roll only picks a destination section and the destination handles any stat changes itself. It is wrong for per-branch side effects, because a `roll_dice` event's `results` entries carry only `target` and `text` — there is no hook to apply a stat change, remove an item, or set a flag between the roll and the navigation. Putting a `modify_stat` event *after* the `roll_dice` event doesn't work either: the roll_dice navigates immediately on a match, so the sequel event never fires.
+
+**Why not `stat_test`:** `stat_test` compares a roll against a single stat and branches on success/failure. It doesn't model "roll a random number without comparison, branch on the raw value, and apply a side effect on one of the branches."
+
+**Encoding:** Use a `script` event. Scripts can roll dice via `roll()`, branch arbitrarily in Lua, modify `game_state` fields, and set `player.navigate_to` — all in a single event. This is the canonical pattern for any mechanic shaped as "roll + range check + branch-specific side effect + navigate." It is a cousin of pattern 7.6.2 (dual- or multi-stat gate), extended to allow side effects per branch.
+
+**Canonical `script` shape (Lone Wolf R10 ladder example):**
+
+```lua
+local r = roll('R10')
+local msg = 'Ladder check: rolled ' .. r.total
+if r.total <= 4 then
+  -- Fail branch: apply the per-branch side effect, then navigate.
+  game_state.endurance = (game_state.endurance or 0) - 2
+  player.stats_changed = { endurance = game_state.endurance }
+  log(msg .. ' — the rung snaps, you fall and lose 2 ENDURANCE')
+  player.navigate_to = 140
+else
+  -- Pass branch: no side effect, just navigate.
+  log(msg .. ' — you climb safely')
+  player.navigate_to = 323
+end
+```
+
+**Multi-branch variant (more than two outcomes):**
+
+```lua
+local r = roll('R10')
+if r.total <= 2 then
+  -- ... side effect A ...
+  player.navigate_to = 189
+elseif r.total <= 6 then
+  -- ... side effect B ...
+  player.navigate_to = 75
+else
+  -- ... side effect C ...
+  player.navigate_to = 312
+end
+```
+
+Use Lua's `if` / `elseif` chain for multi-branch logic. Each branch writes any side effects into `game_state` (and assigns `player.stats_changed` at the end of the branch or at the end of the script using the cumulative values) and then sets `player.navigate_to`.
+
+**Side-effect inventory (what script events can and cannot do):** The Lua sandbox (see section 7.5) exposes `game_state` for all stats, `initial_stats` for starting values, `inventory` as a read-only array, and `flags` as a read-only array. Scripts MAY mutate stats via `player.stats_changed` and navigate via `player.navigate_to`. Scripts currently MAY NOT add or remove items, add or remove flags, or spawn new events at runtime. If a random-branch section needs to remove items (e.g. "on a 0-6 your backpack is torn off and you lose all your Backpack items"), decompose the section into sub-sections via codex 7.6.8 (the roll_dice branches into sub-sections, and each sub-section uses structured `remove_item` events).
+
+**Section text should also cease to advertise the choices.** Once the script encodes the branching, the section's `choices` array should be empty — the player is not meant to pick which branch fired. The original book text may still describe the outcomes narratively (and that's fine to leave in the `text` field for immersion), but there should be no clickable "If the number is 4 or lower..." buttons in the emulator UI — those are parser artefacts from the days before `roll_dice` / `script` events existed.
+
+**Verification:** For every section whose text explicitly instructs the player to pick/roll from the Random Number Table (or equivalent) and whose outcomes involve per-branch stat changes, item changes, or flag changes, verify that the section has exactly one `script` event and zero outgoing `choices`. Sections that match the narrative trigger but have `events: []` (outcomes described as player-selectable choices) or that have a guaranteed `modify_stat` whose amount only applies to one narrative branch are parser bugs — investigate and fix.
+
+### Pattern 7.6.10 — When to prefer `custom` after all
 
 Use `custom` **only** if the mechanic meets all of the following:
 - It cannot be expressed as a sequence of existing event types.
