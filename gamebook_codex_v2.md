@@ -128,6 +128,12 @@ When you encounter ambiguous text, unclear section references, or anything you'r
 ### Rule 4: Verify From Source
 For each section you parse, you should be able to point to where in the source document you read it. If you find yourself "knowing" what a section says without having read it from the document, STOP — you are hallucinating.
 
+**Never silently skip text.** If your output for a section contains less text than the source clearly shows for that section — for example, the section's closing sentence in the book ends with `"turn to 212"` but your JSON text stops several paragraphs earlier — that is a parser error you must detect and fix, not a minor rounding-off. Cross-check the last sentence of each section's `text` against the source. A section whose text ends mid-paragraph, mid-sentence, or on a narrative clause that does not naturally conclude the passage is almost always a parse-boundary mistake where the rest of the section landed on a different page and was dropped or misattributed.
+
+**Watch out for page-boundary running headers.** Many gamebooks (Fighting Fantasy, Lone Wolf, AD&D Adventure Gamebooks, and most other numbered-section books) print a decorative header at the top of each page showing which section numbers appear on that spread. A typical example is a line like `110-114` or `"110-114"` at the top of the page, where the dash range indicates "sections 110 through 114 appear on this spread." These headers are **not section markers**. If you see a numeric range followed by narrative text that does not read like the start of a new section, that narrative is almost certainly the continuation of the previous section from the bottom of the prior page. Attach it to the previous section's text, not a new one. The heuristic is: a real section header is a single number (sometimes with an ornamental flourish), while a range like `N-M` with a dash is always a running header.
+
+**Cross-check section counts.** Before finalising output, count the number of section headers you've emitted and compare against the book's own section count (front matter usually states "X numbered sections" or the final section is numbered). If the count is off, some section was either merged with an adjacent one (likely a page-boundary mistake) or split accidentally (likely a running-header mistake).
+
 ### Rule 5: Schema Is Authoritative
 The GBF JSON Schema (`codex.schema.json`) is the single source of truth for the output format. You must read it completely before generating any output. If any JSON example in this Codex document conflicts with the schema, the schema wins. Do not rely on examples alone — always verify field names, types, required fields, and structural conventions against the schema. Treat the schema as a menu of capabilities: if the book contains a mechanic and the schema defines a way to represent it, use the structured representation rather than `custom` events or narrative-only descriptions.
 
@@ -1154,8 +1160,13 @@ If you can execute code, try extracting text programmatically from a few sample 
 - Build items_catalog and enemies_catalog incrementally as you encounter them
 - Write to a file if your platform supports it; otherwise output in chunks
 
-**Step 4: Handle page boundaries**
-Sections do not align with page boundaries. A page may contain the end of one section and the beginning of another. Accumulate partial text until a section is complete before adding it to the output.
+**Step 4: Handle page boundaries carefully**
+Sections do not align with page boundaries. A page may contain the end of one section and the beginning of another, and a single section may continue across one or more full pages. You must:
+
+- Accumulate partial text across page breaks until the section is actually complete (i.e. the next numbered header appears) before committing it to the output. A section whose text ends at the bottom of a page without any "turn to N" instruction, ending banner, or other natural close is almost always continued on the next page.
+- Ignore running headers. Most printed gamebooks repeat a header at the top of each page showing which sections appear on that spread — commonly formatted as a number range like `110-114`, `"110-114"`, or `sections 85-90`. These are layout furniture, not section markers. If you see a range of the form `N-M` or `N–M` (especially with an en-dash or hyphen), followed by continuing narrative text, treat the header as layout to discard and attach the following text to whichever section it actually continues.
+- A real section header is a single integer (often with decorative surrounding, sometimes the number appears in a larger font). When you see a number at the top of a page, check whether it matches the expected next section in reading order — if it doesn't, and especially if it's a range, it's a running header.
+- After finishing each section, re-read the section text end-to-end and ask: does this passage come to a natural close? Does it end with a "turn to N" instruction, a death banner, a "your adventure is over," or a clear resolution? If not, something was probably dropped at a page boundary. Investigate the next page for the missing continuation before moving on.
 
 ### 9.2 Recommended Approach for Clean Text
 If the source is clean digital text (not a scan):
@@ -1196,6 +1207,8 @@ After generating the complete output, confirm:
 - [ ] All enemies referenced in combat events exist in enemies_catalog
 - [ ] All items referenced in events exist in items_catalog
 - [ ] Endings are correctly identified (no outgoing choices)
+- [ ] **No silent dead ends.** For every section in the output with `choices: []` and `is_ending: false`, verify it actually contains a self-contained puzzle mechanic that determines its own navigation — for example an `input_number` event whose `target: "computed"` branches to a player-entered section, or a `script` event that sets `player.navigate_to` on every code path, or a `roll_dice` event whose `results` object covers every possible die outcome. A section with no outgoing choices, no ending flag, and no self-navigating event is a parser error. The most common cause is a "turn to N" instruction that was lost at a page boundary (see Rule 4 and Step 4 of section 9.1 on running headers). Before shipping, re-read the source text of every such section to recover the missing instruction. If you genuinely cannot determine where the section should lead, set `needs_review: true` on the section AND add a `flagged_for_review` entry in `metadata.confidence` describing the gap — but treat this as a last resort, not a routine output.
+- [ ] **Page-boundary integrity.** For every section whose text you wrote, the closing sentence should come to a natural narrative close: an explicit "turn to N," a recognised ending banner, a question posed to the reader ("Will you fight or flee?"), or similar. A section whose text ends in the middle of a description with no resolution — for example, the last sentence describes an object or a feeling but the next sentence that would tell the reader where to go is missing — is almost certainly a parse-boundary mistake where the continuation landed on the next page and was dropped.
 - [ ] No orphaned sections (unreferenced sections that aren't section 1)
 - [ ] Computed navigation events have clear explanatory notes
 - [ ] Custom events have sufficient implementation detail
