@@ -6,7 +6,9 @@ node_modules/
 package.json
 package-lock.json
 01fftd.xml
+books
 books/
+plans/walkthroughs
 plans/walkthroughs/
 plans/playthroughs/*.json
 plans/playthroughs/*.log
