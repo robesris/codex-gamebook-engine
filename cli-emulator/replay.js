@@ -17,6 +17,9 @@
  *   `# expect pause=TYPE`       — Current pause type must be TYPE
  *   `# stop_on_error`           — (default) Stop on first error or checkpoint failure
  *   `# continue_on_error`       — Log errors but keep going
+ *   `# ignore_endings`          — Don't halt on ending pauses (useful for coverage probes
+ *                                 that use manual_set to jump into many sections, some of
+ *                                 which may be death/victory endings).
  *
  * Output: writes a structured log file with everything that happened.
  *
@@ -51,6 +54,7 @@ function main() {
   let state = null;
   let book = null;
   let stopOnError = true;
+  let ignoreEndings = false;
   let lineNum = 0;
   let errors = 0;
 
@@ -105,6 +109,7 @@ function main() {
       // Error mode
       if (directive === 'stop_on_error') { stopOnError = true; continue; }
       if (directive === 'continue_on_error') { stopOnError = false; continue; }
+      if (directive === 'ignore_endings') { ignoreEndings = true; continue; }
 
       // Checkpoint
       const expectMatch = directive.match(/^expect\s+(.+)$/);
@@ -165,10 +170,11 @@ function main() {
       if (!fail(`Action threw: ${actionError}`)) break;
     }
 
-    // If we hit an ending, stop
+    // If we hit an ending, log it. Halt unless ignore_endings is set (coverage probes
+    // that manual_set through many sections may intentionally cross death/victory endings).
     if (state.pause?.type === 'ending') {
       append({ type: 'ENDING', message: `${state.pause.ending_type}: ${state.pause.text?.slice(0, 100)}` });
-      break;
+      if (!ignoreEndings) break;
     }
 
     // If the emulator returned an error pause, that's a failure
