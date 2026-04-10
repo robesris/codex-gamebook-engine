@@ -516,6 +516,7 @@ function runScriptEvent(event, state, book) {
     enemy: { attack: 0, health: 0, name: '' },
     combat: { round: 0 },
     game_state: { ...state.stats, provisions: state.provisions, gold: state.gold, meals: state.meals },
+    initial_stats: { ...(state.initialStats || {}) },
     inventory: [...state.inventory],
     flags: [...state.flags],
     items_catalog: book.items_catalog || {},
