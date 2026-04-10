@@ -1012,7 +1012,69 @@ end
 
 **Hour convention:** `hour` is 0..23. Interpret "morning" as `hour < 12`, "afternoon" as `12 <= hour < 18`, "evening/night" as `hour >= 18`, unless the book text is more specific. When the book says "midnight," treat it as `hour == 0`; "noon" as `hour == 12`. If the book text draws a sharper line (e.g., "between 3 p.m. and 5 p.m."), encode the exact range.
 
-### Pattern 7.6.8 — When to prefer `custom` after all
+### Pattern 7.6.8 — Subroutine sections with return-to-caller
+
+**Narrative trigger examples:**
+- "Make sure you have noted the reference on the last page! You will return to that reference after dealing with the creature you are about to encounter." — a wandering monster table. Player is told to remember where they came from, fight a randomly-selected monster, and then turn back to the noted reference.
+- "Only silver weapons will harm this creature. When it inflicts its third wound, return to the section you were at before." — a conditional combat where the outcome feeds back into the prior narrative thread.
+- "Roll to see which kind of creature wandered in..." followed by a roll table that picks one of several enemies, a combat, and an instruction to resume the prior adventure.
+
+These are "subroutine" sections: the book calls them from multiple callers, the section runs a self-contained mechanic, and control returns to the caller. In the printed book, the player is responsible for remembering the caller's reference — it's literally called out in the text ("note the reference").
+
+**Encoding decision:** The cleanest decomposition uses only existing structured event types — `roll_dice`, `combat`, and `input_number` — so no `custom` event is needed. Do NOT try to cram the whole mechanic into a single section or a single script event. Instead, split the subroutine into a handful of small sections:
+
+1. **The entry section** holds the book's introductory text and a single `roll_dice` event whose `results` branch to one sub-section per outcome. Its `choices` array is empty (the roll_dice navigates directly).
+
+2. **One sub-section per outcome** — e.g., one per row in the book's wandering-monster table. Each sub-section contains exactly one `combat` event with the correct enemy and a `win_to` target pointing at the shared return section. `choices: []`.
+
+3. **One shared return section** with a single `input_number` event using `target: "computed"`. The prompt should tell the player to type the reference they noted before entering the subroutine. On submit, the emulator navigates to the typed section.
+
+Because Warlock-style Fighting Fantasy books use every numbered section 1..N with none to spare, the sub-sections and the return section need **string IDs** that don't clash with the book's numbering. Use descriptive prefixed IDs like `"161_goblin"`, `"161_orc"`, `"161_return"`, etc. Schema note: `sections` is an object keyed by string, and the emulator's `navigateTo` accepts any string key, so string IDs work identically to integer IDs for navigation purposes. The CALLING sections' choice targets remain regular integers — only the synthetic sub-sections introduced by this decomposition use string IDs.
+
+**Example shape (abbreviated):**
+
+```json
+"161": {
+  "text": "... the book's wandering-monster text ...",
+  "events": [
+    {
+      "type": "roll_dice",
+      "dice": "1d6",
+      "results": {
+        "1": { "target": "161_goblin",    "text": "A Goblin shuffles out of the darkness." },
+        "2": { "target": "161_orc",       "text": "An Orc charges you!" },
+        "3": { "target": "161_gremlin",   "text": "A Gremlin skitters forward." },
+        "4": { "target": "161_giant_rat", "text": "A Giant Rat lunges at your legs." },
+        "5": { "target": "161_skeleton",  "text": "A Skeleton rattles into view." },
+        "6": { "target": "161_troll",     "text": "A Troll looms over you." }
+      }
+    }
+  ],
+  "choices": []
+},
+"161_goblin": {
+  "text": "You must fight the wandering Goblin.",
+  "events": [
+    { "type": "combat", "enemies": [{"ref": "wandering_goblin_161"}], "mode": "sequential", "win_to": "161_return", "flee_to": null }
+  ],
+  "choices": []
+},
+"161_return": {
+  "text": "The creature is defeated. Enter the section reference you noted before the encounter to resume your adventure.",
+  "events": [
+    { "type": "input_number", "prompt": "Enter the reference you noted", "target": "computed", "note": "Type the section number you were at before the wandering monster interrupted you." }
+  ],
+  "choices": []
+}
+```
+
+**Player-responsibility disclosure:** This encoding deliberately puts the burden of remembering the caller on the player, matching the book's design. The player sees the current section number in the emulator UI's section header (single integer, always displayed), is told by the book text to note it, and types it into the return input afterwards. That is the correct level of fidelity — do not try to hide the mechanic behind automatic backtracking. Future emulator versions may grow a genuine return-stack primitive that tracks callers automatically; if that lands, prefer it over `input_number`. Until it does, `input_number` with `target: "computed"` is the canonical encoding because every emulator that supports `input_number` at all already supports it.
+
+**Why not a single script event:** A `script` event can roll dice and set `player.navigate_to` but cannot spawn a `combat` event at runtime — scripts cannot invoke the emulator's structured combat machinery from inside Lua. If you flatten a subroutine into a single script, you either (a) hard-code one specific enemy and lose the roll-to-pick variety, or (b) reimplement the book's combat system in Lua per section, which duplicates the `combat_system.round_script` and drifts out of sync with the rest of the book's combats. Neither is acceptable. Decompose into sections + `combat` events instead.
+
+**Why not a `custom` event:** `custom` leaves the mechanic unexecutable — the emulator just logs the description and moves on, and because a subroutine section has no outgoing choices of its own (the player is supposed to roll + fight + return), the section becomes a silent dead end. See section 10 Verification Checklist "No silent dead ends" for the general rule. Subroutine sections are one of the most common sources of this bug, which is why they get a dedicated pattern.
+
+### Pattern 7.6.9 — When to prefer `custom` after all
 
 Use `custom` **only** if the mechanic meets all of the following:
 - It cannot be expressed as a sequence of existing event types.
