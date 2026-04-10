@@ -7,4 +7,8 @@ package.json
 package-lock.json
 01fftd.xml
 books/
+plans/walkthroughs/
+plans/playthroughs/*.json
+plans/playthroughs/*.log
+plans/playthroughs/*_dump.txt
 HANDOFF.md
