@@ -2,7 +2,7 @@
 
 This document specifies how a compliant emulator should interpret and execute Gamebook Format (GBF) game data files. It is intended for developers building their own emulator in any language or platform.
 
-The reference implementation is `index.html` in this repository. This guide documents the behavior that any compliant emulator must replicate.
+The reference implementation is `index.html` in this repository. This guide documents the behavior that any compliant emulator may replicate, fully or partially, depending on the tier of compliance it aims for.
 
 ---
 
@@ -19,15 +19,74 @@ The emulator contains **zero game-specific logic**. All mechanics — combat, st
 
 ---
 
-## 2. Required Dependencies
+## 2. Compliance Tiers
 
-- **Lua 5.3+ runtime** — Required for executing `round_script`, `post_round_script`, and `script` event Lua code. In a browser, use Fengari (pure JS) or Wasmoon (WASM). In other languages, use the appropriate Lua embedding library (see README for options).
-- **JSON parser** — For loading game data files.
-- **Random number generator** — For dice rolls and R10 tables.
+Not every emulator needs to implement the full GBF specification. GBF supports multiple tiers of compliance, letting developers build emulators that range from "e-reader with clickable choices" to "fully automated game engine." An emulator should declare which tier(s) it supports.
+
+### Tier 1: Reader
+
+A minimal emulator that displays sections and handles navigation choices. Supports:
+- Frontmatter display
+- Section text and image references
+- `choices` navigation (no condition enforcement)
+
+**Does NOT need to implement:** events, combat, stat tests, dice rolls, inventory, conditions, character creation, Lua scripting.
+
+Tier 1 emulators treat a GBF file as an e-book. The player is responsible for tracking their own stats, inventory, and combat. This is useful for quick reading, accessibility, or low-resource platforms.
+
+### Tier 2: Assisted
+
+A Tier 1 emulator that also tracks state and displays it to the player, but does not automate mechanics. Adds:
+- Character creation (stat rolling, ability selection)
+- Stat bar and inventory display
+- Manual controls: let the player edit stats, add/remove items, set flags, roll dice, etc.
+- Condition evaluation on choices (grey out unavailable options)
+
+**Manual mode:** Instead of executing combat scripts or stat tests automatically, Tier 2 emulators may offer manual input — e.g., "Combat happens here. Edit your stats when done." This gives the player the tools to track state without forcing automation.
+
+### Tier 3: Full Auto
+
+A Tier 2 emulator that also executes all mechanics automatically. Adds:
+- Event processing (all event types)
+- Combat with Lua script execution
+- Stat tests, dice rolls, input events
+- Script events
+
+Tier 3 emulators play the game with no manual intervention required beyond making choices and clicking "Attack."
+
+### Tier 4: Strict
+
+A Tier 3 emulator that enforces strict schema compliance and surfaces all inconsistencies as visible errors rather than working around them. Useful for game data authors (including the Codex) who need rigorous feedback on their output.
+
+### Flexibility Between Tiers
+
+Any Tier 2+ emulator **should** offer a "low-tech" or "manual" escape hatch — the ability to manually edit state, manually resolve an encounter, or skip an event that's broken. This ensures that a bug in one section of a game doesn't render the entire book unplayable. Even a Tier 4 strict emulator should offer a debug mode that allows state edits.
+
+The reference implementation (`index.html`) is primarily Tier 3 with some Tier 4 enforcement. It offers manual save/load and state editing via a debug panel.
 
 ---
 
-## 3. Game State
+## 3. Dependencies by Tier
+
+| Tier | Needs |
+|------|-------|
+| 1 | JSON parser |
+| 2 | JSON parser, RNG |
+| 3 | JSON parser, RNG, Lua 5.3+ runtime |
+| 4 | JSON parser, RNG, Lua 5.3+ runtime, strict schema validator |
+
+**Lua runtime options:**
+- Browser: Fengari (pure JS) or Wasmoon (WASM)
+- Python: `lupa`
+- Java/Kotlin: `LuaJ`
+- C#/.NET: `MoonSharp` or `NLua`
+- Go: `gopher-lua`
+- Rust: `mlua`
+- Swift/Obj-C: direct C interop with Lua C API
+
+---
+
+## 4. Game State (Tier 2+)
 
 The emulator maintains the following state throughout a game session:
 
@@ -50,7 +109,7 @@ All stat names must match **exactly** what appears in `rules.stats[].name`. The 
 
 ---
 
-## 4. Game Lifecycle
+## 5. Game Lifecycle
 
 ### 4.1 Load Game Data
 
@@ -89,7 +148,7 @@ Navigate to section `"1"`.
 
 ---
 
-## 5. Section Navigation
+## 6. Section Navigation
 
 When navigating to a section:
 
@@ -102,7 +161,7 @@ When navigating to a section:
 
 ---
 
-## 6. Event Processing
+## 7. Event Processing (Tier 3+)
 
 Events are processed sequentially. Some events are **blocking** — they pause processing until the player interacts (e.g., combat, stat tests, dice rolls). Others are **immediate** — they execute and continue to the next event.
 
@@ -185,7 +244,7 @@ If `failure_penalty` is present and the test failed, apply it as a `modify_stat`
 
 ---
 
-## 7. Combat
+## 8. Combat (Tier 3+)
 
 Combat is initiated by a `combat` event. The emulator resolves enemies from `enemies_catalog` using the `ref` field in each entry of `event.enemies` (or the single `event.enemy_ref`).
 
@@ -258,7 +317,7 @@ For mechanics that must happen between enemies (e.g., gaining a stat bonus after
 
 ---
 
-## 8. Choices
+## 9. Choices
 
 After all events are processed, display the section's `choices` as clickable options. Each choice has:
 
@@ -289,7 +348,7 @@ Conditions are recursive. Evaluate as follows:
 
 ---
 
-## 9. Lua Sandbox
+## 10. Lua Sandbox (Tier 3+)
 
 The emulator must provide a sandboxed Lua 5.3+ environment for executing scripts. The sandbox must be **safe** — no file I/O, no network access, no debug library.
 
@@ -355,7 +414,7 @@ Returns a table: `{total=N, rolls={...}, text="comma-separated rolls"}`.
 
 ---
 
-## 10. Endings
+## 11. Endings
 
 When a section has `is_ending: true`:
 
@@ -367,7 +426,7 @@ Also trigger a death ending whenever the health stat reaches 0, regardless of wh
 
 ---
 
-## 11. Stat Bar
+## 12. Stat Bar (Tier 2+)
 
 Display a persistent stat bar showing:
 - All stats from `rules.stats` with current/initial values
@@ -378,13 +437,13 @@ The stat bar should update after every state change.
 
 ---
 
-## 12. Inventory Display
+## 13. Inventory Display (Tier 2+)
 
 Show the player's inventory as a collapsible panel. Display item names from `items_catalog`. If the player has a potion shown in the stat bar, optionally hide it from the inventory list to avoid visual duplication.
 
 ---
 
-## 13. Save/Load
+## 14. Save/Load (Optional)
 
 If the platform supports persistence:
 
@@ -397,12 +456,47 @@ Serialization note: `flags` and `visitedSections` are sets — serialize as arra
 
 ---
 
-## 14. Strict Schema Compliance
+## 15. Strict Schema Compliance (Tier 4 only)
 
-The emulator must **only** support structures and types defined in the GBF JSON Schema (`codex.schema.json`). If game data uses non-schema fields or invalid types, the emulator should fail visibly rather than silently handling it. This ensures that:
+A Tier 4 emulator must **only** support structures and types defined in the GBF JSON Schema (`codex.schema.json`). If game data uses non-schema fields or invalid types, the emulator should fail visibly rather than silently handling it. This ensures that:
 
 1. Schema shortcomings are surfaced as bugs, not hidden by workarounds.
-2. Any compliant emulator will behave identically for the same game data.
+2. Any Tier 4 emulator will behave identically for the same game data.
 3. Game data producers (the Codex) get clear feedback on what works and what doesn't.
 
-Do not add fallback behavior, guessing, or heuristics for malformed data. If the data is wrong, the emulator should show an error.
+Tier 4 emulators do not add fallback behavior, guessing, or heuristics for malformed data. If the data is wrong, the emulator shows an error.
+
+**Tier 1-3 emulators may be more forgiving.** They can choose to silently handle missing fields, normalize values, or display partial data instead of crashing. The tradeoff: more permissive emulators are friendlier to players but less useful for catching data quality issues.
+
+---
+
+## 16. Manual Escape Hatch (Strongly Recommended)
+
+Any Tier 2+ emulator should provide a way for players to manually intervene when something goes wrong. Possible mechanisms:
+
+- **Debug panel** — Shows current state (stats, inventory, flags, current section) and lets the player edit values directly.
+- **Manual section navigation** — A "Go to section..." input that lets the player jump to any section, bypassing broken events or stuck combats.
+- **Manual dice roll override** — When a stat test or dice roll happens, allow the player to enter the result manually instead of (or in addition to) clicking "Roll."
+- **Skip event** — A button that abandons the current blocking event and moves on.
+- **State import/export** — Let players save and restore state to JSON files for sharing or recovery.
+
+**Why this matters:** GBF files are produced by AI parsing or manual transcription, both of which can have bugs. A single broken event in a 400-section game shouldn't render the entire book unplayable. The escape hatch lets players work around bugs while still enjoying the game. It also enables accessibility use cases — a player who prefers to roll real dice can do so and enter the results manually.
+
+The reference implementation provides a debug panel showing live state. Future versions will add more manual controls.
+
+---
+
+## 17. Declaring Compliance
+
+An emulator should publicly declare its compliance tier(s) and which optional features it supports. Example declaration:
+
+```
+Codex Gamebook Engine — Reference Implementation
+- Tier: 3 (Full Auto), with optional Tier 4 strict mode
+- Lua runtime: Fengari
+- Save/Load: Yes (browser localStorage + import/export)
+- Manual escape hatch: Debug panel
+- Platforms: Browser (any)
+```
+
+This helps players know what to expect and helps game data authors target compatible emulators.
