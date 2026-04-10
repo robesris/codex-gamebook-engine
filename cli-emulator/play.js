@@ -262,6 +262,10 @@ function initialState(bookPath) {
     frontmatterPage: 0,
     frontmatterDone: false,
     log: [],
+    // Queue of forced rolls for upcoming `script` events. Each element is an
+    // array of numbers (one set per expected roll() call in the script). The
+    // queue is FIFO: the next script event consumes and clears it.
+    forcedScriptRolls: [],
   };
 }
 
@@ -516,7 +520,12 @@ function runScriptEvent(event, state, book) {
     flags: [...state.flags],
     items_catalog: book.items_catalog || {},
   };
-  const result = runScript(event.script_code || '', context);
+  // Consume any playbook-queued forced rolls for this script event.
+  const forcedRolls = Array.isArray(state.forcedScriptRolls) && state.forcedScriptRolls.length > 0
+    ? state.forcedScriptRolls
+    : null;
+  if (forcedRolls) state.forcedScriptRolls = [];
+  const result = runScript(event.script_code || '', context, forcedRolls);
   if (result.error) {
     state.log.push(`Script error: ${result.error}`);
     state.pause = { type: 'error', message: 'Script error: ' + result.error };
@@ -678,6 +687,18 @@ function applyAction(state, book, action, args) {
 
   // Universal actions
   if (action === 'state') return state;
+  if (action === 'queue_script_rolls') {
+    // Queue forced rolls to be consumed by the next `script` event.
+    // Each arg is a comma-separated set of numbers for one roll() call,
+    // e.g. `queue_script_rolls 1,1 6,6` forces the first roll() in the
+    // next script event to return 1,1 and the second to return 6,6.
+    if (!Array.isArray(state.forcedScriptRolls)) state.forcedScriptRolls = [];
+    for (const a of args) {
+      state.forcedScriptRolls.push(a.split(',').map(Number));
+    }
+    state.log.push(`Queued ${args.length} forced roll set(s) for next script event`);
+    return state;
+  }
   if (action === 'manual_set') {
     const [key, ...vals] = args;
     const val = vals.join(' ');
