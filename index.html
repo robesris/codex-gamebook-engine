@@ -2791,7 +2791,21 @@ function debugJumpToSection() {
   // processes its events cleanly. Flag / stat / roll state is preserved.
   pendingEvents = [];
   pendingChoices = [];
+  // Force the game screen to be active and scroll to top. This handles
+  // the case where the player opens the debug panel on the load screen,
+  // the character-creation screen, the frontmatter screen, or even the
+  // ending screen after dying — all of which hide game-content, so
+  // navigateTo would otherwise update an invisible DOM element and the
+  // player would see no change. The debug panel itself is position:
+  // fixed and floats above every screen, so this reassignment is safe
+  // regardless of where the player started.
+  showScreen('game-screen');
   navigateTo(val);
+  // Reset the game-content scroll position too — in case the previous
+  // section filled the page with combat logs and the viewport was
+  // parked at the bottom.
+  const gc = document.getElementById('game-content');
+  if (gc && typeof gc.scrollTo === 'function') gc.scrollTo(0, 0);
 }
 
 function debugSetStat() {
