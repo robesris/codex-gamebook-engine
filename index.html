@@ -374,12 +374,59 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   display: none; position: fixed; bottom: 36px; right: 10px; z-index: 100;
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; font-family: monospace;
-  font-size: 0.75em; max-width: 320px; max-height: 50vh;
+  font-size: 0.75em; width: 480px; max-width: 90vw; max-height: 80vh;
   overflow-y: auto; color: var(--text-dim);
 }
 .debug-panel.open { display: block; }
 .debug-panel div { margin-bottom: 4px; }
 .debug-panel .debug-label { color: var(--accent); }
+.debug-panel .debug-section-header {
+  color: var(--accent); text-transform: uppercase; font-size: 0.9em;
+  border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px;
+  cursor: pointer; user-select: none;
+}
+.debug-panel .debug-section-header:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+.debug-panel .debug-section-header::before { content: '\25B6 '; display: inline-block; transition: transform 0.1s; }
+.debug-panel .debug-section-header.open::before { transform: rotate(90deg); }
+.debug-panel .debug-section-body { display: none; padding-top: 6px; }
+.debug-panel .debug-section-header.open + .debug-section-body { display: block; }
+.debug-panel .debug-row {
+  display: flex; gap: 4px; align-items: center; margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.debug-panel .debug-row label { color: var(--text-dim); min-width: 70px; }
+.debug-panel input, .debug-panel select {
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); font-family: monospace; font-size: 1em;
+  padding: 3px 6px; border-radius: 3px; min-width: 60px;
+}
+.debug-panel input[type="text"], .debug-panel input[type="number"] {
+  flex: 1; min-width: 80px;
+}
+.debug-panel button.debug-btn {
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--accent); font-family: monospace; font-size: 0.95em;
+  padding: 3px 8px; border-radius: 3px; cursor: pointer;
+}
+.debug-panel button.debug-btn:hover { border-color: var(--accent); background: var(--bg-card); }
+.debug-panel .debug-flag-tag {
+  display: inline-block; padding: 2px 6px; margin: 2px 3px 2px 0;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+}
+.debug-panel .debug-flag-tag .remove-btn {
+  margin-left: 4px; cursor: pointer; color: var(--danger);
+}
+.debug-panel .debug-flag-tag .remove-btn:hover { font-weight: bold; }
+.debug-panel pre.debug-json {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  padding: 6px; max-height: 240px; overflow: auto; font-size: 0.9em;
+  white-space: pre-wrap; word-break: break-word;
+}
+.debug-panel .debug-note { color: var(--text-dim); font-style: italic; font-size: 0.9em; }
+.debug-panel .debug-status {
+  margin-top: 4px; font-size: 0.9em; color: var(--accent);
+  min-height: 1em;
+}
 
 /* --- Save/Load Bar --- */
 .save-bar {
@@ -511,12 +558,24 @@ let state = {
 };
 
 // ==================== UTILITY ====================
+// Forced-roll queue used by the Debug panel's "Force Rolls" tool.
+// Populated via debugQueueRolls() with individual per-die values. Every
+// call into rollDice() drains values from the front of the queue first;
+// when the queue runs out, rolls fall back to Math.random(). Both the
+// JS event handlers (stat_test, roll_dice, combat round_script, etc.)
+// and the Lua sandbox's roll() function route through rollDice(), so a
+// single queue drives every dice roll in the game regardless of source.
+// FIFO order. R10 values should be 0..9; dN values should be 1..N.
+window._forcedRollQueue = [];
+
 function rollDice(formula) {
   // Handle R10 (Lone Wolf random number table: 0-9)
   const r10 = formula.match(/^R10(?:\+(\d+))?$/);
   if (r10) {
     const bonus = r10[1] ? parseInt(r10[1]) : 0;
-    const roll = Math.floor(Math.random() * 10); // 0-9
+    const roll = window._forcedRollQueue.length > 0
+      ? window._forcedRollQueue.shift()
+      : Math.floor(Math.random() * 10); // 0-9
     return { total: roll + bonus, rolls: [roll], bonus };
   }
   // Parse "NdX+Y", "NdX*Y", "NdX-Y", or "NdX"
@@ -528,7 +587,10 @@ function rollDice(formula) {
   const modifier = m[4] ? parseInt(m[4]) : 0;
   const rolls = [];
   for (let i = 0; i < count; i++) {
-    rolls.push(Math.floor(Math.random() * sides) + 1);
+    const r = window._forcedRollQueue.length > 0
+      ? window._forcedRollQueue.shift()
+      : Math.floor(Math.random() * sides) + 1;
+    rolls.push(r);
   }
   const sum = rolls.reduce((a, b) => a + b, 0);
   const total = op === '*' ? sum * modifier :
@@ -2594,29 +2656,287 @@ function playAgain() {
 }
 
 // ==================== DEBUG PANEL ====================
+// Tracks which collapsible sections were open so updateDebug() preserves
+// the player's current panel layout after any state change.
+const _debugOpenSections = { state: true, tools: false };
+
 function toggleDebug() {
-  document.getElementById('debug-panel').classList.toggle('open');
-  if (document.getElementById('debug-panel').classList.contains('open')) updateDebug();
+  const panel = document.getElementById('debug-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) updateDebug();
+}
+
+function _escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function _debugStatOptions() {
+  // Populate the "Set stat" dropdown from rules.stats, plus the
+  // three resource fields the emulator tracks separately on state.
+  const stats = (gameData?.rules?.stats || []).map(s => s.name);
+  const resources = ['provisions', 'gold', 'meals'];
+  return [...stats, ...resources];
+}
+
+function _debugFlagList() {
+  if (!state?.flags || state.flags.size === 0) return '<span class="debug-note">none</span>';
+  return [...state.flags].map(f =>
+    `<span class="debug-flag-tag">${_escapeHtml(f)}<span class="remove-btn" onclick="debugRemoveFlag('${_escapeHtml(f).replace(/'/g, "\\'")}')">\u00D7</span></span>`
+  ).join('');
 }
 
 function updateDebug() {
   const panel = document.getElementById('debug-panel');
   if (!panel.classList.contains('open')) return;
   const visited = state.visitedSections ? [...state.visitedSections].join(', ') : 'none';
+  const queueStr = (window._forcedRollQueue || []).join(', ') || '(empty)';
+  const statOptions = _debugStatOptions()
+    .map(n => `<option value="${_escapeHtml(n)}">${_escapeHtml(n)}</option>`)
+    .join('');
+
   panel.innerHTML = `
-    <div><span class="debug-label">Section:</span> ${state.currentSection || 'n/a'}</div>
-    <div><span class="debug-label">Stats:</span> ${Object.entries(state.stats).map(([k,v]) => k+'='+v).join(', ')}</div>
-    <div><span class="debug-label">Initial:</span> ${Object.entries(state.initialStats).map(([k,v]) => k+'='+v).join(', ')}</div>
-    <div><span class="debug-label">Provisions:</span> ${state.provisions}</div>
-    <div><span class="debug-label">Gold:</span> ${state.gold}</div>
-    <div><span class="debug-label">Meals:</span> ${state.meals || 0}</div>
-    <div><span class="debug-label">Potion:</span> ${state.potion || 'none'} (${state.potionDoses} doses)</div>
-    <div><span class="debug-label">Abilities:</span> ${(state.abilities || []).length > 0 ? state.abilities.join(', ') : 'none'}</div>
-    <div><span class="debug-label">Flags:</span> ${state.flags.size > 0 ? [...state.flags].join(', ') : 'none'}</div>
-    <div><span class="debug-label">Inventory:</span> ${state.inventory.length > 0 ? state.inventory.map(i => getItemName(i)).join(', ') : 'empty'}</div>
-    <div><span class="debug-label">Last test:</span> ${window._lastTestResult === null ? 'n/a' : window._lastTestResult ? 'success' : 'failure'}</div>
-    <div><span class="debug-label">Visited:</span> ${visited}</div>
+    <div class="debug-section-header ${_debugOpenSections.state ? 'open' : ''}" onclick="debugToggleSection('state')">State</div>
+    <div class="debug-section-body">
+      <div><span class="debug-label">Section:</span> ${state.currentSection || 'n/a'}</div>
+      <div><span class="debug-label">Stats:</span> ${Object.entries(state.stats).map(([k,v]) => _escapeHtml(k)+'='+v).join(', ') || '(none)'}</div>
+      <div><span class="debug-label">Initial:</span> ${Object.entries(state.initialStats).map(([k,v]) => _escapeHtml(k)+'='+v).join(', ') || '(none)'}</div>
+      <div><span class="debug-label">Provisions:</span> ${state.provisions}</div>
+      <div><span class="debug-label">Gold:</span> ${state.gold}</div>
+      <div><span class="debug-label">Meals:</span> ${state.meals || 0}</div>
+      <div><span class="debug-label">Potion:</span> ${state.potion || 'none'} (${state.potionDoses} doses)</div>
+      <div><span class="debug-label">Abilities:</span> ${(state.abilities || []).length > 0 ? state.abilities.map(_escapeHtml).join(', ') : 'none'}</div>
+      <div><span class="debug-label">Flags:</span> ${state.flags.size > 0 ? [...state.flags].map(_escapeHtml).join(', ') : 'none'}</div>
+      <div><span class="debug-label">Inventory:</span> ${state.inventory.length > 0 ? state.inventory.map(i => _escapeHtml(getItemName(i))).join(', ') : 'empty'}</div>
+      <div><span class="debug-label">Last test:</span> ${window._lastTestResult === null || window._lastTestResult === undefined ? 'n/a' : window._lastTestResult ? 'success' : 'failure'}</div>
+      <div><span class="debug-label">Forced rolls:</span> ${_escapeHtml(queueStr)}</div>
+      <div><span class="debug-label">Visited:</span> ${visited}</div>
+    </div>
+
+    <div class="debug-section-header ${_debugOpenSections.tools ? 'open' : ''}" onclick="debugToggleSection('tools')">Tools</div>
+    <div class="debug-section-body">
+      <div class="debug-row">
+        <label>Jump to:</label>
+        <input type="text" id="debug-jump-input" placeholder="section id" onkeydown="if(event.key==='Enter'){debugJumpToSection();event.preventDefault();}">
+        <button class="debug-btn" onclick="debugJumpToSection()">Go</button>
+      </div>
+
+      <div class="debug-row">
+        <label>Set stat:</label>
+        <select id="debug-stat-name">${statOptions}</select>
+        <input type="number" id="debug-stat-value" placeholder="value" onkeydown="if(event.key==='Enter'){debugSetStat();event.preventDefault();}">
+        <button class="debug-btn" onclick="debugSetStat()">Set</button>
+      </div>
+
+      <div class="debug-row">
+        <label>Add flag:</label>
+        <input type="text" id="debug-flag-input" placeholder="flag name" onkeydown="if(event.key==='Enter'){debugAddFlag();event.preventDefault();}">
+        <button class="debug-btn" onclick="debugAddFlag()">Add</button>
+      </div>
+      <div>${_debugFlagList()}</div>
+
+      <div class="debug-row">
+        <label>Force rolls:</label>
+        <input type="text" id="debug-rolls-input" placeholder="e.g. 6,6,1,1" onkeydown="if(event.key==='Enter'){debugQueueRolls();event.preventDefault();}">
+        <button class="debug-btn" onclick="debugQueueRolls()">Queue</button>
+        <button class="debug-btn" onclick="debugClearRolls()">Clear</button>
+      </div>
+      <div class="debug-note">
+        Queued values feed the next rollDice() call. For NdX rolls, N values
+        are consumed (1..X). For R10 rolls, one value (0..9). Any shortfall
+        falls back to random. This feeds both UI dice rolls and Lua roll()
+        calls from inside script events.
+      </div>
+
+      <div class="debug-row">
+        <button class="debug-btn" onclick="debugShowSectionJson()">Show current section JSON</button>
+        <button class="debug-btn" onclick="debugCopySectionJson()">Copy</button>
+      </div>
+      <pre class="debug-json" id="debug-section-json" style="display:none"></pre>
+
+      <div class="debug-row">
+        <button class="debug-btn" onclick="debugShowStateJson()">Show full state JSON</button>
+        <button class="debug-btn" onclick="debugCopyStateJson()">Copy</button>
+      </div>
+      <pre class="debug-json" id="debug-state-json" style="display:none"></pre>
+
+      <div id="debug-status" class="debug-status"></div>
+    </div>
   `;
+}
+
+function debugToggleSection(key) {
+  _debugOpenSections[key] = !_debugOpenSections[key];
+  updateDebug();
+}
+
+function _debugFlash(msg) {
+  const el = document.getElementById('debug-status');
+  if (!el) return;
+  el.textContent = msg;
+  setTimeout(() => { if (el) el.textContent = ''; }, 2500);
+}
+
+function debugJumpToSection() {
+  const input = document.getElementById('debug-jump-input');
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+  if (!gameData?.sections?.[val]) {
+    _debugFlash(`Section ${val} not found`);
+    return;
+  }
+  // Jumping clears any pending per-section state so the target section
+  // processes its events cleanly. Flag / stat / roll state is preserved.
+  pendingEvents = [];
+  pendingChoices = [];
+  navigateTo(val);
+}
+
+function debugSetStat() {
+  const nameEl = document.getElementById('debug-stat-name');
+  const valEl = document.getElementById('debug-stat-value');
+  if (!nameEl || !valEl) return;
+  const name = nameEl.value;
+  const raw = valEl.value;
+  if (raw === '' || name === '') return;
+  const val = parseInt(raw, 10);
+  if (Number.isNaN(val)) {
+    _debugFlash(`Not a number: ${raw}`);
+    return;
+  }
+  if (name === 'provisions') state.provisions = val;
+  else if (name === 'gold') state.gold = val;
+  else if (name === 'meals') state.meals = val;
+  else state.stats[name] = val;
+  updateStatBar();
+  updateInventory();
+  updateDebug();
+  _debugFlash(`${name} = ${val}`);
+}
+
+function debugAddFlag() {
+  const input = document.getElementById('debug-flag-input');
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+  state.flags.add(val);
+  input.value = '';
+  updateDebug();
+  _debugFlash(`Flag added: ${val}`);
+}
+
+function debugRemoveFlag(name) {
+  if (!state.flags.has(name)) return;
+  state.flags.delete(name);
+  updateDebug();
+  _debugFlash(`Flag removed: ${name}`);
+}
+
+function debugQueueRolls() {
+  const input = document.getElementById('debug-rolls-input');
+  if (!input) return;
+  const vals = input.value
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(Number);
+  if (vals.length === 0 || vals.some(Number.isNaN)) {
+    _debugFlash('Enter comma-separated numbers (e.g. 6,6,1,1)');
+    return;
+  }
+  if (!window._forcedRollQueue) window._forcedRollQueue = [];
+  window._forcedRollQueue.push(...vals);
+  input.value = '';
+  updateDebug();
+  _debugFlash(`Queued ${vals.length} roll(s): ${vals.join(',')}`);
+}
+
+function debugClearRolls() {
+  window._forcedRollQueue = [];
+  updateDebug();
+  _debugFlash('Forced roll queue cleared');
+}
+
+function debugShowSectionJson() {
+  const pre = document.getElementById('debug-section-json');
+  if (!pre) return;
+  const sid = state.currentSection;
+  const sec = gameData?.sections?.[sid];
+  if (!sec) {
+    pre.textContent = `(no section ${sid})`;
+  } else {
+    pre.textContent = JSON.stringify(sec, null, 2);
+  }
+  pre.style.display = pre.style.display === 'none' ? 'block' : 'none';
+}
+
+function debugCopySectionJson() {
+  const sid = state.currentSection;
+  const sec = gameData?.sections?.[sid];
+  const text = sec ? JSON.stringify(sec, null, 2) : `(no section ${sid})`;
+  _debugCopyToClipboard(text, `Section ${sid} JSON copied`);
+}
+
+function debugShowStateJson() {
+  const pre = document.getElementById('debug-state-json');
+  if (!pre) return;
+  pre.textContent = JSON.stringify(_debugSerializeState(), null, 2);
+  pre.style.display = pre.style.display === 'none' ? 'block' : 'none';
+}
+
+function debugCopyStateJson() {
+  _debugCopyToClipboard(
+    JSON.stringify(_debugSerializeState(), null, 2),
+    'Full state JSON copied'
+  );
+}
+
+function _debugSerializeState() {
+  // Return a plain-object snapshot of state. Sets become arrays so the
+  // JSON stringifier can serialize them. Includes the forced roll
+  // queue as a debug-only field so a copied snapshot captures the full
+  // repro context.
+  return {
+    currentSection: state.currentSection,
+    stats: { ...state.stats },
+    initialStats: { ...state.initialStats },
+    provisions: state.provisions,
+    gold: state.gold,
+    meals: state.meals,
+    potion: state.potion,
+    potionDoses: state.potionDoses,
+    abilities: [...(state.abilities || [])],
+    inventory: [...state.inventory],
+    flags: [...state.flags],
+    visitedSections: [...(state.visitedSections || [])],
+    lastTestResult: window._lastTestResult ?? null,
+    forcedRollQueue: [...(window._forcedRollQueue || [])],
+  };
+}
+
+function _debugCopyToClipboard(text, successMsg) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => _debugFlash(successMsg))
+      .catch(err => _debugFlash('Copy failed: ' + (err?.message || err)));
+    return;
+  }
+  // Fallback for older browsers or file:// contexts without clipboard API
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-1000px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    _debugFlash(successMsg);
+  } catch (err) {
+    _debugFlash('Copy failed (clipboard not available)');
+  }
+  document.body.removeChild(ta);
 }
 
 // ==================== SAVE / LOAD / EXPORT / IMPORT ====================
