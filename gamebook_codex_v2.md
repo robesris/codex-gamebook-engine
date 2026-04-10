@@ -415,7 +415,13 @@ Events are things that happen in a section before or independent of the choices.
 {"type": "custom", "mechanic_name": "string", "description": "string", "parameters": {}}
 ```
 
-**`script` vs `custom`:** Use `script` when the mechanic can be expressed as executable Lua — dice rolls with branching outcomes, conditional stat modifications, gambling games, complex multi-step checks, etc. The emulator will execute the Lua code. Use `custom` only as a last resort for mechanics that truly cannot be scripted (e.g., they require visual/spatial reasoning). Always include a `description` on both types. The `script` event uses the same Lua sandbox API as combat scripts — see section 7.5 for the full reference. Additionally, `script` events have access to `game_state` (all player stats), `inventory` (item ID array), and `flags` (flag name array). Set `player.stats_changed = {stat = value}` to modify stats, or `player.navigate_to = N` to navigate to a section.
+**`script` vs `custom`:** Use `script` when the mechanic can be expressed as executable Lua — dice rolls with branching outcomes, conditional stat modifications, gambling games, complex multi-step checks, etc. The emulator will execute the Lua code. Use `custom` only as a last resort for mechanics that truly cannot be scripted (e.g., they require visual/spatial reasoning). Always include a `description` on both types. The `script` event uses the same Lua sandbox API as combat scripts — see section 7.5 for the full reference. Additionally, `script` events have access to `game_state` (all player stats), `initial_stats` (starting stat values), `inventory` (item ID array), and `flags` (flag name array). Set `player.stats_changed = {stat = value}` to modify stats, or `player.navigate_to = N` to navigate to a section. See section 7.6 for recognised narrative patterns and their canonical `script` encodings.
+
+**`roll_dice` field rules (strict):** A `roll_dice` event is one of exactly two things — never a mixture, never a bare string:
+1. **Navigation roll.** The dice result maps to a section. `results` MUST be an object whose keys are either single face values (`"1"`, `"6"`) or inclusive ranges (`"1-5"`, `"10-12"`), and whose values are objects of the form `{"target": N, "text": "optional"}`. Never encode `results` as a string or as a bare number. If every face goes to the same section, use a single-choice `choices` array instead of `roll_dice`.
+2. **Stat-application roll.** The dice result is added to or subtracted from a player stat. Use `apply_to_stat: "<stat>"` together with `amount_sign: "positive"` or `amount_sign: "negative"`. Do NOT also set `results` — the emulator will apply the roll directly to the stat and continue to the next event. "Roll 1d6 and lose that many STAMINA" MUST be encoded this way, not as a `custom` event and not as `results: "subtract_from_stamina"` or any other ad-hoc string.
+
+If neither shape fits (e.g., the roll drives multi-step branching logic that touches several stats, or there is a complex lookup table), promote the mechanic to a `script` event and perform the roll inside Lua via `roll('1d6')`.
 
 #### Condition Types
 
@@ -771,6 +777,206 @@ combat.last_damage = 0
 When parsing a book, you MUST write the `round_script` (and `post_round_script` if applicable) as Lua code that implements the book's combat rules. The emulator does not interpret the `type` field — it only executes the scripts. A game file without a `round_script` will have non-functional combat.
 
 Keep scripts concise and readable. Use `log()` to provide the player with clear round-by-round feedback. Store any lookup tables (like the Combat Results Table) in `combat_system.details` rather than hardcoding them in the script.
+
+---
+
+## 7.6. SECTION-LEVEL SCRIPT PATTERNS
+
+This section is a **recognition guide**: it maps common phrasings found in gamebook sections to their canonical structured encoding. When a section's narrative matches one of these patterns, emit the structured event shown. **Do not fall back to `custom` events for any of these patterns** — they are all expressible with standard event types or `script` events using the Lua sandbox.
+
+These patterns recur across many gamebook series (they are especially common in Fighting Fantasy, Sagard the Barbarian, and early Tunnels & Trolls solos, but they appear anywhere the book uses dice and stats). Treat this section as additive to section 7.5 (Combat Scripting) — the same Lua sandbox, but invoked from a section event instead of a combat round.
+
+### Lua sandbox available in `script` events (section-level)
+
+A `script` event's `script_code` runs in the same sandbox as combat scripts, with these globals:
+
+| Global | Type | Description |
+|---|---|---|
+| `game_state` | table | Current values of all player stats, plus `provisions`, `gold`, `meals`. Read-only for navigation decisions. |
+| `initial_stats` | table | Starting values of all player stats (the "Initial" column). Use for "restore to Initial" mechanics. |
+| `inventory` | table | Array of item IDs currently carried. |
+| `flags` | table | Array of flag names currently set. |
+| `items_catalog` | table | Full items catalog from the game data. |
+| `player` | table | Output channel — set `player.stats_changed = {stat = newValue}` and/or `player.navigate_to = N`. |
+| `roll(formula)` | function | Returns `{total=N, rolls={...}, text="..."}`. Pass any dice formula the emulator supports (e.g., `"2d6"`, `"1d6"`, `"R10"`). |
+| `log(msg)` | function | Writes a line to the player-facing log. Use this to report what the script did (rolls, outcomes). |
+
+**Output contract:**
+- To modify stats, assign `player.stats_changed = { stat_name = new_value, ... }`. This replaces the stat values; it does not add to them. Compute the new value inside the script. Only include stats that actually changed.
+- To navigate to a specific section, assign `player.navigate_to = N`. The emulator will navigate immediately after the script returns. Any `choices` list on the section is bypassed when this is set.
+- If neither is set, the emulator continues processing the section's remaining events and choices normally.
+- Use `log()` liberally — every roll, every branch, every stat change the player cares about should be announced. This is the only way the player sees what happened.
+
+### Pattern 7.6.1 — Stat restoration ("restore … to Initial")
+
+**Narrative trigger examples:**
+- "Restore your SKILL and LUCK scores to their Initial levels."
+- "Add 4 STAMINA points, up to your Initial STAMINA."
+- "Your SKILL returns to its Initial value minus 2."
+
+**Encoding decision:**
+- "Add N points, up to Initial" on a single stat → a plain `modify_stat` event is fine; the emulator clamps `initial_is_max` stats at their initial value automatically. Use this form first.
+- "Restore to Initial" with no numeric add, OR "restore to Initial minus N", OR "restore multiple stats at once" — use a `script` event that reads `initial_stats` and sets the new value via `player.stats_changed`.
+
+**Canonical `script` shape:**
+
+```lua
+-- Restore two stats to Initial in one event.
+local new_skl = initial_stats.skill or (game_state.skill or 0)
+local new_lck = initial_stats.luck  or (game_state.luck  or 0)
+player.stats_changed = { skill = new_skl, luck = new_lck }
+log('Stats restored: SKILL -> ' .. tostring(new_skl) .. ', LUCK -> ' .. tostring(new_lck))
+```
+
+For "Initial minus N" variants, compute `initial_stats.<stat> - N` and then `max`/`min` against `game_state.<stat>` to avoid reducing a stat that is already higher than the target.
+
+### Pattern 7.6.2 — Dual- or multi-stat gate ("if total ≤ BOTH X and Y")
+
+**Narrative trigger examples:**
+- "Roll two dice. If the total is less than or equal to both your LUCK and your STAMINA, turn to 7. Otherwise, turn to 166."
+- "Roll 2d6. If the total is less than or equal to your SKILL + LUCK, turn to 200. Otherwise, turn to 340."
+
+**Why not `stat_test`:** `stat_test` compares a roll against a single stat. A `stat_test` cannot express a conjunction of two stats or an arithmetic combination of stats.
+
+**Canonical `script` shape:**
+
+```lua
+local r = roll('2d6')
+local msg = 'Dual test: rolled [' .. r.text .. ']=' .. r.total ..
+  ' vs LUCK ' .. tostring(game_state.luck) .. '/STAMINA ' .. tostring(game_state.stamina)
+if r.total <= (game_state.luck or 0) and r.total <= (game_state.stamina or 0) then
+  log(msg .. ' -- success')
+  player.navigate_to = 7
+else
+  log(msg .. ' -- failure')
+  player.navigate_to = 166
+end
+```
+
+Deduct any stat costs mentioned in the text (e.g., "lose 1 LUCK whether or not you are Lucky") by assigning `player.stats_changed` before `player.navigate_to`.
+
+### Pattern 7.6.3 — Sequential N Luck (or Skill) tests
+
+**Narrative trigger examples:**
+- "Test your Luck three times. If you are Lucky each time, turn to 162. On the first throw that you are Unlucky, turn to 108."
+- "Test your Skill twice. If you succeed both times, you push through; turn to 44. Otherwise, turn to 91."
+
+**Why not N separate `stat_test` events:** Each Luck test deducts 1 LUCK as a side effect (standard FF rule, see 4.Test Your Luck). Chaining `stat_test` events works in principle, but branching on the first failure is hard to express with section-level events alone, and the deduction must propagate across all N tests. A `script` loop handles both cleanly.
+
+**Canonical `script` shape (three Luck tests, first-failure exits):**
+
+```lua
+local function tyl(n)
+  local r = roll('2d6')
+  local cur = game_state.luck or 0
+  local lucky = r.total <= cur
+  game_state.luck = cur - 1  -- standard FF: every Luck test deducts 1, pass or fail
+  log('Luck test ' .. n .. ': [' .. r.text .. ']=' .. r.total ..
+      ' vs LUCK ' .. tostring(cur) .. ' -- ' .. (lucky and 'LUCKY' or 'UNLUCKY'))
+  return lucky
+end
+
+for i = 1, 3 do
+  if not tyl(i) then
+    player.stats_changed = { luck = game_state.luck }
+    player.navigate_to = 108  -- first-failure target
+    return
+  end
+end
+player.stats_changed = { luck = game_state.luck }
+player.navigate_to = 162  -- all-pass target
+```
+
+Note that `game_state.luck` mutations inside the script are local until `player.stats_changed` is assigned — the final assignment is what the emulator applies.
+
+Skill tests follow the same shape but omit the `game_state.skill = cur - 1` line, because Skill tests do not normally reduce SKILL. Always check the book's rules section for any variation.
+
+### Pattern 7.6.4 — Repeated Luck test until success (cost-per-failure loop)
+
+**Narrative trigger examples:**
+- "Test your Luck. If you are Unlucky, lose 1 STAMINA and 1 LUCK and try again until you are Lucky. Then turn to 73."
+- "Keep rolling 2d6 until you roll less than or equal to your SKILL. Each failed roll costs you 1 STAMINA."
+
+**Canonical `script` shape:**
+
+```lua
+local attempts = 0
+while attempts < 50 do   -- loop guard: prevent infinite loops if stats never converge
+  attempts = attempts + 1
+  local r = roll('2d6')
+  local cur = game_state.luck or 0
+  if r.total <= cur then
+    log('Attempt ' .. attempts .. ': [' .. r.text .. ']=' .. r.total ..
+        ' vs LUCK ' .. tostring(cur) .. ' -- LUCKY (broke free)')
+    player.stats_changed = { stamina = game_state.stamina, luck = game_state.luck }
+    player.navigate_to = 73
+    return
+  end
+  -- failure branch: apply the per-attempt cost
+  game_state.luck    = cur - 1
+  game_state.stamina = (game_state.stamina or 0) - 1
+  log('Attempt ' .. attempts .. ': [' .. r.text .. ']=' .. r.total ..
+      ' vs LUCK ' .. tostring(cur) .. ' -- UNLUCKY, -1 STA, -1 LUCK')
+  if (game_state.stamina or 0) <= 0 then
+    -- stamina depleted by the loop; report the death and let the emulator
+    -- end the adventure on the next stat check
+    log('STAMINA depleted by the loop. Adventure ends.')
+    player.stats_changed = { stamina = 0, luck = game_state.luck }
+    return
+  end
+end
+player.stats_changed = { stamina = game_state.stamina, luck = game_state.luck }
+```
+
+**Loop guards are mandatory.** Any `while` or `repeat` loop in a `script` event must have an explicit iteration cap. A pathological stat configuration must not be able to hang the emulator.
+
+### Pattern 7.6.5 — "Roll a die, lose/gain that many points" (NOT a `script`)
+
+**Narrative trigger examples:**
+- "Roll one die and lose that many STAMINA points."
+- "Roll 1d6. Add that many Gold Pieces to your pouch."
+
+**Encoding:** Use a plain `roll_dice` event with `apply_to_stat` and `amount_sign`. Do NOT write a `script` for this — the emulator has direct support and the resulting data is simpler to read and validate.
+
+```json
+{
+  "type": "roll_dice",
+  "dice": "1d6",
+  "apply_to_stat": "stamina",
+  "amount_sign": "negative",
+  "note": "Roll 1d6 and lose that many STAMINA from the poison dart trap."
+}
+```
+
+```json
+{
+  "type": "roll_dice",
+  "dice": "1d6",
+  "apply_to_stat": "gold",
+  "amount_sign": "positive"
+}
+```
+
+If the text says "and then turn to N" after the stat application, let the section's `choices` array handle the navigation (a single choice pointing to N is fine). The `roll_dice` event only handles the dice-and-apply; the navigation comes from the section's choices.
+
+### Pattern 7.6.6 — Gambling / coin-flip games
+
+**Narrative trigger examples:**
+- "Bet any number of Gold Pieces. Roll 2d6 — if you roll 7 or higher, the croupier pays you double; otherwise you lose your bet. You may play as many rounds as you like."
+- "Turn over cards until you score exactly 21, go over, or choose to stop."
+
+**Encoding:** Always a `script` event. Gambling loops typically need multiple rounds, bet input, and stat mutation — none of which the simpler event types support. If the book requires the player to choose how much to bet each round, model the bet as a fixed amount encoded in the script (e.g., "always bet 1 Gold"), or surface a sequence of single-bet sections connected by choices. Interactive mid-script input is NOT supported — `script` events run to completion atomically without pausing.
+
+**Bounds:** Like all loops, gambling scripts MUST cap their total iterations and MUST stop when gold reaches zero.
+
+### Pattern 7.6.7 — When to prefer `custom` after all
+
+Use `custom` **only** if the mechanic meets all of the following:
+- It cannot be expressed as a sequence of existing event types.
+- It cannot be expressed as a bounded Lua script using the sandbox globals above.
+- It is inherently non-mechanical (e.g., "look carefully at the illustration and count the coins you can see" — visual reasoning the emulator cannot perform).
+
+In every other case the correct answer is a structured event or a `script` event. `custom` is the escape hatch, not the default.
 
 ---
 
