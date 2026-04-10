@@ -1264,16 +1264,10 @@ function navigateTo(sectionId) {
   state.currentSection = sid;
   state.visitedSections.add(sid);
 
-  // Check for ending
+  // Check for ending — ending sections always pause for the player
+  // via showEnding's own Play Again button.
   if (section.is_ending) {
     showEnding(section);
-    return;
-  }
-
-  // Check for death
-  const { healthStat: _hs } = getCombatStats();
-  if (_hs && state.stats[_hs] !== undefined && state.stats[_hs] <= 0) {
-    showEnding({ text: `Your ${_hs} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] });
     return;
   }
 
@@ -1284,19 +1278,31 @@ function navigateTo(sectionId) {
   const content = document.getElementById('game-content');
   content.innerHTML = '';
 
-  // Section header
-  const header = document.createElement('div');
-  header.className = 'section-header';
-  header.textContent = `\u2014 ${sid} \u2014`;
-  content.appendChild(header);
+  // Render the section header and text BEFORE checking for death. If
+  // the player arrives here already at 0 health (e.g. they walked into
+  // this section via a choice after a prior event dropped them), we
+  // still want them to see the section's text and then click through
+  // to the ending screen rather than having the screen snap away from
+  // the previous section directly to the death screen.
+  const _header = document.createElement('div');
+  _header.className = 'section-header';
+  _header.textContent = `\u2014 ${sid} \u2014`;
+  content.appendChild(_header);
+  const _textDiv = document.createElement('div');
+  _textDiv.className = 'section-text';
+  _textDiv.innerHTML = formatText(section.text);
+  content.appendChild(_textDiv);
 
-  // Section text
-  const textDiv = document.createElement('div');
-  textDiv.className = 'section-text';
-  textDiv.innerHTML = formatText(section.text);
-  content.appendChild(textDiv);
+  const { healthStat: _hs } = getCombatStats();
+  if (_hs && state.stats[_hs] !== undefined && state.stats[_hs] <= 0) {
+    renderContinueToEnding(
+      { text: `Your ${_hs} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] },
+      `${_hs.toUpperCase()} has reached zero — your adventure is over.`
+    );
+    return;
+  }
 
-  // Process events
+  // Process events (section header and text were already rendered above)
   processEvents(section.events || [], section.choices || []);
 }
 
@@ -1421,10 +1427,43 @@ function handleModifyStat(event) {
 
   updateStatBar();
 
-  // Check for death
+  // Check for death. Instead of jumping straight to the ending screen
+  // (which would hide the section text the player may not have read yet),
+  // pause event processing and render a Continue button that the player
+  // clicks to acknowledge. This way the flow is:
+  //    [section text] -> [STAMINA -2 loss banner] -> [Continue] -> ending
+  // rather than
+  //    [section text briefly visible] -> ending screen (confusing)
   const { healthStat: _hs2 } = getCombatStats();
   if (_hs2 && state.stats[_hs2] !== undefined && state.stats[_hs2] <= 0) {
-    showEnding({ text: `Your ${_hs2} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] });
+    pendingEvents = [];
+    pendingChoices = [];
+    renderContinueToEnding(
+      { text: `Your ${_hs2} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] },
+      `${_hs2.toUpperCase()} has reached zero — your adventure is over.`
+    );
+    return;
+  }
+}
+
+// Render a single "Continue" button that, when clicked, calls showEnding
+// with the supplied section-like object. Used to give the player a beat
+// to read the current section's text, any event banners, and any script
+// log output before the ending screen swaps in.
+function renderContinueToEnding(endingSection, summary) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'continue-area mt-2';
+  area.innerHTML = `
+    <div class="event-msg loss">${summary || 'Your adventure is over.'}</div>
+    <div class="mt-2">
+      <button class="btn btn-large" id="continue-to-ending">Continue</button>
+    </div>
+  `;
+  content.appendChild(area);
+  const btn = document.getElementById('continue-to-ending');
+  if (btn) {
+    btn.addEventListener('click', () => showEnding(endingSection), { once: true });
   }
 }
 
@@ -1538,16 +1577,39 @@ function handleScript(event) {
 
   updateStatBar();
 
-  // If the script requested navigation, honour it now (after stat
-  // changes are already applied).
+  // If the script requested navigation, DO NOT auto-advance. Script
+  // events run atomically from the Lua side, so any dice rolls or
+  // branching logic happens invisibly from the player's perspective.
+  // Instead, show a Continue button so the player can read the section
+  // text and the script's log output before moving on. Clicking
+  // Continue navigates to the requested target.
   if (result.player?.navigate_to) {
-    setTimeout(() => navigateTo(result.player.navigate_to), 1000);
+    const target = result.player.navigate_to;
+    const area = document.createElement('div');
+    area.className = 'continue-area mt-2';
+    area.innerHTML = `
+      <div class="mt-2">
+        <button class="btn btn-large" id="script-continue">Continue</button>
+      </div>
+    `;
+    content.appendChild(area);
+    const btn = document.getElementById('script-continue');
+    if (btn) {
+      btn.addEventListener('click', () => navigateTo(target), { once: true });
+    }
     return;
   }
 
-  // Check for death
+  // Check for death from the script's stat changes. Same pause-for-
+  // Continue pattern as handleModifyStat's death check so the player
+  // sees the section text and log messages before the ending.
   if (healthStat && state.stats[healthStat] !== undefined && state.stats[healthStat] <= 0) {
-    showEnding({ text: `Your ${healthStat} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] });
+    pendingEvents = [];
+    pendingChoices = [];
+    renderContinueToEnding(
+      { text: `Your ${healthStat} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] },
+      `${healthStat.toUpperCase()} has reached zero — your adventure is over.`
+    );
     return;
   }
 
@@ -2079,16 +2141,24 @@ function handleStatTest(event) {
     // Set a flag for test_failed conditions
     window._lastTestResult = success;
 
-    setTimeout(() => {
-      if (success && event.success_to) {
-        navigateTo(event.success_to);
-      } else if (!success && event.failure_to) {
-        navigateTo(event.failure_to);
-      } else {
-        // No navigation target, continue events and show choices
-        processNextEvent();
+    const nextTarget = success ? event.success_to : event.failure_to;
+    if (nextTarget) {
+      // Don't auto-advance. The player clicked Roll and should get to
+      // read the outcome (and the section text above it) before moving
+      // on to the next section.
+      const cont = document.createElement('div');
+      cont.className = 'mt-2';
+      cont.innerHTML = `<button class="btn btn-large" id="stat-test-continue">Continue</button>`;
+      area.appendChild(cont);
+      const cbtn = document.getElementById('stat-test-continue');
+      if (cbtn) {
+        cbtn.addEventListener('click', () => navigateTo(nextTarget), { once: true });
       }
-    }, 1000);
+    } else {
+      // No navigation target, continue to the next event on the same
+      // section; a short delay is fine because we're not swapping pages.
+      setTimeout(() => processNextEvent(), 1000);
+    }
   };
 }
 
@@ -2134,10 +2204,17 @@ function handleRollDice(event) {
       `;
       updateStatBar();
 
-      // Check for death
+      // Check for death from the dice-applied stat loss. Route through
+      // renderContinueToEnding so the player sees the roll result and the
+      // section text before the ending screen swaps in.
       const { healthStat: _hs3 } = getCombatStats();
       if (_hs3 && state.stats[_hs3] !== undefined && state.stats[_hs3] <= 0) {
-        setTimeout(() => showEnding({ text: `Your ${_hs3} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] }), 1000);
+        pendingEvents = [];
+        pendingChoices = [];
+        renderContinueToEnding(
+          { text: `Your ${_hs3} has reached zero. Your adventure is over.`, ending_type: 'death', events: [], choices: [] },
+          `${_hs3.toUpperCase()} has reached zero — your adventure is over.`
+        );
         return;
       }
 
@@ -2176,7 +2253,18 @@ function handleRollDice(event) {
     `;
 
     if (target) {
-      setTimeout(() => navigateTo(target), 1000);
+      // Add a Continue button so the player can read the section text
+      // and the roll result before the next section loads. Don't auto-
+      // advance — the roll already had a click, but a section change
+      // is the point at which the player needs time to read.
+      const cont = document.createElement('div');
+      cont.className = 'mt-2';
+      cont.innerHTML = `<button class="btn btn-large" id="roll-dice-continue">Continue</button>`;
+      area.appendChild(cont);
+      const cbtn = document.getElementById('roll-dice-continue');
+      if (cbtn) {
+        cbtn.addEventListener('click', () => navigateTo(target), { once: true });
+      }
     } else if (matched) {
       // Matched a result but target is null — continue to next event/choices
       setTimeout(() => processNextEvent(), 1000);
@@ -2307,7 +2395,36 @@ function handleInputText(event) {
 
 // ==================== CHOICES ====================
 function showChoices(choices) {
-  if (!choices || choices.length === 0) return;
+  // If the current section has no outgoing choices AND is not an
+  // ending, the player would be stuck — all events have fired and the
+  // screen has no way forward. This is a data bug: the book's section
+  // almost certainly has a "turn to X" instruction that the parser
+  // didn't capture. Surface it as a visible diagnostic with a button
+  // that at least lets the player back out, instead of silently
+  // hanging. The next session should route the specific section
+  // through the codex loop to recover the missing target.
+  if (!choices || choices.length === 0) {
+    const section = gameData?.sections?.[state.currentSection];
+    if (section && !section.is_ending) {
+      const content = document.getElementById('game-content');
+      const diag = document.createElement('div');
+      diag.className = 'event-msg loss mt-2';
+      const reviewNote = section.needs_review
+        ? ' The data parser flagged this section with needs_review=true, which usually means the original "turn to X" instruction was not captured during parsing.'
+        : '';
+      diag.innerHTML = `<strong>Data bug:</strong> section ${state.currentSection} has no outgoing choices and is not marked as an ending.${reviewNote} Please report this to the project maintainers so the section can be re-processed through the codex loop. You can reload the page to start a new adventure.`;
+      content.appendChild(diag);
+      const btnWrap = document.createElement('div');
+      btnWrap.className = 'mt-2';
+      btnWrap.innerHTML = `<button class="btn btn-large" id="dead-end-reload">Reload</button>`;
+      content.appendChild(btnWrap);
+      const rbtn = document.getElementById('dead-end-reload');
+      if (rbtn) {
+        rbtn.addEventListener('click', () => window.location.reload(), { once: true });
+      }
+    }
+    return;
+  }
 
   const content = document.getElementById('game-content');
   const div = document.createElement('div');
