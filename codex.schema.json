@@ -95,13 +95,13 @@
             },
             "death_endings": {
               "type": "array",
-              "items": { "type": "integer" },
-              "description": "Section numbers that are death endings."
+              "items": { "type": ["integer", "string"] },
+              "description": "Section ids that are death endings. Integer or string."
             },
             "victory_endings": {
               "type": "array",
-              "items": { "type": "integer" },
-              "description": "Section numbers that are victory endings."
+              "items": { "type": ["integer", "string"] },
+              "description": "Section ids that are victory endings. Integer or string."
             },
             "total_enemies": {
               "type": "integer",
@@ -293,9 +293,9 @@
 
     "sections": {
       "type": "object",
-      "description": "All game sections, keyed by section number as a string.",
+      "description": "All game sections, keyed by section id. Usually a section number in string form (e.g. '1', '212', '400'), but synthetic sub-sections introduced by multi-section patterns (e.g. codex 7.6.8 subroutine sections with return-to-caller) may use descriptive string IDs like '161_goblin' or '161_return'. IDs must match /^[A-Za-z0-9_]+$/.",
       "patternProperties": {
-        "^[0-9]+$": {
+        "^[A-Za-z0-9_]+$": {
           "$ref": "#/definitions/section"
         }
       },
@@ -494,8 +494,8 @@
           "description": "Choice text as it appears in the book."
         },
         "target": {
-          "type": "integer",
-          "description": "Section number to navigate to."
+          "type": ["integer", "string"],
+          "description": "Section id to navigate to. Usually an integer section number; may be a string id when navigating to a synthetic sub-section introduced by a multi-section pattern (see codex 7.6.8)."
         },
         "condition": {
           "oneOf": [
@@ -586,14 +586,14 @@
           "description": "combat: how multiple enemies are fought.",
           "enum": ["sequential", "simultaneous", "player_choice"]
         },
-        "win_to": { "type": ["integer", "null"], "description": "combat: section to go to on victory." },
-        "flee_to": { "type": ["integer", "null"], "description": "combat: section to go to when fleeing. Null = cannot flee." },
+        "win_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to on victory. Integer or string (see codex 7.6.8 for string sub-section ids)." },
+        "flee_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to when fleeing. Null = cannot flee." },
         "special_rules": { "type": ["string", "null"], "description": "combat: per-encounter special rules in plain English." },
         "interrupt_on_first_player_hit": { "type": "boolean", "description": "combat: if true, redirect after player's first successful wound." },
 
         "method": { "type": "string", "description": "stat_test: test method (e.g., '2d6_under')." },
-        "success_to": { "type": ["integer", "null"], "description": "stat_test, custom: section on success." },
-        "failure_to": { "type": ["integer", "null"], "description": "stat_test, custom: section on failure." },
+        "success_to": { "type": ["integer", "string", "null"], "description": "stat_test, custom: section id on success. Integer or string." },
+        "failure_to": { "type": ["integer", "string", "null"], "description": "stat_test, custom: section id on failure. Integer or string." },
         "deduct_after": { "type": "boolean", "description": "stat_test: deduct from stat after testing." },
         "deduct_stat": { "type": "string", "description": "stat_test: which stat to deduct from." },
         "deduct_amount": { "type": "integer", "description": "stat_test: how much to deduct." },
@@ -618,7 +618,7 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "target": { "type": "integer" },
+              "target": { "type": ["integer", "string"], "description": "Section id to navigate to for this roll result. Integer or string." },
               "text": { "type": "string" }
             }
           }
@@ -646,7 +646,7 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "target": { "type": "integer" }
+              "target": { "type": ["integer", "string"] }
             }
           }
         },
@@ -655,7 +655,7 @@
           "type": "object",
           "description": "input_text: outcome when no answer matches.",
           "properties": {
-            "target": { "type": "integer" },
+            "target": { "type": ["integer", "string"] },
             "text": { "type": "string" }
           }
         },
