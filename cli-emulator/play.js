@@ -284,7 +284,13 @@ function initialState(bookPath) {
     abilities: [],
     potion: null,
     currentSection: null,
+    previousSection: null,
     visitedSections: [],
+    // Stack of caller section ids pushed when the player navigates INTO a
+    // section with `is_subroutine_entry: true`. Popped by the runtime when
+    // a `return_to_caller` event fires in the reference (auto-return)
+    // implementation. Empty by default. See codex section 7.6.8.
+    returnStack: [],
     pause: { type: 'frontmatter' },
     eventQueue: [],
     combat: null,
@@ -444,9 +450,26 @@ function navigateTo(state, book, sectionId) {
     state.pause = { type: 'error', message: `Section ${sid} not found` };
     return state;
   }
+  // Capture the caller before updating currentSection. previousSection is
+  // the section we're LEAVING as this call runs; it will become the
+  // "caller" if the destination is a subroutine entry.
+  const callerId = state.currentSection;
+  state.previousSection = callerId;
   state.currentSection = sid;
   if (!state.visitedSections.includes(sid)) state.visitedSections.push(sid);
   state.lastTestResult = null;
+
+  // Codex 7.6.8 subroutine-entry handling: if the destination section has
+  // is_subroutine_entry: true, push the caller onto returnStack so that a
+  // later return_to_caller event can pop it. Guards against pushing null
+  // (e.g. the player arrived via a debug jump with no prior currentSection
+  // — in that case we leave the stack alone and the return_to_caller
+  // handler falls back to its input_number prompt mode).
+  if (section.is_subroutine_entry && callerId != null) {
+    if (!Array.isArray(state.returnStack)) state.returnStack = [];
+    state.returnStack.push(callerId);
+    state.log.push(`Entered subroutine section ${sid}; return target ${callerId} pushed onto stack (depth ${state.returnStack.length})`);
+  }
 
   if (section.is_ending) {
     state.pause = { type: 'ending', ending_type: section.ending_type, text: section.text };
@@ -536,6 +559,35 @@ function handleEvent(event, state, book) {
       return 'pause';
     case 'script':
       return runScriptEvent(event, state, book);
+    case 'return_to_caller': {
+      // Codex 7.6.8 return_to_caller handling (reference / auto-return
+      // implementation). If the returnStack has a caller on top, pop it
+      // and navigate there. If the stack is empty — because the player
+      // arrived here via a debug jump or other unusual path with no
+      // subroutine-entry push recorded — fall back to the purist
+      // implementation: pause on an input_number so the player can type
+      // the reference they noted. The event's prompt string is carried
+      // through to both paths so a single book JSON works identically
+      // in auto-return and manual-return emulators.
+      if (!Array.isArray(state.returnStack)) state.returnStack = [];
+      if (state.returnStack.length > 0) {
+        const target = state.returnStack.pop();
+        state.log.push(`return_to_caller: popped ${target} from stack (depth now ${state.returnStack.length})`);
+        navigateTo(state, book, target);
+        return 'navigate';
+      }
+      // Graceful degradation: no caller recorded. Prompt the player.
+      state.pause = {
+        type: 'input_number',
+        event: {
+          type: 'input_number',
+          prompt: event.prompt || 'Enter the section reference you noted before the encounter',
+          target: 'computed',
+          note: '(return_to_caller fell back to manual entry — the return stack was empty)',
+        },
+      };
+      return 'pause';
+    }
     case 'custom':
       state.log.push(`Custom event: ${event.description || event.mechanic_name || 'unknown'}`);
       return 'continue';
@@ -1296,6 +1348,8 @@ function compactState(state) {
     abilities: state.abilities,
     potion: state.potion,
     currentSection: state.currentSection,
+    previousSection: state.previousSection,
+    returnStack: state.returnStack,
     visitedSections: state.visitedSections,
     pause: state.pause,
     eventQueue: state.eventQueue,

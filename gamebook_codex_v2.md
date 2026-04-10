@@ -1019,17 +1019,17 @@ end
 - "Only silver weapons will harm this creature. When it inflicts its third wound, return to the section you were at before." — a conditional combat where the outcome feeds back into the prior narrative thread.
 - "Roll to see which kind of creature wandered in..." followed by a roll table that picks one of several enemies, a combat, and an instruction to resume the prior adventure.
 
-These are "subroutine" sections: the book calls them from multiple callers, the section runs a self-contained mechanic, and control returns to the caller. In the printed book, the player is responsible for remembering the caller's reference — it's literally called out in the text ("note the reference").
+These are "subroutine" sections: the book calls them from multiple callers, the section runs a self-contained mechanic, and control returns to the caller. In the printed book the player is explicitly asked to remember the caller's reference ("note the reference on the last page") because the medium has no other mechanism. A digital emulator can either preserve that player-facing experience or relieve the player of it — the pattern below is **implementation-agnostic** so both styles work off the same JSON.
 
-**Encoding decision:** The cleanest decomposition uses only existing structured event types — `roll_dice`, `combat`, and `input_number` — so no `custom` event is needed. Do NOT try to cram the whole mechanic into a single section or a single script event. Instead, split the subroutine into a handful of small sections:
+**Encoding decision:** Decompose the subroutine into a handful of small sections connected by structured event types. The pattern uses three ingredients:
 
-1. **The entry section** holds the book's introductory text and a single `roll_dice` event whose `results` branch to one sub-section per outcome. Its `choices` array is empty (the roll_dice navigates directly).
+1. **The entry section** holds the book's introductory text and a single `roll_dice` event whose `results` branch to one sub-section per outcome. Its `choices` array is empty (the roll_dice navigates directly). The entry section carries the new section-level flag `is_subroutine_entry: true`.
 
 2. **One sub-section per outcome** — e.g., one per row in the book's wandering-monster table. Each sub-section contains exactly one `combat` event with the correct enemy and a `win_to` target pointing at the shared return section. `choices: []`.
 
-3. **One shared return section** with a single `input_number` event using `target: "computed"`. The prompt should tell the player to type the reference they noted before entering the subroutine. On submit, the emulator navigates to the typed section.
+3. **One shared return section** with a single `return_to_caller` event. The event takes an optional `prompt` string that real emulators will display to the player when they need the player to type the caller's reference (see "Emulator implementation styles" below). The return section has `choices: []`.
 
-Because Warlock-style Fighting Fantasy books use every numbered section 1..N with none to spare, the sub-sections and the return section need **string IDs** that don't clash with the book's numbering. Use descriptive prefixed IDs like `"161_goblin"`, `"161_orc"`, `"161_return"`, etc. Schema note: `sections` is an object keyed by string, and the emulator's `navigateTo` accepts any string key, so string IDs work identically to integer IDs for navigation purposes. The CALLING sections' choice targets remain regular integers — only the synthetic sub-sections introduced by this decomposition use string IDs.
+Because most gamebooks use every integer section id with none to spare, the sub-sections and the return section need **string ids** that don't clash with the book's numbering. Use descriptive prefixed ids like `"161_goblin"`, `"161_orc"`, `"161_return"`, etc. The schema's `sections` pattern and every navigation-target field accept `[A-Za-z0-9_]+` string ids. Only the synthetic sub-sections introduced by this decomposition use string ids; the calling sections' choice targets remain regular integers.
 
 **Example shape (abbreviated):**
 
@@ -1050,7 +1050,8 @@ Because Warlock-style Fighting Fantasy books use every numbered section 1..N wit
       }
     }
   ],
-  "choices": []
+  "choices": [],
+  "is_subroutine_entry": true
 },
 "161_goblin": {
   "text": "You must fight the wandering Goblin.",
@@ -1060,19 +1061,31 @@ Because Warlock-style Fighting Fantasy books use every numbered section 1..N wit
   "choices": []
 },
 "161_return": {
-  "text": "The creature is defeated. Enter the section reference you noted before the encounter to resume your adventure.",
+  "text": "The creature is defeated. You may now resume your adventure.",
   "events": [
-    { "type": "input_number", "prompt": "Enter the reference you noted", "target": "computed", "note": "Type the section number you were at before the wandering monster interrupted you." }
+    { "type": "return_to_caller", "prompt": "Enter the section reference you noted before the encounter" }
   ],
   "choices": []
 }
 ```
 
-**Player-responsibility disclosure:** This encoding deliberately puts the burden of remembering the caller on the player, matching the book's design. The player sees the current section number in the emulator UI's section header (single integer, always displayed), is told by the book text to note it, and types it into the return input afterwards. That is the correct level of fidelity — do not try to hide the mechanic behind automatic backtracking. Future emulator versions may grow a genuine return-stack primitive that tracks callers automatically; if that lands, prefer it over `input_number`. Until it does, `input_number` with `target: "computed"` is the canonical encoding because every emulator that supports `input_number` at all already supports it.
+**Emulator implementation styles (both conformant):**
+
+The `return_to_caller` event is **implementation-agnostic**. The book JSON carries the intent ("return the player to the section that called this subroutine") and two pieces of information that emulators may use: the `is_subroutine_entry` flag on the entry section, and the `prompt` text on the return event. An emulator chooses how to realise the return:
+
+- **Auto-return (reference implementation).** Maintain a `returnStack` (or equivalent) in game state. When navigating to a section with `is_subroutine_entry: true`, push the previous section (the caller) onto the stack. When processing a `return_to_caller` event, pop the stack and navigate to the popped value. Display the caller's reference as a confirmation line so the player sees where they're heading. If the stack is empty — e.g. the player reached the return event via a debug jump with no caller on record — fall back to the manual style described next, using `event.prompt` as the input label.
+
+- **Manual return ("purist" implementation).** Ignore `is_subroutine_entry` entirely. When processing a `return_to_caller` event, render a numeric input prompt using `event.prompt` as the label, asking the player to type the reference they noted before entering the subroutine. Navigate to the typed section. This exactly reproduces the book's physical-medium experience.
+
+A single emulator may implement both and switch between them per-session (e.g. an "assist mode" toggle). Crucially, **no book data changes are required** to support either style. The codex always emits the same pattern; the runtime behaviour is the emulator's choice.
+
+**Always write a real prompt.** The `prompt` string on `return_to_caller` is not vestigial documentation for purist emulators — a reference emulator will display it as its graceful-degradation path when the return stack is empty. Write a prompt that works in both contexts: "Enter the section reference you noted before the encounter" is good; "reference return input" is not.
 
 **Why not a single script event:** A `script` event can roll dice and set `player.navigate_to` but cannot spawn a `combat` event at runtime — scripts cannot invoke the emulator's structured combat machinery from inside Lua. If you flatten a subroutine into a single script, you either (a) hard-code one specific enemy and lose the roll-to-pick variety, or (b) reimplement the book's combat system in Lua per section, which duplicates the `combat_system.round_script` and drifts out of sync with the rest of the book's combats. Neither is acceptable. Decompose into sections + `combat` events instead.
 
 **Why not a `custom` event:** `custom` leaves the mechanic unexecutable — the emulator just logs the description and moves on, and because a subroutine section has no outgoing choices of its own (the player is supposed to roll + fight + return), the section becomes a silent dead end. See section 10 Verification Checklist "No silent dead ends" for the general rule. Subroutine sections are one of the most common sources of this bug, which is why they get a dedicated pattern.
+
+**Compatibility note:** An earlier version of this pattern (superseded) used an `input_number` event with `target: "computed"` in the return section and required the player to type the reference unconditionally. A book JSON using that older encoding still validates against the schema and still works in any emulator that supports `input_number` — the two encodings are functionally equivalent for purist-style playback. New parses should always emit `return_to_caller` because it gives reference emulators the information they need for auto-return while still degrading gracefully to the manual prompt.
 
 ### Pattern 7.6.9 — When to prefer `custom` after all
 

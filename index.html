@@ -554,7 +554,12 @@ let state = {
   potion: null,
   potionDoses: 0,
   currentSection: null,
+  previousSection: null,
   visitedSections: new Set(),
+  // Stack of caller section ids pushed when the player navigates INTO a
+  // section with `is_subroutine_entry: true`. Popped by the return_to_caller
+  // event handler. Empty by default. See codex section 7.6.8.
+  returnStack: [],
 };
 
 // ==================== UTILITY ====================
@@ -1323,8 +1328,25 @@ function navigateTo(sectionId) {
     return;
   }
 
+  // Capture the caller before updating currentSection. previousSection
+  // is the section we're LEAVING as this call runs; it will become the
+  // "caller" that's pushed onto the return stack if the destination is
+  // a subroutine entry (codex 7.6.8).
+  const callerId = state.currentSection;
+  state.previousSection = callerId;
   state.currentSection = sid;
   state.visitedSections.add(sid);
+
+  // Codex 7.6.8 subroutine-entry handling. If the destination section
+  // is marked is_subroutine_entry: true, push the caller onto the
+  // return stack so a later return_to_caller event can pop it. Guard
+  // against pushing null — a missing caller just means the player got
+  // here via an unusual path (debug jump, fresh save resume) and the
+  // return_to_caller handler will fall back to a prompt.
+  if (section.is_subroutine_entry && callerId != null) {
+    if (!Array.isArray(state.returnStack)) state.returnStack = [];
+    state.returnStack.push(callerId);
+  }
 
   // Check for ending — ending sections always pause for the player
   // via showEnding's own Play Again button.
@@ -1433,6 +1455,9 @@ function processNextEvent() {
       break;
     case 'script':
       handleScript(event);
+      break;
+    case 'return_to_caller':
+      handleReturnToCaller(event);
       break;
     case 'custom':
       handleCustom(event);
@@ -1684,6 +1709,69 @@ function handleCustom(event) {
   msg.className = 'event-msg info';
   msg.textContent = event.description || 'Special event';
   content.appendChild(msg);
+}
+
+// ==================== RETURN TO CALLER (codex 7.6.8) ====================
+// Reference (auto-return) implementation: pop the last entry off
+// state.returnStack and navigate there. If the stack is empty, fall
+// back to the "purist" implementation by rendering an input_number
+// prompt using the event's `prompt` string, letting the player type
+// the reference they noted before the subroutine.
+//
+// Both implementation styles are codex-conformant. A single book JSON
+// drives both because the prompt text serves as the fallback surface
+// for the reference emulator whenever the stack is unexpectedly empty
+// (debug jumps into a sub-section, manually loaded save state, etc).
+function handleReturnToCaller(event) {
+  const content = document.getElementById('game-content');
+  if (!Array.isArray(state.returnStack)) state.returnStack = [];
+
+  if (state.returnStack.length > 0) {
+    const target = state.returnStack.pop();
+    const msg = document.createElement('div');
+    msg.className = 'event-msg info';
+    msg.textContent = `Returning to section ${target}...`;
+    content.appendChild(msg);
+    // Pause for a Continue click so the player can read the current
+    // section and the "returning to" confirmation before the target
+    // section loads over the top.
+    const wrap = document.createElement('div');
+    wrap.className = 'continue-area mt-2';
+    wrap.innerHTML = `<div class="mt-2"><button class="btn btn-large" id="return-to-caller-continue">Continue</button></div>`;
+    content.appendChild(wrap);
+    const btn = document.getElementById('return-to-caller-continue');
+    if (btn) {
+      btn.addEventListener('click', () => navigateTo(target), { once: true });
+    }
+    return;
+  }
+
+  // Fallback: no caller recorded. Render a numeric input prompt so the
+  // player (who presumably noted the reference per the book's text) can
+  // type it manually. This is the same UX a purist emulator would give
+  // on every return; here it's only reached when the auto-return path
+  // has no data to work with.
+  const area = document.createElement('div');
+  area.className = 'input-area';
+  content.appendChild(area);
+  const promptText = event.prompt || 'Enter the section reference you noted before the encounter';
+  area.innerHTML = `
+    <div class="event-msg info" style="font-style:italic">
+      (return_to_caller fell back to manual entry — the return stack was empty, probably because you jumped here via the debug panel)
+    </div>
+    <h3>${promptText}</h3>
+    <div class="mt-1" style="display:flex;gap:8px;align-items:center;justify-content:center;">
+      <input type="number" id="return-to-caller-input" min="1" placeholder="Enter section number...">
+      <button class="btn btn-small" onclick="submitReturnToCallerFallback()">Submit</button>
+    </div>
+  `;
+  window.submitReturnToCallerFallback = function() {
+    const raw = document.getElementById('return-to-caller-input')?.value;
+    if (!raw) return;
+    const num = parseInt(raw, 10);
+    if (Number.isNaN(num)) return;
+    navigateTo(num);
+  };
 }
 
 // ==================== CHOOSE ITEMS ====================
@@ -2649,9 +2737,12 @@ function playAgain() {
     potionDoses: 0,
     abilities: [],
     currentSection: null,
+    previousSection: null,
     visitedSections: new Set(),
+    returnStack: [],
   };
   window._lastTestResult = null;
+  window._forcedRollQueue = [];
   showScreen('load-screen');
 }
 
@@ -2711,6 +2802,7 @@ function updateDebug() {
       <div><span class="debug-label">Inventory:</span> ${state.inventory.length > 0 ? state.inventory.map(i => _escapeHtml(getItemName(i))).join(', ') : 'empty'}</div>
       <div><span class="debug-label">Last test:</span> ${window._lastTestResult === null || window._lastTestResult === undefined ? 'n/a' : window._lastTestResult ? 'success' : 'failure'}</div>
       <div><span class="debug-label">Forced rolls:</span> ${_escapeHtml(queueStr)}</div>
+      <div><span class="debug-label">Return stack:</span> ${(state.returnStack && state.returnStack.length > 0) ? state.returnStack.map(_escapeHtml).join(' > ') : '(empty)'}</div>
       <div><span class="debug-label">Visited:</span> ${visited}</div>
     </div>
 
@@ -2967,7 +3059,12 @@ function serializeState() {
     abilities: [...(state.abilities || [])],
     meals: state.meals ?? 0,
     currentSection: state.currentSection,
+    previousSection: state.previousSection ?? null,
     visitedSections: [...state.visitedSections],
+    // Serialize the return stack so a save mid-subroutine reloads cleanly
+    // — otherwise the auto-return path would lose the caller on the
+    // first return_to_caller event after a load.
+    returnStack: [...(state.returnStack || [])],
     _lastTestResult: window._lastTestResult ?? null,
   };
 }
@@ -2984,7 +3081,9 @@ function deserializeState(obj) {
   state.potionDoses = obj.potionDoses ?? 0;
   state.abilities = obj.abilities || [];
   state.currentSection = obj.currentSection || null;
+  state.previousSection = obj.previousSection ?? null;
   state.visitedSections = new Set(obj.visitedSections || []);
+  state.returnStack = Array.isArray(obj.returnStack) ? [...obj.returnStack] : [];
   window._lastTestResult = obj._lastTestResult ?? null;
 }
 

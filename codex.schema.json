@@ -481,6 +481,10 @@
         "needs_review": {
           "type": "boolean",
           "description": "If true, this section was flagged for human review during parsing."
+        },
+        "is_subroutine_entry": {
+          "type": "boolean",
+          "description": "If true, this section is the entry point of a subroutine — a self-contained mechanic (wandering monster table, silver weapon combat, re-roll loop, etc.) that the player returns from afterwards. Emulators that implement auto-return should capture the caller (the section the player came from) when navigating to this section, and use it as the destination for any `return_to_caller` event encountered later in the subroutine's execution. Emulators that implement manual return (the 'purist' style, asking the player to type the reference they noted) may ignore this field entirely. Default false. See codex section 7.6.8 for the full pattern."
         }
       }
     },
@@ -553,6 +557,7 @@
             "eat_meal",
             "choose_items",
             "script",
+            "return_to_caller",
             "custom"
           ]
         },
@@ -634,7 +639,7 @@
         },
         "post_combat": { "type": "boolean", "description": "roll_dice: if true, this roll occurs after a combat in the same section." },
 
-        "prompt": { "type": "string", "description": "input_number, input_text: prompt text shown to the player." },
+        "prompt": { "type": "string", "description": "input_number, input_text, return_to_caller: prompt text shown to the player. For return_to_caller this text is displayed by 'purist' emulators asking the player to type the reference they noted, and by 'reference' emulators as a graceful-degradation surface when the return stack is empty (e.g. the player arrived via a debug jump with no caller recorded). Always write a real, readable prompt — never a placeholder." },
         "target": {
           "description": "input_number: 'computed' means navigate to the entered number.",
           "type": "string",
