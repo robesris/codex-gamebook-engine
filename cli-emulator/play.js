@@ -1159,16 +1159,21 @@ function runCombatRound(forcedRollsArg, state, book) {
   const { attackStat } = getCombatStats(book);
   if (attackStat) playerData.attack = state.stats[attackStat] || 0;
 
-  // Apply passive equipment (when:"always")
+  // Apply passive equipment (when:"always"). The canonical shape of
+  // stat_modifier per the codex section 2.5 is
+  //   { "stat": "<stat name>", "amount": <number>, "when": "always|combat|equipped" }
+  // where `stat` is a STRING NAMING the target stat and `amount` is
+  // the bonus/penalty to add. An earlier version of this code walked
+  // Object.entries(item.stat_modifier) and treated every key as a
+  // stat name, which set playerData.stat = "endurance" and
+  // playerData.amount = 2 instead of applying an ENDURANCE bonus.
+  // Now we read the structured fields directly.
   const catalog = book.items_catalog || {};
   for (const itemId of state.inventory) {
     const item = catalog[itemId];
-    if (item?.stat_modifier?.when === 'always') {
-      for (const [k, v] of Object.entries(item.stat_modifier)) {
-        if (k !== 'when' && k !== 'effect') {
-          playerData[k] = (typeof playerData[k] === 'number') ? playerData[k] + v : v;
-        }
-      }
+    const sm = item?.stat_modifier;
+    if (sm && sm.when === 'always' && typeof sm.stat === 'string' && typeof sm.amount === 'number') {
+      playerData[sm.stat] = (typeof playerData[sm.stat] === 'number' ? playerData[sm.stat] : 0) + sm.amount;
     }
   }
 
