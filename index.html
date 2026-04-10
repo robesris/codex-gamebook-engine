@@ -781,18 +781,29 @@ const LuaEngine = (function() {
     const L = createSandbox();
     const logs = [];
 
-    // Register roll() function
+    // Register roll() function.
+    //
+    // Dice results (`total` and the per-die values in `rolls`) are
+    // pushed as Lua INTEGERS, not floats. The Lone Wolf round_script
+    // (and any other combat system that looks up a combat-results
+    // table by the roll value as a string key) does
+    //     combat_results_table[cr_key][tostring(rval)]
+    // and Lua 5.3's tostring() distinguishes integers from floats —
+    // tostring(9) is "9" but tostring(9.0) is "9.0". If we pushed die
+    // rolls as lua_pushnumber (which promotes to double) the lookup
+    // would silently miss every row of the CRT, dealing zero damage
+    // to both sides and hanging the combat forever.
     lua.lua_pushcfunction(L, function(L) {
       const formula = to_jsstring(lua.lua_tostring(L, 1));
       const result = rollDice(formula);
       lua.lua_createtable(L, 0, 3);
       lua.lua_pushstring(L, to_luastring('total'));
-      lua.lua_pushnumber(L, result.total);
+      lua.lua_pushinteger(L, result.total);
       lua.lua_settable(L, -3);
       lua.lua_pushstring(L, to_luastring('rolls'));
       lua.lua_createtable(L, result.rolls.length, 0);
       for (let i = 0; i < result.rolls.length; i++) {
-        lua.lua_pushnumber(L, result.rolls[i]);
+        lua.lua_pushinteger(L, result.rolls[i]);
         lua.lua_rawseti(L, -2, i + 1);
       }
       lua.lua_settable(L, -3);
@@ -840,13 +851,13 @@ const LuaEngine = (function() {
       const d = new Date();
       lua.lua_createtable(L, 0, 3);
       lua.lua_pushstring(L, to_luastring('wday'));
-      lua.lua_pushnumber(L, d.getDay() + 1); // JS 0..6 (Sun..Sat) -> 1..7
+      lua.lua_pushinteger(L, d.getDay() + 1); // JS 0..6 (Sun..Sat) -> 1..7
       lua.lua_settable(L, -3);
       lua.lua_pushstring(L, to_luastring('hour'));
-      lua.lua_pushnumber(L, d.getHours());
+      lua.lua_pushinteger(L, d.getHours());
       lua.lua_settable(L, -3);
       lua.lua_pushstring(L, to_luastring('minute'));
-      lua.lua_pushnumber(L, d.getMinutes());
+      lua.lua_pushinteger(L, d.getMinutes());
       lua.lua_settable(L, -3);
       return 1;
     });
