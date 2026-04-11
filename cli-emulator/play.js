@@ -2,6 +2,9 @@
 /**
  * Codex Gamebook Engine — CLI Emulator
  *
+ * Version: 2.1.0
+ * Compatible with codex doc >= 2.1
+ *
  * Stateless command-line emulator for GBF game data files.
  * Each invocation takes a state JSON + an action and outputs a new state.
  *
@@ -20,6 +23,8 @@
  */
 
 'use strict';
+
+const CODEX_EMULATOR_VERSION = '2.1.0';
 
 const fs = require('fs');
 const path = require('path');

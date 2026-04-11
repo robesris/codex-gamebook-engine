@@ -1,5 +1,30 @@
-# THE GAMEBOOK CODEX v2.0
+# THE GAMEBOOK CODEX v2.1
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
+
+---
+
+## CODEX VERSION AND COMPATIBILITY
+
+**Codex version:** 2.1
+
+This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
+
+**Expected canonical artifacts:**
+
+| Artifact | Version | Canonical path |
+|---|---|---|
+| `codex.schema.json` (GBF format) | ≥ 1.0.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 2.1.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 2.1.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 2.1.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+
+The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
+
+**How to fetch without staleness:** GitHub's raw-content CDN (`raw.githubusercontent.com/.../main/...`) caches mutable branch URLs and can return stale content silently. To avoid this, fetch canonical artifacts using **commit-pinned URLs** of the form `raw.githubusercontent.com/robesris/codex-gamebook-engine/<commit-sha>/<path>`. Content at a specific commit SHA is immutable under git's content-addressed model, so the CDN cannot serve a stale version. Commit pins for the versions above will be published in the repo's release notes.
+
+**If the user is uploading canonical artifacts directly**, verify each file's embedded version constant after loading. A file named `play.js` with `const CODEX_EMULATOR_VERSION = "2.0.3"` cannot be used with a codex doc that requires `≥ 2.1.0` — warn the user and offer to either: (a) load a newer version, (b) proceed with the older tool and avoid features it doesn't support, or (c) switch to a codex doc version that matches the tool.
+
+**Version mismatches are warnings, not errors.** Users may legitimately run forks or older releases. Surface the mismatch clearly, explain the consequences, and defer to the user's decision.
 
 ---
 
@@ -28,6 +53,56 @@ Ask the user to provide their gamebook in one of these formats:
 - **Provide a URL** to a text version of the book
 - **Upload structured data** (XML, HTML, or other machine-readable format)
 - **Upload an existing GBF JSON file** for review, correction, or upgrade (see Step 3a)
+
+### Step 2a: Optional Resources Checklist
+
+Once the source is confirmed, ask whether the user has any of these optional supporting resources. None are required, but each meaningfully improves output quality when available:
+
+- **Walkthrough or solution path.** Lets you verify canonical section targets, catch OCR-induced number errors, and identify the book's intended "good ending." Particularly valuable for verifying combat `win_to`/`flee_to` routing and multi-branch pick-a-number events.
+- **Errata list.** Corrections the publisher or fan community has issued since print. Apply these as you parse so the output reflects the corrected book, not the flawed original.
+- **Reference sheet or character sheet scan.** Sometimes contains rules the main text doesn't, including stat ranges, item effects, and combat modifiers.
+- **Existing GBF JSON of an earlier book in the same series.** Can seed the items catalog, enemies catalog, character creation rules, and rules block, since books in a series share most mechanics.
+- **Canonical emulator access** for self-testing (optional but strongly recommended — see Tier 2+ below). Let the user know you can either fetch the emulator directly from the canonical repository or accept an upload of the tool files. Warn that direct fetches from GitHub's raw-content CDN can return stale versions, and that uploads are more reliable if they can be done conveniently. See the "Codex Version and Compatibility" section above for version pinning.
+
+Frame this as a short checklist, not a blocking gate. If the user has none of these, the codex still works — just with less corroboration. Take a beat to note anything the user provides so you can cross-reference it later in the process.
+
+### Step 2b: Development Tier Selection
+
+Before parsing begins, ask the user how thorough they'd like the development loop to be. This affects both quality and budget, and matters especially for users on Free or Pro accounts with message limits. Offer four tiers and default to **Standard** unless the user expresses a preference.
+
+**Tier 1 — Minimal / Budget.** Single parser pass, no emulator testing, no self-iteration. Produces the main `<book>.json` file with the basic structure, front matter, and section encoding that a regex-driven parser can extract from clean source text. Catches obvious loot, combat, choices, and conditional routing; misses nuanced multi-event sections that require semantic understanding. Quality: roughly 70–80% of a fully hand-iterated file. Cost: predictable and low.
+
+**Tier 2 — Standard (recommended default).** Everything in Tier 1, plus:
+- Boot the book in the canonical emulator to verify it loads
+- Run a coverage probe playbook (navigates into every section via `manual_set` and verifies no errors)
+- Walk a scripted happy-path playbook from character creation through the first few sections and first combat
+- Fix anything the probe or smoke test surfaces (dead-ends, target errors, missing endings, character creation bugs)
+- Produce `<book>.json` + `<book>_probe.script` + `<book>_smoke.script` as deliverables
+
+Quality: roughly 85% of hand-iterated. Cost: Tier 1 plus roughly 20–30%. This is the best cost-to-quality balance for most users.
+
+**Tier 3 — Thorough.** Everything in Tier 2, plus:
+- One or more scripted playthroughs from start to a real ending, using the walkthrough if provided
+- Observes player state (health, inventory, gold, flags) at each step and fixes sections where narrative and state drift apart — this is how you catch the multi-event bugs that regex parsing misses
+- One targeted playthrough of each combat to verify `win_to` / `flee_to` routing matches the post-combat text
+- Produces `<book>.json` + probe + smoke + one or more `<book>_runN.script` files
+
+Quality: roughly 92% of hand-iterated. Cost: Tier 2 plus roughly 2× (the test-fix-retest loop is the expensive part). Best for books the user wants to actually play end-to-end.
+
+**Tier 4 — Max.** Everything in Tier 3, plus:
+- Multiple branch-exploring playthroughs, each taking a different mid-game route, to surface bugs in branches the happy path doesn't visit
+- Walkthrough cross-referencing if available (verify each playthrough follows the walkthrough's canonical path)
+- Full regression harness: every fix re-verifies all previous playbooks still pass
+- Optional delegation of the parser-build phase to a sub-agent for parallelism
+- Produces `<book>.json` + probe + smoke + multiple `<book>_runN.script` files + a short development log summarising what was tested, what was fixed, and any remaining known issues
+
+Quality: approaches or exceeds a fully hand-iterated file. Cost: Tier 3 plus another 2–3× — approaches the cost of a full dev-loop session.
+
+**Pause-and-upgrade mode.** Users who are unsure how much they can afford should be offered a "start with Tier N and pause before upgrading" mode. After completing each tier, save the current book JSON to disk and ask the user whether they want to continue to the next tier. This lets a user step out at any point with a usable artifact.
+
+**Resumability.** Between tiers, always save the current state of the book file and any playbook deliverables so a future session (or a next-day session after hitting a daily message limit) can resume without redoing earlier work. If the user hits a limit mid-tier, leave a short note describing the last completed step and what the next step would be.
+
+**Honesty about estimates.** Any message-count estimates in your tier descriptions should be labeled as rough. Actual counts depend heavily on book size, source quality, and how many bugs the parser catches vs. needs guided fixes. You may refine the estimate after completing Tier 1 and re-quote for the upper tiers.
 
 ### Step 3: Assess Source Quality
 Once the source is available, evaluate it:
@@ -136,6 +211,93 @@ For each section you parse, you should be able to point to where in the source d
 
 ### Rule 5: Schema Is Authoritative
 The GBF JSON Schema (`codex.schema.json`) is the single source of truth for the output format. You must read it completely before generating any output. If any JSON example in this Codex document conflicts with the schema, the schema wins. Do not rely on examples alone — always verify field names, types, required fields, and structural conventions against the schema. Treat the schema as a menu of capabilities: if the book contains a mechanic and the schema defines a way to represent it, use the structured representation rather than `custom` events or narrative-only descriptions.
+
+### Rule 6: Never Echo Book Narrative into Your Own Model Output
+
+This is both a quality rule and a safety rule. **Do not quote, summarize, or paraphrase book narrative text in your own prose output.** Specifically:
+
+- Do not write sentences like "In section 42, the player finds a sword in the corner of the ruined tower and..." Instead write "Section 42: add_item sword. Continue to section 87." Describe mechanics, not narrative.
+- Do not compose JSON output containing all your narrative-bearing sections inside a single `Write` tool call. Instead, write narrative text to a structured intermediate file (see Rule 7) and have a script or tool copy it from disk into the final JSON. Narrative should flow **file → file**, not through model output tokens.
+- Do not read large ranges of book text into your own context to "think about" sections. Read enough to understand format and edge cases (typically 15–25% of the source), then build a parser and let it process the rest from disk.
+- When you need to quote from the source to explain a decision to the user, quote the specific short phrase that informed the decision (e.g., "the text 'deduct 3 from COMBAT SKILL' means the Burrowcrawler has `special_rules: \"Deduct 3 from COMBAT SKILL for this fight.\"`"), not whole paragraphs.
+
+**Why this matters.** The cumulative density of narrative text in your context plus your output is scored by safety classifiers running alongside the API. Dark-themed gamebooks — Lone Wolf, many Fighting Fantasy titles, horror-inflected CYOA — can accumulate enough violence/fear/death imagery across 300+ sections that a long single-session run will eventually trip the classifier mid-generation, even on a turn that isn't individually problematic. The trip is abrupt and unrecoverable mid-message: the session returns a 400 error and loses the in-progress output. Following this rule dramatically reduces the risk. It also reduces your overall token cost, since you don't pay to re-emit source content that's already on disk.
+
+**Mitigation tactics if you hit cumulative-context pressure:**
+- Chunk the work into ranged slices and process each in a fresh sub-session (e.g., sections 1–80, then 81–160, etc.)
+- Use file-to-file transformations rather than in-model transformations
+- When summarizing progress, use numeric/structural language ("sections 1–50 parsed; 3 bugs fixed; probe passing") rather than narrative ("the player escapes the burning monastery and...")
+- When debugging a specific section, read it, make the fix, and immediately clear it from your working context — do not let it linger across many subsequent turns
+
+### Rule 7: Prefer Parser-Driven Conversion for Text Sources
+
+For any source that has been or can be converted to a clean text dump (digital PDF → `pdftotext`, Project Aon XML, HTML, etc.), **build a parser script and run it on disk** rather than reading every section into context and encoding it manually. This is the single biggest quality and cost improvement you can make, and it is described in detail in Section 9.5 below.
+
+Parser-driven conversion is not a shortcut. It is the recommended primary workflow for Tier 1 and above on clean text sources. The parser handles the mechanical cases (item pickups, dice rolls, combat stat blocks, simple choices) reliably and leaves you free to focus context budget on the subtle cases (multi-event sections, conditional sequences, narrative CS modifiers) where human judgment is needed.
+
+For scanned/vision sources where parser-driven conversion is less effective, fall back on systematic per-section reading — but still avoid echoing the narrative into your output (Rule 6).
+
+### Rule 8: Extract Enemy Special Rules Verbatim from the Section Text
+
+When a combat event has a `special_rules` field, the text of that field must come from the specific enemy's section in the book, not from a template or a memory of similar enemies elsewhere. A common failure mode is templated special rules: an LLM encodes one Vordak correctly with "Deduct 2 from COMBAT SKILL unless you have Mindshield. Enemy is immune to Mindblast." and then copy-pastes that same string onto unrelated enemies (Burrowcrawlers, Gourgaz, wild animals) that don't actually share those rules.
+
+The rule: for every combat event, open the section that introduces the enemy, find the specific sentences that describe any combat modifications, and copy those sentences (or a faithful paraphrase of them) into `special_rules`. If the section has no such text, set `special_rules: null`. Do not invent rules, do not reuse rules from a similar encounter, and do not assume rules based on the enemy's type.
+
+If you find yourself writing the same special_rules string on multiple enemies, audit whether the book actually says that for each of them, or whether you're templating. Templating is an error.
+
+### Rule 9: Multi-Event Sections
+
+A single section often contains several mechanical effects in one incident. For example: "the explosion throws you against the wall; you lose 6 ENDURANCE, and your COMBAT SKILL is permanently reduced by 1 from the injury. The Vordak Gem shatters." This section has three events:
+
+1. `modify_stat` endurance −6
+2. `modify_stat` combat_skill −1 (permanent)
+3. `remove_item` vordak_gem
+
+A regex parser will typically catch one of these — usually the first or most literal — and miss the others. When reviewing parser output, actively scan for sentences that describe multiple effects and verify the event list covers all of them. Watch for conjunctions like "and you also," "as well as," "in addition," "permanently," "forever," "also lose," and similar — these are strong signals of multi-event sections.
+
+The pattern: **each independent mechanical effect in the narrative needs its own event in the list.** If the narrative describes N changes to player state, the events array should contain N events (not 1 event with a free-text description covering all of them).
+
+### Rule 10: Enemy ID Naming Discipline
+
+Use a consistent, readable convention for enemy catalog IDs. The recommended convention in this project is:
+
+```
+<enemy_name_snake_case>_s<section_number>
+```
+
+For example: `kraan_s229`, `gourgaz_s255`, `burrowcrawler_s170`. The `_s<N>` suffix makes it immediately obvious which section first introduces the enemy, and the `s` disambiguates the section-number suffix from any numeric trailing the enemy name (e.g., `giak_1_s208` for "Giak #1 in section 208").
+
+Why a section-based suffix rather than a global enemy index: the same enemy name (Giak, Kraan, Vordak, Helghast) appears in many different sections with different stats. A suffix keyed to the introducing section guarantees uniqueness and makes cross-referencing trivial when debugging. A global index (`giak_01`, `giak_02`, ...) loses this cross-referenceability and is prone to collisions across codex runs.
+
+When the same enemy ref is used by multiple sections (e.g., a named enemy that participates in several encounters), reuse the ID from the section that first introduces the enemy with a full stat block. Do not duplicate the catalog entry.
+
+### Rule 11: Starting Resources That Require Rolls Are Character Creation Steps
+
+If the rules/equipment section of the book instructs the player to roll for starting gold, starting equipment, starting spells, or any other resource at character creation, the corresponding `character_creation.steps` entry MUST be a concrete step with an action that triggers the roll (typically `roll_stat` with a formula like `R10`, `1d6`, or `2d6`). Do not encode it as a `set_resource` with `amount: 0` and a descriptive `source` field — that leaves the player with zero of the resource because the step has no side effect the emulator can execute.
+
+Concrete example: Lone Wolf 1's equipment pages say "pick a number from the Random Number Table. This number equals the number of Gold Crowns you possess at the start of the adventure." The correct character_creation step is:
+
+```json
+{
+  "action": "roll_stat",
+  "stat": "starting_gold_crowns",
+  "formula": "R10",
+  "source": "Pick R10; the number equals Gold Crowns in the Belt Pouch at start."
+}
+```
+
+Not:
+
+```json
+{
+  "action": "set_resource",
+  "resource": "gold_crowns",
+  "amount": 0,
+  "source": "Pick R10 for starting Gold Crowns..."
+}
+```
+
+The general rule: if the rules text uses the word "pick," "roll," or "choose" to determine an initial resource quantity, the character_creation step must be one that actually prompts the player (or script) to produce that quantity.
 
 ---
 
@@ -1326,6 +1488,118 @@ During processing, periodically verify you are reading from the source:
 - Choice target numbers should appear literally in the source
 - If you find yourself "filling in" text you haven't read, STOP and flag it
 
+### 9.5 Parser-Driven Workflow (Recommended for Clean Text Sources)
+
+For any source that can be extracted to a clean text dump, the recommended primary workflow is to build a parser script and let it process the full text on disk. This keeps the book's narrative out of your own context and output tokens (see Rule 6) and produces a structurally correct first pass much faster than per-section manual encoding.
+
+The workflow has these phases:
+
+**Phase A: Extract.** Convert the source to a text dump on disk. For PDFs, use a tool like `pdftotext -layout <src.pdf> <dst.txt>` (from poppler-utils) or equivalent. For XML/HTML sources, the text is already available. The dump should preserve enough layout to distinguish section headers from page headers/footers — `-layout` is usually the right flag.
+
+**Phase B: Sample and understand format.** Read selectively from the dump to understand its structure:
+
+- The first ~200 lines (title page, copyright, TOC, beginning of front matter)
+- The game rules / character creation pages (usually 50–150 lines)
+- A handful of representative sections as reference (section 1, plus 5–10 random samples; ~300 lines total)
+- The errata / back matter section, if present (~50 lines)
+- A handful of sections with specific features you'll need to handle (one with combat, one with a dice roll, one with a multi-target conditional choice, one with an ending banner)
+
+Total sample size: typically 600–900 lines, which is 10–20% of a 5000-line dump. This is the only narrative you should need in your own context.
+
+**Phase C: Build the parser script.** Write a Python (or JavaScript) script that:
+
+1. Locates section markers (usually a single integer on its own line, with layout disambiguation to distinguish real section headers from page numbers and running headers — see Rule 4)
+2. Slices text between markers into per-section raw text
+3. Cleans hyphenation, page headers/footers, and whitespace
+4. For each section, extracts structured events:
+   - **Choices**: regex for "turn to N" / "go to N" / "turn to page N"
+   - **Combat**: regex for enemy stat blocks (`NAME: COMBAT SKILL <n> ENDURANCE <n>` or `Name (STAMINA <n>, SKILL <n>)` depending on series)
+   - **Item pickups**: regex for "you find/discover/grab/take a(n)? X" cross-referenced against a known item vocabulary, with Action-Chart markings as corroboration
+   - **Stat changes**: regex for "lose N ENDURANCE" / "gain N STAMINA" / "deduct N from X" / "add N to X"
+   - **Gold/currency changes**: regex for "(find|take|gain|receive) N Gold Crowns" (positive) and "(lose|pay) N Gold Crowns" (negative)
+   - **Dice rolls**: regex for "pick a number from the Random Number Table" / "roll two dice" followed by branch conditions with ranges
+   - **Meals**: regex for "you must eat a Meal" / "instructed to eat"
+   - **Endings**: regex for known ending phrases ("your adventure is over," "your quest ends here," "you have failed," etc.)
+   - **Conditional choices**: regex for "If you have the Kai Discipline of X" / "If you possess a Y" / "If you have more than N gold"
+5. Applies per-section side effects from the context around each match (e.g., a "lose 3 ENDURANCE" inside an `if you pick 0-4` clause is part of a `roll_dice` branch, not a top-level event)
+6. Populates items_catalog and enemies_catalog as it encounters them
+7. Validates all choice targets and event targets resolve to existing sections
+8. Writes a structured intermediate file (e.g. `parsed_sections.json`) containing all 350 sections with text, events, choices, and is_ending flags
+
+**Phase D: Iterate the parser.** Run the parser, inspect its summary statistics (section count, event count by type, missing targets, dead-ends without endings), and spot-check its output for a handful of specific sections you know the correct answer for. Fix parser bugs until:
+
+- Section count matches the expected total (from the book's own "N numbered sections" declaration or the last numbered section)
+- There are no missing targets (every choice.target and every event.win_to/flee_to/target resolves)
+- Every section is either an ending or has at least one outgoing path
+- Summary stats look plausible (combat sections ≈ expected, item catalog covers the items mentioned in the rules page, etc.)
+
+This phase typically takes several parser-iterate cycles but each cycle is cheap because it's just script edits and reruns — no book re-reading.
+
+**Phase E: Wrap into GBF shape.** Write a small wrapper script that loads `parsed_sections.json` and assembles the final book JSON with the metadata, rules, character_creation, items_catalog, and enemies_catalog blocks (populated from the information you captured while sampling in Phase B). This wrapper is pure code — no book narrative in your context or output. It reads the parsed intermediate file from disk and writes the final GBF to disk in one file-to-file transfer.
+
+**Phase F: Smoke check.** If you're operating at Tier 2 or higher, proceed to Section 9.6 (Self-Testing) to verify the file boots in the emulator. If you're operating at Tier 1, do at least a JSON-validity check and schema validation before declaring completion.
+
+**Quality envelope.** A well-built parser handles 70–80% of the encoding work correctly on the first pass: combat stat blocks, simple stat/gold changes, simple item pickups, simple choices, basic conditional choices on Kai Disciplines, basic dice-roll branches, and endings. It misses about 20–30% of the nuanced work: multi-event sections (Rule 9), narrative CS modifiers ("as the creature is wounded, deduct 2 from its COMBAT SKILL"), conditional text-embedded penalties ("if you do not have a torch..."), and any mechanic that requires semantic understanding of "what this sentence means" beyond literal keyword matching. Tiers 2 and 3 close these gaps through the emulator test loop.
+
+### 9.6 Self-Testing with the Canonical Emulator (Tier 2+)
+
+At Tier 2 and above, you should run the produced book file through the canonical emulator as part of the dev loop. The emulator executes playbook scripts against the book and reports any errors it finds (missing targets, failed combat routing, character creation step mismatches, dead ends, state drift). This test loop is what closes the gap between "parser got the obvious cases" and "every branch actually plays correctly."
+
+**Required tools.** This workflow needs Node.js and the canonical CLI emulator (`cli-emulator/play.js` and `cli-emulator/replay.js`). If the user's environment does not have Node.js available, the self-test loop is not possible and you should downgrade to Tier 1 and explain the situation. If the emulator files are not already on the filesystem, fetch or request them per the Codex Version and Compatibility section above.
+
+**The test artifacts.** At a minimum, generate three playbook scripts alongside the book:
+
+1. **`<book>_smoke.script`** — a tiny ~10-line scripted playthrough that runs character creation (with `provide_roll` for each roll step), asserts the player lands on the first section, navigates two or three obvious choices, and stops. This is the "does the book boot" test. Almost any bug in character_creation or the first section's encoding will surface here.
+
+2. **`<book>_probe.script`** — a coverage probe that uses the emulator's `manual_set currentSection <N>` debug action to jump into every numbered section and verify that section renders without errors. Combined with `# ignore_endings` so that death/victory sections don't halt the run. This catches: sections that reference unknown items in events, events referencing nonexistent stats, dead-end sections without is_ending, combat events referencing unknown enemy_refs, and character-creation step order bugs that only surface on some sections. The probe is the cheapest and highest-value structural test you can run.
+
+3. **`<book>_run1.script`** — a real playthrough from character creation through at least one scripted combat to an ending. Uses `choose_section <N>` to pick choices, `attack <N>` to force combat rolls, and `# expect section=N` checkpoints to verify the playthrough reaches each expected section. At Tier 2 this is a happy-path run of 20–40 turns; at Tier 3 it's a full walkthrough from section 1 to a real ending; at Tier 4 it's one of several runs exercising different mid-game branches.
+
+**The test-fix loop.** Run each playbook with `node cli-emulator/replay.js <playbook> <logfile>`. For each reported error:
+
+1. Identify the section that failed and the type of failure (missing target, wrong event, wrong condition, combat routing, etc.)
+2. Fix the book file directly with Edit or via a short Python script that patches the affected section
+3. Re-run the playbook to verify the fix
+4. Re-run any previously-passing playbooks to make sure the fix didn't regress something else
+
+At Tier 3 and above, add a new `expect` checkpoint every time you observe player state drifting from the narrative. For example, if a section's text says "you lose 2 ENDURANCE from the briars" and your playthrough script doesn't observe an ENDURANCE drop at that section, add a `# expect stat:ENDURANCE=<n>` line there and re-run. The checkpoint will fail until you add the missing `modify_stat` event to the section. This is the mechanism by which the test loop discovers the multi-event bugs that the parser missed.
+
+**When to stop iterating.** Declare Tier 2 complete when the probe is green on all sections and the smoke script reaches its final checkpoint with zero errors. Declare Tier 3 complete when at least one full playthrough reaches a real ending with every narrative-described state change accounted for by a corresponding event checkpoint. Declare Tier 4 complete when several playthroughs exercising different branches all pass.
+
+**Classifier safety during self-testing.** The test loop adds emulator output to your context (section transitions, stat changes, combat results, checkpoint pass/fail lines), but emulator output is overwhelmingly numeric and structural — not narrative. It is much "cooler" than reading source text, so it does not aggravate the classifier issue described in Rule 6. Use this to your advantage: when you need to understand what happened in a specific section, run a playbook through it and read the emulator log rather than re-reading the book's source text.
+
+### 9.7 Playbook Deliverables (Tier 2+)
+
+Treat playbook scripts as first-class deliverables alongside the book JSON. At Tier 2 and above, every codex run should produce at least `<book>_smoke.script` and `<book>_probe.script`; Tier 3 adds at least one `<book>_run1.script`; Tier 4 adds additional `<book>_runN.script` files for different branches. These scripts serve three purposes:
+
+1. **Regression harness.** Future users (or a later codex session doing another pass) can re-run the playbooks against the book to verify nothing has regressed after edits. This is especially valuable after applying user-requested fixes.
+2. **Documentation of intended behavior.** Each playbook encodes the codex's understanding of how the book is supposed to play. A `# expect section=141` checkpoint after `choose_section 0` is a small piece of evidence that "the codex parsed section 1 correctly and believes choice 0 leads to 141."
+3. **Debugging support.** When something goes wrong during play, a user can run the probe or smoke against the current book file to isolate whether the bug is in the codex's encoding or somewhere else.
+
+**Playbook format.** Each script is a line-oriented text file. Lines starting with `#` are comments (and, if they begin with `# expect`, checkpoints). Every other line is either blank or an action. Keep each playbook self-contained with a `# book <path>` directive at the top so it can be run independently.
+
+**Commit the playbooks but not the book JSON.** Playbook scripts contain no narrative text from the book — only section numbers, action names, and stat checkpoints. They are safe to commit to a public repository. The book JSON itself contains copyrighted text and should generally live in a private-repo location alongside the user's own source materials. This Codex doc's project has this exact split, and the README for the public repo describes it.
+
+### 9.8 Fetching Canonical Artifacts from GitHub (Optional)
+
+If the user opts to let you fetch canonical artifacts from the repository rather than uploading them, use commit-pinned URLs to bypass CDN caching. The URL form is:
+
+```
+https://raw.githubusercontent.com/robesris/codex-gamebook-engine/<commit-sha>/<path>
+```
+
+Not:
+
+```
+https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/<path>
+```
+
+The `main`-branch URL is mutable and subject to short-TTL CDN caching. A commit-SHA URL is immutable and never cached stale. Specific commit pins for each codex doc version will be published in the codex repo's release notes.
+
+After fetching, verify the file's embedded version constant matches the expected version. If it doesn't, warn the user per the Codex Version and Compatibility section at the top of this document.
+
+If the user's environment does not support outbound HTTP fetches at all (some sandboxed environments block `raw.githubusercontent.com`), fall back to asking the user to upload the files directly.
+
 ---
 
 ## 10. VERIFICATION CHECKLIST
@@ -1394,6 +1668,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.1 — Process and safety update informed by a from-scratch conversion experiment on Lone Wolf 1 (clean PDF source). Added Codex Version and Compatibility header with commit-SHA pinning guidance. Added Step 2a (Optional Resources Checklist) and Step 2b (Development Tier Selection) for budget-aware runs on Free/Pro accounts. Added Rule 6 (Never Echo Book Narrative into Model Output) to address cumulative-context safety-classifier trips observed on dark-themed gamebooks. Added Rule 7 (Prefer Parser-Driven Conversion) codifying the file-to-file transformation workflow. Added Rule 8 (Extract Enemy Special Rules Verbatim) to prevent template copy-paste errors seen in hand-iterated files. Added Rule 9 (Multi-Event Sections) and Rule 10 (Enemy ID Naming Discipline) from observed encoding gaps. Added Rule 11 (Starting Resources That Require Rolls) from observed character-creation regressions. Added Section 9.5 (Parser-Driven Workflow), 9.6 (Self-Testing with the Canonical Emulator), 9.7 (Playbook Deliverables), and 9.8 (Fetching Canonical Artifacts from GitHub). No breaking changes to the output format; the GBF JSON schema is unchanged.
 - v2.0 — Major rewrite. Added interactive flow, anti-hallucination guardrails, model-agnostic design, processing strategy for scanned PDFs, abilities/disciplines system, unknown series support. Revised combat description to be series-agnostic. Removed series-specific emulator plugin references. Expanded Fighting Fantasy profile to note per-book variation in starting equipment and special mechanics. Expanded Lone Wolf profile with full discipline list and Project Aon references.
 - v1.0 — Initial release.
 

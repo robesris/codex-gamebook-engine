@@ -2,6 +2,9 @@
 /**
  * Codex Gamebook Engine — CLI Replay Tool
  *
+ * Version: 2.1.0
+ * Compatible with codex doc >= 2.1
+ *
  * Runs a scripted playthrough from a "playbook" file. Each line is either:
  *   - A blank line (skipped)
  *   - A comment starting with `#` (logged but not executed)
@@ -33,6 +36,8 @@
  */
 
 'use strict';
+
+const CODEX_REPLAY_VERSION = '2.1.0';
 
 const fs = require('fs');
 const path = require('path');
