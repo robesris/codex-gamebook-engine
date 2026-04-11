@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.1
+# THE GAMEBOOK CODEX v2.2
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.1
+**Codex version:** 2.2
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -177,6 +177,8 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 #### Step 3a-2: Targeted Fix (scoped patch)
 
 Use this mode when the user has identified one or more specific bugs or sections they want fixed, and explicitly does not want the cost of a full file audit. The principle is: **touch only what the user asked about, plus the immediate neighbors that need to change with it, plus what your test loop says is affected.** Resist the urge to fix unrelated things you happen to notice along the way — if you find them, report them at the end so the user can decide whether to schedule a follow-up, but do not edit them in this pass.
+
+**Codex maintainer note (read this if you are editing `gamebook_codex_v2.md`, the schema, or the reference emulators).** Targeted Fix mode exists primarily for end users — people running the codex on books they don't actively maintain, people with budget constraints, or people who discovered a bug mid-playthrough and want a narrow patch. If you are a codex maintainer and you find a bug in a first-party book, **do not default to Targeted Fix**. The bug is almost always a signal that a codex rule is missing or incomplete, and the right fix is to improve the rule (so the *next* book and the *next* re-run benefit) and then comprehensive-re-run the affected book against the improved codex. Hand-patching outputs through this mode is a crutch that lets the codex stay broken while the symptoms get whacked one at a time. See Rule 16 for the full statement of this principle and the recommended workflow.
 
 **Step 1 — Confirm the scope.** Have the user describe each bug as concretely as possible:
 - Which section number (or section IDs) is affected?
@@ -362,6 +364,114 @@ Not:
 ```
 
 The general rule: if the rules text uses the word "pick," "roll," or "choose" to determine an initial resource quantity, the character_creation step must be one that actually prompts the player (or script) to produce that quantity.
+
+### Rule 12: Do Not Duplicate Penalty Events Already Modeled by `eat_meal`
+
+The `eat_meal` event already models the conditional "or lose N STAMINA/ENDURANCE" clause when `penalty_amount` is set. When a section's text says "you must eat a Meal here or lose 3 ENDURANCE," emit ONE `eat_meal` event with `penalty_amount: -3`. Do NOT also emit a separate `modify_stat ENDURANCE -3` for the same loss. The duplicate event causes the emulator to apply the penalty unconditionally — both to players who consume a meal and to players who don't — which is wrong.
+
+The same principle applies more generally: if a structured event type already encodes a conditional state change, do not emit a parallel `modify_stat` for the same change. Examples:
+
+- `eat_meal` with `penalty_amount` → never accompany with `modify_stat` for the same loss
+- `combat` events that produce `lose_to` damage on flee → never accompany with `modify_stat` for the flee damage
+- `roll_dice` events with per-branch `apply_to_stat` → never accompany with `modify_stat` for the rolled outcome
+- `stat_test` events with success/failure stat effects → never accompany with `modify_stat` for the test result
+
+When parsing a section's text, attribute each described state change to **exactly one** structured event. If you find yourself about to emit a `modify_stat` for a value that's already covered by an `eat_meal` / `combat` / `roll_dice` / `stat_test` event in the same section, drop the `modify_stat`.
+
+Real example: LW section 147 ("you find a mossy hut. You are hungry and must eat a Meal here or lose 3 ENDURANCE points"). The correct encoding is a single `eat_meal: required: true, penalty_amount: -3`. An iter-N hand-encoded version that ALSO has `modify_stat ENDURANCE -3` for the same loss is double-counting and should be reduced to just the `eat_meal`.
+
+### Rule 13: Conditional-Choice Verification
+
+Every choice whose text begins with one of the following conditional patterns MUST have a non-null `condition` block:
+
+- "If you have …"
+- "If you possess …"
+- "If you own …"
+- "If you carry …"
+- "If you are wearing …"
+- "If you have the Kai Discipline of …" / "If you have the … skill" / "If you have learned …"
+- "If your X is greater than/less than/equal to N"
+- "If you have N or more …" / "If you have at least N …"
+- "If you have already …" (typically a flag check)
+
+This is a verification step, not just an extraction rule: after parsing all sections, walk every choice in the output and check whether its text begins with any of the patterns above. If it does AND the choice has `condition: null`, that is a parser error — the condition must be reconstructed from the choice text and added. Do not ship a file with unconditional "If you have…" choices.
+
+This verification is also part of Step 3a-1 (Comprehensive Review) and Section 10 (Verification Checklist) — see both for the full list of checks. The reason this needs to be a dedicated rule is that the failure mode is silent: the choice still appears in the choice list, the emulator still navigates correctly when the player picks it, but the gating is missing so a player who *doesn't* meet the condition can pick the choice and get a misleading outcome (the section they land on assumes they had the item/ability).
+
+Real example: LW section 173 has the choice "If you have a Silver Key, you may try to open the door by turning to 158" with `condition: null`. A player without the Silver Key can select it. The section it leads to (158) assumes the player has the key, so the encoding silently breaks the gate.
+
+### Rule 14: Combat Modifier Scope — Scan the Whole Section
+
+When extracting `special_rules` text for a `combat` event (Rule 8), scan the **entire section text** for combat modifier phrasing — not just the paragraph that contains the enemy stat block. Combat modifiers often appear in the narrative setup *before* the enemy is introduced, separated from the stat block by one or more paragraphs.
+
+Phrases that indicate a combat modifier and must be captured into `special_rules`, regardless of where in the section they appear:
+
+- "add N to your COMBAT SKILL / SKILL / Attack Strength"
+- "deduct N from your COMBAT SKILL / SKILL / Attack Strength"
+- "for the duration of this fight" / "for this combat" / "for this combat only" / "until the fight ends"
+- "the creature is immune to …" / "X has no effect on this enemy"
+- "you must / cannot use [a discipline / a weapon / an item] in this fight"
+- "due to the [surprise / darkness / cover / circumstances], …"
+- "if you do not have a [torch / weapon / item], deduct …"
+
+The parser's special_rules extraction should attribute every such phrase that occurs anywhere in a section containing a `combat` event to that combat event's `special_rules` field. Do not scope the extraction to the immediate stat-block paragraph.
+
+Real example: LW section 55 ("Just as the Giak makes his leap, you race forward and strike out with your weapon — knocking the creature away from the young wizard's back. You jump onto the struggling Giak and strike again. Due to the surprise of your attack, add 4 points to your COMBAT SKILL for the duration of this fight but remember to deduct it again as soon as the fight is over."). The +4 surprise bonus appears in the narrative setup paragraph, not in the same paragraph as "Giak: COMBAT SKILL N ENDURANCE M." A parser scoped to the stat-block paragraph alone will miss the bonus and emit `special_rules: null`. The correct encoding is `special_rules: "Add 4 to COMBAT SKILL for the duration of this fight (surprise attack). Deduct again after the fight ends."`
+
+Note that as of codex v2.2, capturing the modifier into the `special_rules` text is a *display* fix only — the emulators render `special_rules` as flavor text but do not mechanically apply it. Mechanical enforcement of combat modifiers is a separate open issue tracked under the special_rules enforcement gap. The Rule 14 work is still required because (a) it makes the modifier visible to the player so they can apply it themselves and (b) it gives the eventual mechanical-enforcement implementation a clean source of truth to work from.
+
+### Rule 15: Discipline-Driven Default Conditions (Tracked Gap)
+
+Books often describe discipline- or item-driven exemptions from mechanics in their rules section. The canonical example is Lone Wolf's Hunting discipline, whose rules text says: *"If you have chosen the Kai Discipline of Hunting as one of your five skills, you will not need to tick off a Meal when instructed to eat."* This rule means every `eat_meal` event in a Lone Wolf book should be conditional on the player NOT having the Hunting discipline.
+
+The cleanest encoding would be a `condition` field on the event itself:
+
+```json
+{
+  "type": "eat_meal",
+  "required": true,
+  "penalty_amount": -3,
+  "condition": {"type": "not", "condition": {"type": "has_ability", "ability": "Hunting"}}
+}
+```
+
+**However: as of codex v2.2 the schema does not allow `condition` fields on events** — only on choices. Neither emulator checks for one. Adding event-level conditions is a tracked schema/emulator gap.
+
+**Until that gap is closed**: when emitting a Lone Wolf `eat_meal` event (or any analogous discipline-exempt mechanic in any series), leave the event as-is with `required: true`, AND emit a `confidence.flagged_for_review` entry in metadata noting that the discipline exemption is not encoded due to the event-level-conditions limitation. Do NOT attempt to work around the limitation by restructuring the section into Hunting-vs-non-Hunting sub-sections — the workaround creates more visible structural noise than the original gap and makes the eventual fix harder. Track the gap, don't paper over it.
+
+Other series-specific discipline-exemption patterns to be aware of (incomplete list):
+
+- **Lone Wolf**: Hunting exempts Meals (above). Healing restores 1 ENDURANCE per non-combat section, which the emulator does enforce via a different mechanism (it's a passive between-section effect, not a per-event condition).
+- **Fighting Fantasy**: usually no discipline-exempt mechanics, but watch for book-specific rules that exempt the player from certain encounters.
+- **AD&D Adventure Gamebooks**: class-based exemptions (e.g., a thief class can avoid certain trap stat tests). These should be encoded as conditional choices if the choice itself is gated, or flagged for review if the gate is on a non-conditional event.
+
+### Rule 16: Codex Maintainer Discipline (When You Are Editing This Document)
+
+This rule is for codex maintainers — anyone editing this document, the GBF JSON Schema, or the reference emulators. It does not apply to end users running the codex on their own books.
+
+When you find a bug in a book that you (or your project) maintains alongside the codex itself, the first question to ask is: **"would a new or expanded codex rule have prevented this?"** Not "how do I patch the symptom?"
+
+If the answer is yes:
+
+1. Improve the rule first. Add it to this document, with a concrete example drawn from the bug you found, and a clear "do this, not that" formulation.
+2. Then re-run a comprehensive review (Step 3a-1) on the affected book(s) so the fix is the *output of the improved codex*, not a hand-patch on top of broken output.
+3. Ship both the doc change and the resulting book change in the same conversation, so the dev log is clear about what improved.
+
+Only fall back to Step 3a-2 (Targeted Fix) when the answer is genuinely "no, this is a one-off that no general rule would catch." For first-party books, this should be rare. The targeted-fix mode exists primarily for end users with budget constraints, third-party books, or bugs discovered mid-playthrough on books they don't actively maintain.
+
+The principle is: **the codex's job is to produce correct output by default. When the output is wrong, the production line is what needs fixing — not the symptom on the conveyor belt.** Hand-patching outputs is a crutch that lets the codex stay broken; rule improvements compound across every future run on every book.
+
+Practical workflow when triaging a bug from a playthrough:
+
+1. Read the affected section(s) and confirm the bug.
+2. Ask: which existing codex rule, if any, was supposed to catch this? If a rule exists but didn't fire, why? (Parser limitation? Phrasing not in the vocabulary? Ambiguous text?)
+3. If no rule exists, draft one. Make it specific enough that a parser-driven workflow can apply it mechanically. Include a real example from the bug.
+4. Add the rule to this document, bump the codex version in the version history, and commit.
+5. Re-run the comprehensive review on the affected book against the improved codex.
+6. Verify the bug is fixed in the new output (and no regressions elsewhere — run the full playbook regression).
+7. Ship the doc change and the regenerated book in lockstep.
+
+If the rule improvement turns out to be ambiguous or hard to specify in general terms, that itself is useful signal — it means the bug class is genuinely subtle and may need a different mitigation (schema extension, emulator change, or human-in-the-loop review). Surface that finding rather than forcing a poor rule.
 
 ---
 
@@ -1585,13 +1695,22 @@ Total sample size: typically 600–900 lines, which is 10–20% of a 5000-line d
 4. For each section, extracts structured events:
    - **Choices**: regex for "turn to N" / "go to N" / "turn to page N"
    - **Combat**: regex for enemy stat blocks (`NAME: COMBAT SKILL <n> ENDURANCE <n>` or `Name (STAMINA <n>, SKILL <n>)` depending on series)
-   - **Item pickups**: regex for "you find/discover/grab/take a(n)? X" cross-referenced against a known item vocabulary, with Action-Chart markings as corroboration
+   - **Item pickups**: pickup phrasing varies and the parser must scan for the **union** of these, not just the canonical "Action Chart" trigger:
+     - find / discover / spot / notice / see (followed by an item near the verb)
+     - take / grab / pick up / take with you / take it / take these items
+     - keep / may keep / decide to keep
+     - carry / carry it with you
+     - acquire / receive / are given
+     - "you may take" / "you may keep" / "in your possession" / "you decide to take"
+     - explicit "note this on your Action Chart" / "mark this on your Action Chart" / "note these on your Action Chart" markings (canonical trigger)
+     - bundle phrasing like "wrapped in a bundle is..." or "inside the box is..." paired with any of the above verbs
+     Cross-reference each match against the known item vocabulary (built from items_catalog and from any capitalised noun phrases that look like proper-noun item names — Lone Wolf and Fighting Fantasy both convention-capitalise items in narrative text). A sentence containing both an item name and any of the verbs above is a probable pickup, even if the "Action Chart" trigger phrase is absent. The Action-Chart trigger should be treated as a strong corroborating signal, not a *required* signal — many sections describe pickups without explicitly invoking it. Real example: LW section 315 ("Wrapped in a bundle of women's clothing is a small velvet purse containing 6 Gold Crowns and a Tablet of Perfumed Soap. You may take these items and continue your journey.") has no "Action Chart" mark but is unambiguously a pickup of 6 gold + a Tablet of Perfumed Soap. A parser that gates on the canonical trigger alone will miss this.
    - **Stat changes**: regex for "lose N ENDURANCE" / "gain N STAMINA" / "deduct N from X" / "add N to X"
-   - **Gold/currency changes**: regex for "(find|take|gain|receive) N Gold Crowns" (positive) and "(lose|pay) N Gold Crowns" (negative)
+   - **Gold/currency changes**: regex for "(find|take|gain|receive) N Gold Crowns" (positive) and "(lose|pay) N Gold Crowns" (negative). Treat numbered currency in the same sentence as a pickup verb (find/take/discover N Gold Crowns) as a `modify_stat gold +N` event regardless of whether "Action Chart" is mentioned.
    - **Dice rolls**: regex for "pick a number from the Random Number Table" / "roll two dice" followed by branch conditions with ranges
-   - **Meals**: regex for "you must eat a Meal" / "instructed to eat"
+   - **Meals**: regex for "you must eat a Meal" / "instructed to eat" / "must eat a Meal here". When the same sentence also says "or lose N STAMINA/ENDURANCE", encode the loss as the eat_meal's `penalty_amount`, NOT as a separate `modify_stat` event (see Rule 12).
    - **Endings**: regex for known ending phrases ("your adventure is over," "your quest ends here," "you have failed," etc.)
-   - **Conditional choices**: regex for "If you have the Kai Discipline of X" / "If you possess a Y" / "If you have more than N gold"
+   - **Conditional choices**: regex for "If you have the Kai Discipline of X" / "If you possess a Y" / "If you have more than N gold". See Rule 13 (conditional-choice verification) for the post-extraction validation step.
 5. Applies per-section side effects from the context around each match (e.g., a "lose 3 ENDURANCE" inside an `if you pick 0-4` clause is part of a `roll_dice` branch, not a top-level event)
 6. Populates items_catalog and enemies_catalog as it encounters them
 7. Validates all choice targets and event targets resolve to existing sections
@@ -1691,6 +1810,9 @@ After generating the complete output, confirm:
 - [ ] Computed navigation events have clear explanatory notes
 - [ ] Custom events have sufficient implementation detail
 - [ ] Conditional choices have well-defined, parseable conditions
+- [ ] **Conditional-choice text/condition consistency (Rule 13).** For every choice in the output, if its `text` begins with one of the conditional patterns ("If you have …", "If you possess …", "If you own …", "If you carry …", "If you are wearing …", "If you have the Kai Discipline of …", "If you have the … skill", "If your X is greater/less/equal …", "If you have N or more …", "If you have already …"), then its `condition` MUST be non-null. Walk every section's choices and check this. The failure mode is silent — the emulator still navigates correctly but the gating is missing — so the only way to catch it is an explicit verification pass. If the verification finds an unconditional "If you have…" choice, reconstruct the condition from the text and add it.
+- [ ] **Combat modifier scope (Rule 14).** For every section containing a `combat` event, scan the entire section text — not just the stat-block paragraph — for combat modifier phrasing ("add N to your COMBAT SKILL", "deduct N from your COMBAT SKILL", "for the duration of this fight", "the creature is immune to …", "if you do not have a [torch / weapon / item], deduct …", etc). If such phrasing is present and the combat event's `special_rules` is null or doesn't reflect it, that's a parser miss — populate `special_rules` with text that captures the modifier verbatim or in faithful paraphrase.
+- [ ] **No duplicate penalty events (Rule 12).** For every `eat_meal` event with a `penalty_amount`, verify there is NOT also a `modify_stat` event in the same section that applies the same loss for the same reason. The `eat_meal` event already models the conditional "or lose N" clause; a parallel `modify_stat` would double-count and apply the penalty unconditionally. The same check applies to `combat` flee damage, `roll_dice` per-branch effects, and `stat_test` outcomes — never emit a `modify_stat` for a value that's already covered by a structured event in the same section.
 - [ ] `rules.attack_stat` and `rules.health_stat` are set and match stat names in `rules.stats`
 - [ ] Every enemy in `enemies_catalog` has fields matching `attack_stat` (if applicable) and `health_stat` (the emulator uses these exact field names — mismatches will break combat)
 - [ ] Every enemy has all fields that the `round_script` accesses (e.g., `armor`, `hit_threshold`, `damage_bonus`) — the Lua script receives the full enemy catalog entry
@@ -1739,6 +1861,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.2 — Rule expansion pass informed by triaging the Lone Wolf 1 backlog. Added Rule 12 (no duplicate penalty events that double-count `eat_meal`/`combat`/`roll_dice`/`stat_test` outcomes), Rule 13 (conditional-choice text/condition consistency verification — every "If you have…" choice must have a non-null condition), Rule 14 (combat modifier extraction must scan the whole section, not just the stat-block paragraph), Rule 15 (discipline-driven default conditions, currently a tracked gap pending event-level conditions on the schema), and Rule 16 (codex maintainer discipline — when finding a bug in a first-party book, prefer improving the rule over hand-patching the output). Expanded Section 9.5's loot-detection vocabulary to catch pickup phrasing beyond the canonical "Action Chart" trigger. Added Rule 13/14/12 verification checks to Section 10's verification checklist. Added a maintainer note inside Step 3a-2 (Targeted Fix) warning codex maintainers against using targeted fix as a crutch on first-party books. No schema or emulator changes; all v2.2 rules are doc-only and apply to the existing GBF format. The discipline-exemption gap (Rule 15) and the special_rules mechanical enforcement gap (logged in known_issues) are the two open architectural decisions the next iteration should address.
 - v2.1 — Process and safety update informed by a from-scratch conversion experiment on Lone Wolf 1 (clean PDF source). Added Codex Version and Compatibility header with commit-SHA pinning guidance and a Lua runtime pin section. Added Step 2a (Optional Resources Checklist) and Step 2b (Development Tier Selection) for budget-aware runs on Free/Pro accounts. Restructured Step 3a (existing-GBF handling) into two modes: Step 3a-1 Comprehensive Review (the original full-audit workflow) and Step 3a-2 Targeted Fix (a narrow-scope mode for fixing specific sections without re-auditing the whole file). Added Rule 6 (Never Echo Book Narrative into Model Output) to address cumulative-context safety-classifier trips observed on dark-themed gamebooks. Added Rule 7 (Prefer Parser-Driven Conversion) codifying the file-to-file transformation workflow. Added Rule 8 (Extract Enemy Special Rules Verbatim) to prevent template copy-paste errors seen in hand-iterated files. Added Rule 9 (Multi-Event Sections) and Rule 10 (Enemy ID Naming Discipline) from observed encoding gaps. Added Rule 11 (Starting Resources That Require Rolls) from observed character-creation regressions. Added Section 9.5 (Parser-Driven Workflow), 9.6 (Self-Testing with the Canonical Emulator), 9.7 (Playbook Deliverables), and 9.8 (Fetching Canonical Artifacts from GitHub). Added optional `rules.inventory.currency_display_name` and `rules.provisions.display_name` fields so books can specify canonical UI labels (e.g., "Gold Crowns" / "Meals" for Lone Wolf, "Gold Pieces" for Fighting Fantasy). No breaking changes to the output format; the GBF JSON schema is fully backward compatible.
 - v2.0 — Major rewrite. Added interactive flow, anti-hallucination guardrails, model-agnostic design, processing strategy for scanned PDFs, abilities/disciplines system, unknown series support. Revised combat description to be series-agnostic. Removed series-specific emulator plugin references. Expanded Fighting Fantasy profile to note per-book variation in starting equipment and special mechanics. Expanded Lone Wolf profile with full discipline list and Project Aon references.
 - v1.0 — Initial release.
