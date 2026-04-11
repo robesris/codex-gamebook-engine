@@ -20,6 +20,15 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
+**Lua runtime pin.** Both emulators embed Fengari, a pure-JS Lua 5.3 implementation used to execute combat round scripts and section-level `script` events. Fengari is pinned:
+
+| Runtime | Version | How pinned |
+|---|---|---|
+| CLI emulator (Node) | `fengari@0.1.5` | `package.json` with integrity hash in `package-lock.json` |
+| Browser emulator | `Fengari 0.1.4` (bundled) | Committed static `fengari-web.js` blob |
+
+Fengari is an unmaintained but stable project — no tagged releases since ~2019, but the implementation is functionally complete for Lua 5.3 and has worked reliably across all our dev-loop sessions. We're pinning rather than upgrading because upstream has no active maintenance stream to track. If a future codex session wants to migrate to a maintained Lua runtime (the main candidate is [wasmoon](https://github.com/ceifa/wasmoon), a WASM build of Lua 5.4 with active releases on npm), do it as a dedicated swap in its own session with the full regression harness, not as a drive-by change in an unrelated iteration.
+
 **How to fetch without staleness:** GitHub's raw-content CDN (`raw.githubusercontent.com/.../main/...`) caches mutable branch URLs and can return stale content silently. To avoid this, fetch canonical artifacts using **commit-pinned URLs** of the form `raw.githubusercontent.com/robesris/codex-gamebook-engine/<commit-sha>/<path>`. Content at a specific commit SHA is immutable under git's content-addressed model, so the CDN cannot serve a stale version. Commit pins for the versions above will be published in the repo's release notes.
 
 **If the user is uploading canonical artifacts directly**, verify each file's embedded version constant after loading. A file named `play.js` with `const CODEX_EMULATOR_VERSION = "2.0.3"` cannot be used with a codex doc that requires `≥ 2.1.0` — warn the user and offer to either: (a) load a newer version, (b) proceed with the older tool and avoid features it doesn't support, or (c) switch to a codex doc version that matches the tool.

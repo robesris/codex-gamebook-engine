@@ -38,6 +38,8 @@
 'use strict';
 
 const CODEX_REPLAY_VERSION = '2.1.0';
+// Lua runtime is pinned via play.js (which requires fengari). See
+// package.json for the exact version and play.js for the rationale.
 
 const fs = require('fs');
 const path = require('path');

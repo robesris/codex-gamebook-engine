@@ -25,6 +25,14 @@
 'use strict';
 
 const CODEX_EMULATOR_VERSION = '2.1.0';
+// Pinned Lua runtime. See package.json for the exact npm version and
+// package-lock.json for the integrity hash. Fengari is an unmaintained
+// pure-JS Lua 5.3 implementation; the project is frozen but functional
+// for our usage (small combat round scripts and section-level scripts).
+// If we ever bump this pin, re-run the full regression harness
+// (lw_probe, warlock_probe, all runN playbooks) to verify no behaviour
+// differences in the scripts we ship in book JSONs.
+const FENGARI_RUNTIME_PIN = 'fengari@0.1.5';
 
 const fs = require('fs');
 const path = require('path');

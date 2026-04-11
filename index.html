@@ -548,6 +548,14 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 <script src="fengari-web.js"></script>
 <script>
 const CODEX_EMULATOR_VERSION = '2.1.0';
+// Pinned Lua runtime. The fengari-web.js bundle in this repo is a
+// committed static file (not installed via npm) and its internal
+// FENGARI_VERSION constant reads "Fengari 0.1.4". This is one patch
+// version behind the CLI emulator's npm pin (fengari@0.1.5) but the
+// API surface we use is unchanged between the two. If we ever rebuild
+// or upgrade the browser bundle, update this pin and re-run the full
+// regression harness.
+const FENGARI_RUNTIME_PIN = 'Fengari 0.1.4 (bundled)';
 // ==================== GAME STATE ====================
 let gameData = null;
 let state = {
