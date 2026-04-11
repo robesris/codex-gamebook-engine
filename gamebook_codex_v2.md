@@ -127,7 +127,17 @@ Once the source is available, evaluate it:
 - Ask the user which approach they prefer, or recommend one based on what you see
 
 ### Step 3a: Handling Existing GBF JSON Files
-If the user provides a file that is already in Gamebook Format (GBF) JSON — i.e., it has `metadata`, `rules`, `character_creation`, and `sections` top-level keys — your job is the same as with any other source format: **produce a complete, correct, playable game file.** The existing JSON is your source material. The section text IS the book text — read it and encode every mechanic it describes, just as you would when parsing a raw PDF or text file.
+
+When the user provides an existing GBF JSON file, ask them which of the two modes they'd like:
+
+- **Comprehensive review** (Step 3a-1, this section). Read every section of the file, audit every mechanic, and fix everything you find. Best when the user is doing an iter-N dev-loop pass on a book they're actively maintaining, or when an earlier codex version produced the file and they want it brought up to current quality. Slow, expensive, thorough.
+- **Targeted fix** (Step 3a-2, see below). Fix only specific sections or specific bug classes the user has identified, without re-auditing the whole file. Best when the user has discovered a bug during play (e.g., "section 315 is missing the gold pickup event") and wants a narrow patch with minimal blast radius. Fast, cheap, scoped.
+
+If the user is unsure which mode to use, recommend Targeted Fix when they describe a specific symptom (a section number, a missing item, an obviously wrong event), and Comprehensive Review when they describe a vague concern (the file is "old" or "from an early codex version" or "I just want to make sure it's still good"). Both modes are governed by the same encoding rules in the rest of this document — they only differ in scope.
+
+#### Step 3a-1: Comprehensive Review (full audit)
+
+Your job is the same as with any other source format: **produce a complete, correct, playable game file.** The existing JSON is your source material. The section text IS the book text — read it and encode every mechanic it describes, just as you would when parsing a raw PDF or text file.
 
 Do not treat this as a light review pass. An existing JSON file may have been created manually, by an earlier version of the Codex, or by a different model — and may have significant gaps. Sections may contain narrative text that describes game mechanics (item pickups, stat changes, dice rolls, combat, conditions) without corresponding structured events. Your job is to read every section's text and ensure the events, choices, and conditions fully represent what the text describes.
 
@@ -163,6 +173,49 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 - Character creation steps that are incomplete, incorrectly conditional, or use invalid action types
 - Item selection mechanics (`choose_items`) encoded as narrative text or `custom` events instead of structured events
 - Dice rolls described in text as "roll one die and lose that many STAMINA" without a corresponding `roll_dice` event with `apply_to_stat`
+
+#### Step 3a-2: Targeted Fix (scoped patch)
+
+Use this mode when the user has identified one or more specific bugs or sections they want fixed, and explicitly does not want the cost of a full file audit. The principle is: **touch only what the user asked about, plus the immediate neighbors that need to change with it, plus what your test loop says is affected.** Resist the urge to fix unrelated things you happen to notice along the way — if you find them, report them at the end so the user can decide whether to schedule a follow-up, but do not edit them in this pass.
+
+**Step 1 — Confirm the scope.** Have the user describe each bug as concretely as possible:
+- Which section number (or section IDs) is affected?
+- What does the bug look like in play? (e.g., "I selected the 'pay 3 gold' choice with only 1 gold and the emulator let me", or "section 315 says I find 6 gold and a tablet of soap but neither shows up in inventory")
+- Is the user aware of any other sections that are likely affected by the same root cause? (e.g., "if section 3 is missing the gold gate, section 127 might be too" — though in practice, ask, don't assume.)
+- Does the user have a fix preference (specific event encoding, restructure into sub-sections, etc.) or is the implementation up to you?
+
+If the user gives you a vague description ("the ferryman is broken somehow"), ask for clarification before editing anything. Vague reports are exactly the cases where a comprehensive review is the right choice instead.
+
+**Step 2 — Read the existing `known_issues` document if one exists.** Many projects maintain a `known_issues.md` (or equivalent) file alongside the book that tracks already-triaged bugs. If the user's reported bug is already on this list, that's confirmation you have the right diagnosis; if it's a new bug, plan to add it to the list as part of your output. This file is also where you'll find context about related bugs the user has discovered but hasn't yet fixed.
+
+**Step 3 — Read only the sections in scope.** Read the affected sections from the JSON file. Read their direct neighbors only if they're targets of choices in the affected sections, or callers of the affected sections (you can find these by searching the file for `"target": <N>` references). Do NOT read every section. Do NOT load the whole file into your working context. If you find yourself wanting to "just take a look" at unrelated sections, stop — that's a comprehensive review, not a targeted fix, and you should ask the user to switch modes if you think it's needed.
+
+**Step 4 — Apply the fix.** The encoding rules in the rest of this document still apply — Rule 6 (don't echo narrative), Rule 7 (prefer parser-driven scripts), Rule 8 (verbatim special_rules), Rule 9 (multi-event sections), etc. For a targeted fix the script-based approach is usually overkill (you're touching 1–3 sections), so direct file edits via Edit/Write are appropriate. The "narrative in model output" concern is correspondingly smaller in scope but still real — if you're fixing many sections in one pass, switch to a script.
+
+**Step 5 — Run a scoped regression.** Identify which existing playbooks visit any of the sections you touched. The fastest way is `grep -l '<section_id>' <playbook_dir>/*.script`. Run only those playbooks against the patched book — not the full regression harness. If any of them fail, the failure is on you to investigate and fix before declaring done. If none of the existing playbooks visit your touched sections, write a small new playbook (or extend the probe) that reaches them, so the fix is covered going forward.
+
+**Step 6 — Smoke-check unaffected areas.** Even though you only touched a few sections, run the full coverage probe (`<book>_probe.script` if it exists, or a `manual_set` walk through every section) to verify you haven't broken anything structural. The probe is cheap (~30 seconds) and catches most accidental breakage.
+
+**Step 7 — Report.** Produce a structured summary that lists:
+- Sections touched (numbered, with a one-line description of what changed in each)
+- Playbook regression results (which playbooks were re-run, pass/fail for each)
+- Probe smoke result (pass/fail)
+- **Bugs you noticed but did not fix**, with section numbers and one-line descriptions, so the user can decide whether to schedule follow-ups
+- A diff size estimate (sections touched, events added/removed)
+
+**When to recommend escalating to a full review.** If during Step 3 or Step 4 you discover that the fix you're about to make depends on understanding more sections than you initially read, or that the bug is only one symptom of a deeper structural issue affecting many sections, **stop and tell the user**. Offer them the choice to (a) proceed with the narrow fix and accept the limitations, (b) switch to a comprehensive review for this book, or (c) defer the fix entirely. Do not silently expand the scope without their explicit consent — that defeats the purpose of having a targeted mode.
+
+**Targeted-fix examples that would be appropriate:**
+- "Section 315 of LW is missing add_item / modify_stat events for the loot the text describes." → Edit one section, add the events, add a new items_catalog entry for the new item, run any playbook that visits 315 (none exist for this section currently — extend the probe to navigate into it), commit.
+- "The ferryman in Warlock section 3 doesn't gate the 'pay 3 gold' choice." → Edit section 3 to add the `stat_gte` condition, edit section 272 to remove the unconditional gold deduction, add new synthetic sections `3_pay`/`127_pay`, run the playbooks that touch the ferryman path. Done in 30 minutes instead of the full Tier-3 hours.
+- "Section 116 has the wrong special_rules text." → Read section 116, fix the string, run any playbook visiting 116, commit.
+
+**Targeted-fix examples that should escalate to comprehensive review:**
+- "The Vordak/Helghast/Gourgaz fights don't apply their Mindshield rules" → this is a class of bugs spanning many sections plus the round_script encoding gap. Tell the user this is a comprehensive review or a schema-level discussion, not a targeted fix.
+- "The book seems to be missing a bunch of conditional choices, can you find them?" → vague, no specific sections, fundamentally a search problem rather than a fix problem. Comprehensive review.
+- "I'm not sure exactly what's wrong but the Warlock playthroughs feel off lately" → diagnostic mode, escalate.
+
+**Cost expectation.** A well-scoped targeted fix typically takes 5–15% of the message budget of a comprehensive review on the same book — usually 10–30 minutes of session time and a few hundred K tokens versus the comprehensive review's hours and millions of tokens. If you find your targeted fix consuming significantly more than that, it's probably the wrong tier and you should pause to ask the user.
 
 ### Step 3b: Read the GBF Specification
 Before generating any JSON output, you MUST read the complete GBF JSON Schema specification (`codex.schema.json`). The schema is the authoritative definition of the output format. If the user provides it alongside the source material, read it in full. If not, the canonical version is available at:
@@ -1686,7 +1739,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
-- v2.1 — Process and safety update informed by a from-scratch conversion experiment on Lone Wolf 1 (clean PDF source). Added Codex Version and Compatibility header with commit-SHA pinning guidance. Added Step 2a (Optional Resources Checklist) and Step 2b (Development Tier Selection) for budget-aware runs on Free/Pro accounts. Added Rule 6 (Never Echo Book Narrative into Model Output) to address cumulative-context safety-classifier trips observed on dark-themed gamebooks. Added Rule 7 (Prefer Parser-Driven Conversion) codifying the file-to-file transformation workflow. Added Rule 8 (Extract Enemy Special Rules Verbatim) to prevent template copy-paste errors seen in hand-iterated files. Added Rule 9 (Multi-Event Sections) and Rule 10 (Enemy ID Naming Discipline) from observed encoding gaps. Added Rule 11 (Starting Resources That Require Rolls) from observed character-creation regressions. Added Section 9.5 (Parser-Driven Workflow), 9.6 (Self-Testing with the Canonical Emulator), 9.7 (Playbook Deliverables), and 9.8 (Fetching Canonical Artifacts from GitHub). No breaking changes to the output format; the GBF JSON schema is unchanged.
+- v2.1 — Process and safety update informed by a from-scratch conversion experiment on Lone Wolf 1 (clean PDF source). Added Codex Version and Compatibility header with commit-SHA pinning guidance and a Lua runtime pin section. Added Step 2a (Optional Resources Checklist) and Step 2b (Development Tier Selection) for budget-aware runs on Free/Pro accounts. Restructured Step 3a (existing-GBF handling) into two modes: Step 3a-1 Comprehensive Review (the original full-audit workflow) and Step 3a-2 Targeted Fix (a narrow-scope mode for fixing specific sections without re-auditing the whole file). Added Rule 6 (Never Echo Book Narrative into Model Output) to address cumulative-context safety-classifier trips observed on dark-themed gamebooks. Added Rule 7 (Prefer Parser-Driven Conversion) codifying the file-to-file transformation workflow. Added Rule 8 (Extract Enemy Special Rules Verbatim) to prevent template copy-paste errors seen in hand-iterated files. Added Rule 9 (Multi-Event Sections) and Rule 10 (Enemy ID Naming Discipline) from observed encoding gaps. Added Rule 11 (Starting Resources That Require Rolls) from observed character-creation regressions. Added Section 9.5 (Parser-Driven Workflow), 9.6 (Self-Testing with the Canonical Emulator), 9.7 (Playbook Deliverables), and 9.8 (Fetching Canonical Artifacts from GitHub). Added optional `rules.inventory.currency_display_name` and `rules.provisions.display_name` fields so books can specify canonical UI labels (e.g., "Gold Crowns" / "Meals" for Lone Wolf, "Gold Pieces" for Fighting Fantasy). No breaking changes to the output format; the GBF JSON schema is fully backward compatible.
 - v2.0 — Major rewrite. Added interactive flow, anti-hallucination guardrails, model-agnostic design, processing strategy for scanned PDFs, abilities/disciplines system, unknown series support. Revised combat description to be series-agnostic. Removed series-specific emulator plugin references. Expanded Fighting Fantasy profile to note per-book variation in starting equipment and special mechanics. Expanded Lone Wolf profile with full discipline list and Project Aon references.
 - v1.0 — Initial release.
 
