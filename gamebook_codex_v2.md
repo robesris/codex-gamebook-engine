@@ -25,7 +25,9 @@ The GBF format version (tracked in the schema's `title` field) is distinct from 
 | Runtime | Version | How pinned |
 |---|---|---|
 | CLI emulator (Node) | `fengari@0.1.5` | `package.json` with integrity hash in `package-lock.json` |
-| Browser emulator | `Fengari 0.1.4` (bundled) | Committed static `fengari-web.js` blob |
+| Browser emulator | `Fengari 0.1.5` (bundled) | Committed static `fengari-web.js` blob |
+
+Both pins are at the same Fengari version. The browser bundle is built by running webpack on `fengari-web@0.1.4` source with its `fengari` core dep overridden to `0.1.5` via npm overrides — this combination is necessary because the upstream `fengari-web` package on npm still ships fengari 0.1.4. The webpack build is reproducible: any future maintainer can repeat it by running `NODE_OPTIONS=--openssl-legacy-provider npm run build` inside an unpacked `fengari-web@0.1.4` tarball whose `package.json` has been patched to depend on the desired fengari version.
 
 Fengari is an unmaintained but stable project — no tagged releases since ~2019, but the implementation is functionally complete for Lua 5.3 and has worked reliably across all our dev-loop sessions. We're pinning rather than upgrading because upstream has no active maintenance stream to track. If a future codex session wants to migrate to a maintained Lua runtime (the main candidate is [wasmoon](https://github.com/ceifa/wasmoon), a WASM build of Lua 5.4 with active releases on npm), do it as a dedicated swap in its own session with the full regression harness, not as a drive-by change in an unrelated iteration.
 
