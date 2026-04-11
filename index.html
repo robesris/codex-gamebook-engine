@@ -1238,7 +1238,8 @@ function showEquipmentAndBegin() {
   }
   if (state.gold > 0) {
     const li = document.createElement('li');
-    li.textContent = `Gold (${state.gold})`;
+    const gLabel = gameData.rules?.inventory?.currency_display_name || 'Gold';
+    li.textContent = `${gLabel} (${state.gold})`;
     list.appendChild(li);
   }
   if (state.abilities.length > 0) {
@@ -1270,12 +1271,14 @@ function updateStatBar() {
     </div>`;
   }
 
+  const provLabel = gameData.rules?.provisions?.display_name || 'Provisions';
+  const goldLabel = gameData.rules?.inventory?.currency_display_name || 'Gold';
   html += `<div class="stat-item provisions">
-    <span class="stat-label">Provisions</span>
+    <span class="stat-label">${provLabel}</span>
     <span class="stat-val">${state.provisions}</span>
   </div>`;
   html += `<div class="stat-item gold">
-    <span class="stat-label">Gold</span>
+    <span class="stat-label">${goldLabel}</span>
     <span class="stat-val">${state.gold}</span>
   </div>`;
 

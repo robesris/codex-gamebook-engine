@@ -1419,8 +1419,10 @@ function summarize(state, book) {
     const stats = [];
     if (attackStat) stats.push(`${attackStat} ${state.stats[attackStat]}/${state.initialStats[attackStat]}`);
     if (healthStat) stats.push(`${healthStat} ${state.stats[healthStat]}/${state.initialStats[healthStat]}`);
-    if (state.provisions > 0) stats.push(`Provisions ${state.provisions}`);
-    if (state.gold > 0) stats.push(`Gold ${state.gold}`);
+    const provLabel = book.rules?.provisions?.display_name || 'Provisions';
+    const goldLabel = book.rules?.inventory?.currency_display_name || 'Gold';
+    if (state.provisions > 0) stats.push(`${provLabel} ${state.provisions}`);
+    if (state.gold > 0) stats.push(`${goldLabel} ${state.gold}`);
     lines.push(`  ${stats.join(' | ')}`);
   } else if (state.pause?.type === 'combat') {
     const enemy = state.combat.enemies[state.combat.currentEnemyIdx];

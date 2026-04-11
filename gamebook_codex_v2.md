@@ -500,14 +500,16 @@ The rules object describes the game system as parsed from the book. Do not assum
   "inventory": {
     "capacity": "number or null — max items, or null if unlimited",
     "categories": ["array of item category names, e.g., weapons, backpack, special_items"],
-    "category_limits": "object mapping category names to max counts, or null"
+    "category_limits": "object mapping category names to max counts, or null",
+    "currency_display_name": "string (optional) — how the game's currency is displayed in the UI. Defaults to 'Gold' if omitted. Use the book's canonical currency label: 'Gold Crowns' for Lone Wolf, 'Gold Pieces' for Fighting Fantasy, 'Credits' for a sci-fi gamebook, etc. The internal stat name is still `gold` for event and condition references — this field only affects display."
   },
   "provisions": {
     "enabled": "boolean",
     "starting_amount": "number",
     "heal_amount": "number — stamina/HP restored per meal",
     "heal_stat": "string — which stat is restored",
-    "when_usable": "string — when_instructed, anytime_outside_combat, etc."
+    "when_usable": "string — when_instructed, anytime_outside_combat, etc.",
+    "display_name": "string (optional) — how the provisions resource is displayed in the UI. Defaults to 'Provisions' if omitted. Use the book's canonical term: 'Meals' for Lone Wolf, 'Provisions' for most Fighting Fantasy, 'Rations' for some AD&D adventure gamebooks. The internal resource name is still `provisions` for event/condition references."
   },
   "abilities": {
     "enabled": "boolean",
@@ -714,6 +716,9 @@ If neither shape fits (e.g., the roll drives multi-step branching logic that tou
 ### IMPORTANT: Book-Specific Variation
 Starting equipment, provisions rules, potions, additional stats, and special mechanics ALL vary between individual Fighting Fantasy books. The core rules above (stat generation, combat, luck/skill tests) are consistent, but EVERYTHING ELSE must be parsed from the specific book's rules section. Do not assume starting equipment, inventory limits, or special mechanics from one book apply to another.
 
+### Display Names (UI Labels)
+Fighting Fantasy typically uses "Gold Pieces" as its currency term and "Provisions" as its food/meal term. Set `rules.inventory.currency_display_name` to `"Gold Pieces"` (and `rules.provisions.display_name` to `"Provisions"`, though that matches the default). A few books deviate — e.g., sci-fi titles may use "Credits" or other terminology. Always use the book's own canonical term rather than assuming "Gold Pieces" applies universally.
+
 ### Known Exception Patterns
 These are examples of mechanics that deviate from the standard FF system. Watch for similar deviations when parsing any FF book:
 
@@ -773,6 +778,8 @@ Important: When the player rolls 0 on the random number table, they take 0 ENDUR
 - **Special Items**: No enforced limit
 - **Belt Pouch**: Currency (Gold Crowns), max 50
 - **Meals**: Consumed when instructed; penalty of 3 ENDURANCE if no Meal and no Hunting discipline
+
+**Display names (UI labels):** Lone Wolf uses "Gold Crowns" as its currency and "Meals" as its provisions term. Set `rules.inventory.currency_display_name` to `"Gold Crowns"` and `rules.provisions.display_name` to `"Meals"` so the emulator renders the correct terminology in the stat bar and inventory panel. Without these fields the emulator will display the generic "Gold" and "Provisions" labels, which is functional but not idiomatic for the series.
 
 **Healing:**
 - Healing discipline: +1 ENDURANCE per non-combat section (capped at initial value)

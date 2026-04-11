@@ -215,6 +215,10 @@
             "category_limits": {
               "type": ["object", "null"],
               "additionalProperties": { "type": "integer" }
+            },
+            "currency_display_name": {
+              "type": "string",
+              "description": "Display name for the game's currency used in the stat bar, inventory panel, and any 'you have X currency' UI strings. Defaults to 'Gold' if omitted. Examples: 'Gold Crowns' (Lone Wolf), 'Gold Pieces' (Fighting Fantasy), 'Credits' (Star Challenge). The internal stat name is still 'gold' for event/condition references regardless of display name."
             }
           }
         },
@@ -390,6 +394,10 @@
           "type": "string",
           "description": "When provisions can be consumed.",
           "enum": ["when_instructed", "anytime_outside_combat", "any_time"]
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Display name for the provisions resource used in the stat bar and UI strings. Defaults to 'Provisions' if omitted. Examples: 'Meals' (Lone Wolf), 'Provisions' (Fighting Fantasy default), 'Rations' (some AD&D gamebooks). The internal resource name is still 'provisions' for event/condition references regardless of display name."
         }
       }
     },
