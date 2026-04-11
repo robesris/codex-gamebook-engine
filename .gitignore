@@ -8,9 +8,10 @@ package-lock.json
 01fftd.xml
 books
 books/
-plans/walkthroughs
-plans/walkthroughs/
-plans/playthroughs/*.json
-plans/playthroughs/*.log
-plans/playthroughs/*_dump.txt
+# Project-specific dev-process artifacts, playbook runs, session logs,
+# and walkthroughs. These are useful locally but not intended for
+# version control in this public repo. If any of their contents are
+# ever promoted to general reference material, move them to a new path
+# (examples/, docs/, etc.) rather than re-adding plans/.
+plans/
 HANDOFF.md
