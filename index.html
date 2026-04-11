@@ -1969,6 +1969,13 @@ function handleCombat(event) {
       const postLabel = gameData.rules.combat_system?.post_round_label || gameData.rules.combat_rules_detail?.post_round_label || 'Test Your Luck?';
       html += `<button class="btn btn-small" onclick="combatTestLuck()">${postLabel}</button>`;
       html += `<button class="btn btn-small" onclick="combatSkipLuck()">Skip</button>`;
+    } else if (c.combatOver) {
+      // Combat is resolved (all enemies defeated, or the player fled).
+      // Show a Continue button rather than auto-navigating so the player
+      // can read the final round results, the defeated-enemy banner or
+      // flee-wound message, and any special_rules that were in effect
+      // during the fight before the next section renders.
+      html += `<button class="btn btn-large" onclick="combatContinueAfterEnd()">Continue</button>`;
     } else if (enemy.currentHealth > 0 && playerHealth > 0) {
       html += `<button class="btn" onclick="combatAttack()">Attack</button>`;
       if (c.fleeTo) {
@@ -1987,7 +1994,24 @@ function handleCombat(event) {
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules,
     roundNum: 0, combatLog: [], waitingForLuckChoice: false,
+    combatOver: false,
+    // When combat ends (victory or flee), this holds the section id
+    // the Continue button should navigate to. If null, Continue falls
+    // through to processNextEvent() instead.
+    combatEndTarget: null,
     lastRoundResult: null, renderCombat, checkCombatEnd, area,
+  };
+
+  // Callback bound to the Continue button that appears after combat ends
+  // (either the player wins or successfully flees). Navigates to the
+  // appropriate target only after the player clicks, so one-round kills
+  // and successful flees don't silently whisk the player to the next
+  // section before they can read the outcome.
+  window.combatContinueAfterEnd = function() {
+    const c = window._combat;
+    const target = c.combatEndTarget;
+    if (target != null) navigateTo(target);
+    else processNextEvent();
   };
 
   window.combatAttack = function() {
@@ -2207,11 +2231,17 @@ function handleCombat(event) {
         c.renderCombat();
         return;
       } else {
-        // All enemies defeated — don't re-render (index would be out of bounds)
-        setTimeout(() => {
-          if (c.winTo) navigateTo(c.winTo);
-          else processNextEvent();
-        }, 500);
+        // All enemies defeated. Set the combatOver flag and re-render so
+        // the player sees the final round's log (including the
+        // "defeated!" banner) alongside a Continue button. The navigation
+        // to winTo happens only after the player clicks Continue, so
+        // one-round kills don't immediately jump to the next section
+        // before the player can read what happened. currentEnemyIdx
+        // still points at the just-defeated enemy at this point, so the
+        // render is safe.
+        c.combatOver = true;
+        c.combatEndTarget = c.winTo;
+        c.renderCombat();
         return;
       }
     }
@@ -2241,28 +2271,38 @@ function handleCombat(event) {
       c.lastRoundResult = { winner: 'enemy', damage: fleeDmg, enemy: c.enemies[c.currentEnemyIdx] };
       c.waitingForLuckChoice = true;
       c.renderCombat();
-      // Override skip to navigate after
+      // Override skip / luck-test callbacks to mark combat ended and
+      // fall through to the standard Continue button flow, so the
+      // player sees the flee wound, any luck-test result, and the
+      // final state before clicking through to fleeTo. This matches
+      // the victory path's combatOver/combatEndTarget convention.
       const origSkip = window.combatSkipLuck;
       window.combatSkipLuck = function() {
         c.waitingForLuckChoice = false;
+        c.combatOver = true;
+        c.combatEndTarget = c.fleeTo;
         c.renderCombat();
         window.combatSkipLuck = origSkip;
-        navigateTo(c.fleeTo);
       };
       const origLuck = window.combatTestLuck;
       const savedTestLuck = window.combatTestLuck;
       window.combatTestLuck = function() {
         savedTestLuck();
-        // After luck test on flee, navigate
+        c.combatOver = true;
+        c.combatEndTarget = c.fleeTo;
+        c.renderCombat();
         window.combatTestLuck = origLuck;
         window.combatSkipLuck = origSkip;
-        setTimeout(() => navigateTo(c.fleeTo), 500);
       };
       return;
     }
 
+    // No luck test — mark combat ended and re-render so the flee-wound
+    // banner is visible next to the Continue button, which will navigate
+    // to fleeTo on click (instead of the previous auto-navigate 500ms).
+    c.combatOver = true;
+    c.combatEndTarget = c.fleeTo;
     c.renderCombat();
-    setTimeout(() => navigateTo(c.fleeTo), 500);
   };
 
   renderCombat();
