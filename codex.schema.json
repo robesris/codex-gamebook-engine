@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.0.0",
+  "title": "Gamebook Format (GBF) v1.1.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -118,27 +118,39 @@
 
     "frontmatter": {
       "type": "object",
-      "description": "Introductory and supplementary material presented before the numbered sections: story background, rules explanations, reference material.",
+      "description": "Introductory and supplementary material presented before the numbered sections AND/OR accessible to the player as reference material during play. Includes story background, rules explanations, maps, character sheets, equipment lists, glossaries, errata, and appendices. Pages are ordered for first-time presentation but may be marked individually as accessible-during-play so the emulator can expose them via an in-game reference panel at any time.",
       "properties": {
         "pages": {
           "type": "array",
-          "description": "Ordered list of frontmatter pages displayed before character creation.",
+          "description": "Ordered list of frontmatter pages. By default these are shown before character creation AND accessible from the in-game reference panel during play. Pages may opt out of either behavior individually using the show_at_start and accessible_during_play fields.",
           "items": {
             "type": "object",
             "required": ["title", "text"],
             "properties": {
               "title": {
                 "type": "string",
-                "description": "Page title (e.g., 'The Story So Far', 'Rules', 'Rumours')."
+                "description": "Page title (e.g., 'The Story So Far', 'Rules', 'Map of Sommerlund', 'Kai Disciplines', 'Errata')."
               },
               "text": {
                 "type": "string",
-                "description": "Full text content of this page."
+                "description": "Full text content of this page. Markdown-style paragraph breaks are preserved."
               },
               "type": {
                 "type": "string",
-                "description": "Category of frontmatter content.",
-                "enum": ["story", "rules", "reference", "flavor"]
+                "description": "Category of frontmatter content. The emulator may use this to group pages in the in-game reference panel (e.g., all 'map' pages together, all 'rules' pages together).",
+                "enum": ["story", "rules", "reference", "map", "appendix", "errata", "glossary", "flavor"]
+              },
+              "show_at_start": {
+                "type": "boolean",
+                "description": "If true (default), this page is included in the pre-character-creation walkthrough that the emulator shows when the user starts a new game. If false, the page is only accessible from the in-game reference panel and is skipped at game start. Use false for reference pages that aren't part of the introductory narrative (e.g., an errata appendix that's only useful for lookup, or a map that's distracting at game start)."
+              },
+              "accessible_during_play": {
+                "type": "boolean",
+                "description": "If true (default), this page is available from the in-game reference panel at any time during play, so the player can consult maps, rules summaries, glossaries, and the like without losing their place. If false, the page is shown only at game start and not accessible later. Use false for one-time intro material like 'The Story So Far' that doesn't need to be re-read mid-adventure."
+              },
+              "image": {
+                "type": "string",
+                "description": "Optional image reference for the page (e.g., 'illustration_map_sommerlund'). Used by emulators that can render maps or character sheet illustrations. The image identifier should match an entry in the book's illustrations index if one exists."
               }
             }
           }

@@ -2,8 +2,8 @@
 /**
  * Codex Gamebook Engine — CLI Emulator
  *
- * Version: 2.1.0
- * Compatible with codex doc >= 2.1
+ * Version: 2.2.0
+ * Compatible with codex doc >= 2.3 and GBF schema >= 1.1.0
  *
  * Stateless command-line emulator for GBF game data files.
  * Each invocation takes a state JSON + an action and outputs a new state.
@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '2.1.0';
+const CODEX_EMULATOR_VERSION = '2.2.0';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional

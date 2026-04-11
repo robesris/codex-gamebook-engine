@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.2
+# THE GAMEBOOK CODEX v2.3
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.2
+**Codex version:** 2.3
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -13,10 +13,10 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.0.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 2.1.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 2.1.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 2.1.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `codex.schema.json` (GBF format) | ≥ 1.1.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 2.2.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 2.2.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 2.2.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -584,18 +584,27 @@ The output is a single JSON file with the following top-level structure:
 
 ### 2.0 frontmatter
 
-The frontmatter object contains all introductory and supplementary material that appears before the numbered sections: story background, rules explanations, world-building, maps, rumors, and any other content the reader is expected to see before beginning play. This material is often essential context — many gamebooks include background story, tavern rumors, or world lore that the player is expected to read before starting.
+The frontmatter object contains all introductory and supplementary material that appears before the numbered sections AND any reference material the player may need to consult during play: story background, rules explanations, world-building, maps, character sheets, rumors, glossaries, errata, appendices, and any other content the reader is expected to see before or during the adventure. This material is often essential context — many gamebooks include background story that's required reading, plus maps and rules summaries that the player consults repeatedly during play.
 
-Frontmatter is presented to the player as readable pages *before* character creation begins. The emulator displays them in order, and the player clicks through them before rolling stats.
+Frontmatter pages serve two purposes:
+
+1. **Pre-play walkthrough.** Pages flagged for startup display (the default) are shown to the player in order before character creation begins. The player clicks through them before rolling stats. Use this for story intros, rules explanations, world background, and anything the player needs to understand the setting.
+
+2. **In-game reference panel.** Pages flagged as accessible during play (the default) are exposed in the emulator's in-game reference UI, so the player can consult them at any time without leaving their current section. Use this for maps, rules quick-references, character sheet templates, monster glossaries, errata, and appendices — anything the player might want to look up mid-adventure.
+
+A page can be both, only one, or (rarely) neither. Use `show_at_start: false` for reference-only pages that would be distracting at game start (e.g., a long errata appendix or a glossary that's only useful for lookup). Use `accessible_during_play: false` for pure intro material like "The Story So Far" that doesn't need to be re-read mid-adventure. Both fields default to `true`, so a page with neither set is included in both flows — which is the right default for most pages.
 
 ```json
 {
   "frontmatter": {
     "pages": [
       {
-        "title": "string — page title (e.g., 'The Story So Far', 'Rules', 'Rumours')",
+        "title": "string — page title (e.g., 'The Story So Far', 'Map of Sommerlund', 'Kai Disciplines')",
         "text": "string — full text content of this page",
-        "type": "string — story, rules, reference, flavor"
+        "type": "string — story, rules, reference, map, appendix, errata, glossary, flavor",
+        "show_at_start": true,
+        "accessible_during_play": true,
+        "image": "optional — illustration reference, e.g., illustration_map_sommerlund"
       }
     ]
   }
@@ -603,21 +612,32 @@ Frontmatter is presented to the player as readable pages *before* character crea
 ```
 
 **What to include:**
-- Story introduction / background (prologues, setting descriptions, "the story so far" sections)
-- Rules explanation as written in the book (the reader is expected to read these)
-- Reference material the player may consult during play (rumor tables, maps described in text, background lore)
-- Flavor text (dedications, author notes) — optional, include if substantive
+- Story introduction / background (prologues, setting descriptions, "the story so far" sections) — `type: story`, default flags
+- Rules explanation as written in the book — `type: rules`, default flags (reference value during play is real)
+- Maps, character sheets, equipment lists — `type: map` or `type: reference`, default flags
+- Glossaries, monster lists, spell descriptions — `type: glossary` or `type: reference`, default flags
+- Errata and corrections published after the book — `type: errata`, often `show_at_start: false` (reference only)
+- Appendices with extra lore, tables, or supplementary content — `type: appendix`, default flags
+- Flavor text (dedications, author notes) — `type: flavor`, optional, often `accessible_during_play: false`
 
 **What NOT to include:**
 - Copyright notices, publishing metadata (already in `metadata`)
 - Character creation instructions (already in `character_creation`)
-- The stat/combat rules in mechanical form (already in `rules`) — but DO include the narrative rules explanation as the player would read it
+- The stat/combat rules in *mechanical* form (already in `rules`) — but DO include the *narrative* rules explanation as the player would read it, since the player will want to consult it during play
 
 **Type values:**
-- `story` — narrative background the player reads for context
-- `rules` — rules explanation as presented in the book
-- `reference` — material the player may consult during play (rumor tables, etc.)
+- `story` — narrative background the player reads for context (e.g., "The Story So Far")
+- `rules` — rules explanation as presented in the book (e.g., combat sequence, stat tests)
+- `reference` — generic reference material the player may consult during play
+- `map` — maps and geography
+- `appendix` — supplementary content and tables that appear after the numbered sections in the original book
+- `errata` — corrections published after the book
+- `glossary` — monster lists, spell descriptions, item catalogs
 - `flavor` — dedications, author notes, non-essential material
+
+**Real example: Lone Wolf 1.** A correctly populated frontmatter for Flight from the Dark would include the story background (Kai monastery destroyed, escape to Holmgard), the Game Rules section (stat generation, combat ratio table, ENDURANCE rules), the Kai Disciplines reference (the 10 disciplines with their full descriptions), and the Map of Sommerlund (with `type: map` so it's grouped separately in the in-game reference panel). Every Lone Wolf book has these standard reference pages and they should all be in `frontmatter.pages` rather than embedded in section text or scattered across `rules`/`character_creation`.
+
+**Real example: Fighting Fantasy.** The Adventure Sheet (the character sheet template) belongs in frontmatter as `type: reference` so the player can look at it any time. The Background section belongs as `type: story` (often `accessible_during_play: false` since it's pure intro). The Combat rules narrative belongs as `type: rules`.
 
 ### 2.1 metadata
 
@@ -1861,6 +1881,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.3 — In-game reference panel feature. Schema bumped to GBF 1.1.0 with two new optional fields on `frontmatter.pages[]`: `show_at_start` (default true) and `accessible_during_play` (default true). Pages can opt out of either flow individually so books can mark intro-only material vs. reference-only material vs. dual-purpose material. Type enum on frontmatter pages expanded with `map`, `appendix`, `errata`, and `glossary` for finer categorization. HTML emulator gains a Reference button in the game-screen save bar (visible only when the book has any in-game-accessible frontmatter pages) that opens the existing frontmatter screen with a Close button instead of Continue→Begin Character Creation, plus a page-jump nav row with one button per page so the player can jump straight to maps, glossaries, or appendices without paging through the whole intro. Browser emulator bumped to 2.2.0; CLI emulator constants bumped to 2.2.0 for parity (no behavioural change in CLI — frontmatter is a player-facing feature). Section 2.0 (frontmatter) of the codex doc fully rewritten to describe both pre-play and in-game uses, with the new fields documented and concrete examples for Lone Wolf and Fighting Fantasy. The triggering observation: both LW and Warlock had no frontmatter block at all in their iter-N JSONs, so the player couldn't see the story intro or any reference material. The schema and emulator changes ship now; the data updates (populating frontmatter for LW especially, with Map of Sommerlund, Kai Disciplines reference, and the Game Rules narrative) come in the next comprehensive review.
 - v2.2 — Rule expansion pass informed by triaging the Lone Wolf 1 backlog. Added Rule 12 (no duplicate penalty events that double-count `eat_meal`/`combat`/`roll_dice`/`stat_test` outcomes), Rule 13 (conditional-choice text/condition consistency verification — every "If you have…" choice must have a non-null condition), Rule 14 (combat modifier extraction must scan the whole section, not just the stat-block paragraph), Rule 15 (discipline-driven default conditions, currently a tracked gap pending event-level conditions on the schema), and Rule 16 (codex maintainer discipline — when finding a bug in a first-party book, prefer improving the rule over hand-patching the output). Expanded Section 9.5's loot-detection vocabulary to catch pickup phrasing beyond the canonical "Action Chart" trigger. Added Rule 13/14/12 verification checks to Section 10's verification checklist. Added a maintainer note inside Step 3a-2 (Targeted Fix) warning codex maintainers against using targeted fix as a crutch on first-party books. No schema or emulator changes; all v2.2 rules are doc-only and apply to the existing GBF format. The discipline-exemption gap (Rule 15) and the special_rules mechanical enforcement gap (logged in known_issues) are the two open architectural decisions the next iteration should address.
 - v2.1 — Process and safety update informed by a from-scratch conversion experiment on Lone Wolf 1 (clean PDF source). Added Codex Version and Compatibility header with commit-SHA pinning guidance and a Lua runtime pin section. Added Step 2a (Optional Resources Checklist) and Step 2b (Development Tier Selection) for budget-aware runs on Free/Pro accounts. Restructured Step 3a (existing-GBF handling) into two modes: Step 3a-1 Comprehensive Review (the original full-audit workflow) and Step 3a-2 Targeted Fix (a narrow-scope mode for fixing specific sections without re-auditing the whole file). Added Rule 6 (Never Echo Book Narrative into Model Output) to address cumulative-context safety-classifier trips observed on dark-themed gamebooks. Added Rule 7 (Prefer Parser-Driven Conversion) codifying the file-to-file transformation workflow. Added Rule 8 (Extract Enemy Special Rules Verbatim) to prevent template copy-paste errors seen in hand-iterated files. Added Rule 9 (Multi-Event Sections) and Rule 10 (Enemy ID Naming Discipline) from observed encoding gaps. Added Rule 11 (Starting Resources That Require Rolls) from observed character-creation regressions. Added Section 9.5 (Parser-Driven Workflow), 9.6 (Self-Testing with the Canonical Emulator), 9.7 (Playbook Deliverables), and 9.8 (Fetching Canonical Artifacts from GitHub). Added optional `rules.inventory.currency_display_name` and `rules.provisions.display_name` fields so books can specify canonical UI labels (e.g., "Gold Crowns" / "Meals" for Lone Wolf, "Gold Pieces" for Fighting Fantasy). No breaking changes to the output format; the GBF JSON schema is fully backward compatible.
 - v2.0 — Major rewrite. Added interactive flow, anti-hallucination guardrails, model-agnostic design, processing strategy for scanned PDFs, abilities/disciplines system, unknown series support. Revised combat description to be series-agnostic. Removed series-specific emulator plugin references. Expanded Fighting Fantasy profile to note per-book variation in starting equipment and special mechanics. Expanded Lone Wolf profile with full discipline list and Project Aon references.

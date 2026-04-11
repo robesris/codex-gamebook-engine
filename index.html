@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Codex Gamebook Engine — Browser Emulator
-  Version: 2.1.0
-  Compatible with codex doc >= 2.1
+  Version: 2.2.0
+  Compatible with codex doc >= 2.3 and GBF schema >= 1.1.0
 -->
 <html lang="en">
 <head>
@@ -347,6 +347,21 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   text-align: center; color: var(--text-dim); font-size: 0.85em;
   margin-bottom: 12px;
 }
+.frontmatter-page-nav {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+  margin-bottom: 16px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.frontmatter-page-nav button {
+  background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+  padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em;
+}
+.frontmatter-page-nav button:hover {
+  background: var(--bg-card-hover); border-color: var(--accent-dim);
+}
+.frontmatter-page-nav button.current {
+  background: var(--accent); color: var(--bg); border-color: var(--accent);
+}
 
 /* --- Choose Items --- */
 .choose-items-area {
@@ -488,8 +503,11 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
   <!-- FRONTMATTER -->
   <div id="frontmatter-screen" class="screen">
     <h1 id="frontmatter-title"></h1>
+    <div id="frontmatter-page-nav" class="frontmatter-page-nav"></div>
     <div id="frontmatter-content"></div>
     <div class="center mt-3">
+      <button id="frontmatter-prev-btn" class="btn btn-small" style="display:none;" onclick="prevFrontmatterPage()">&laquo; Previous</button>
+      <button id="frontmatter-close-btn" class="btn btn-small" style="display:none;" onclick="closeFrontmatterFromGame()">Close</button>
       <button id="frontmatter-next-btn" class="btn btn-large" onclick="nextFrontmatterPage()">Continue</button>
     </div>
   </div>
@@ -522,6 +540,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
       <button onclick="exportState()">Export</button>
       <button onclick="document.getElementById('import-game-input').click()">Import</button>
       <input type="file" id="import-game-input" accept=".json" style="display:none;">
+      <button id="reference-btn" style="display:none;" onclick="openReferenceFromGame()">Reference</button>
       <span class="save-status" id="save-status"></span>
     </div>
     <div class="inventory-toggle" id="inventory-panel">
@@ -547,7 +566,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '2.1.0';
+const CODEX_EMULATOR_VERSION = '2.2.0';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -926,9 +945,14 @@ const LuaEngine = (function() {
   return { available: true, runCombatRound };
 })();
 
-// ==================== FRONTMATTER ====================
+// ==================== FRONTMATTER + IN-GAME REFERENCE ====================
 let frontmatterPages = [];
 let frontmatterIdx = 0;
+// True when the frontmatter screen was opened from inside the game via the
+// Reference button rather than from the initial pre-character-creation
+// walkthrough. Determines which buttons are visible (Close vs. Continue) and
+// where finishing the last page returns to (game screen vs. character creation).
+let frontmatterOpenedFromGame = false;
 
 function offerSaveRestore(save) {
   showScreen('load-screen');
@@ -955,21 +979,77 @@ function offerSaveRestore(save) {
   };
 }
 
+// Returns the subset of frontmatter pages that should be shown on the
+// pre-character-creation walkthrough at game start. Defaults to "all pages"
+// for backward compatibility with books that don't set show_at_start.
+function startupFrontmatterPages() {
+  const fm = gameData?.frontmatter;
+  if (!fm?.pages) return [];
+  return fm.pages.filter(p => p.show_at_start !== false);
+}
+
+// Returns the subset of frontmatter pages that the player can access during
+// play via the in-game Reference button. Defaults to "all pages" for backward
+// compatibility with books that don't set accessible_during_play.
+function inGameFrontmatterPages() {
+  const fm = gameData?.frontmatter;
+  if (!fm?.pages) return [];
+  return fm.pages.filter(p => p.accessible_during_play !== false);
+}
+
 function startGame() {
-  const fm = gameData.frontmatter;
-  if (fm?.pages && fm.pages.length > 0) {
-    frontmatterPages = fm.pages;
+  const startupPages = startupFrontmatterPages();
+  if (startupPages.length > 0) {
+    frontmatterPages = startupPages;
     frontmatterIdx = 0;
+    frontmatterOpenedFromGame = false;
     showFrontmatterPage();
   } else {
     startCharacterCreation();
   }
 }
 
+// Open the frontmatter pages from inside the game without losing the player's
+// current section, inventory, or stats. The player can browse all pages marked
+// accessible_during_play, then click Close to return exactly where they left
+// off. Wired to the Reference button in the game-screen save bar.
+function openReferenceFromGame() {
+  const refPages = inGameFrontmatterPages();
+  if (refPages.length === 0) {
+    return; // Reference button shouldn't have been visible; defensive.
+  }
+  frontmatterPages = refPages;
+  frontmatterIdx = 0;
+  frontmatterOpenedFromGame = true;
+  showFrontmatterPage();
+}
+
+// Returns the player to the game screen with the active section preserved.
+function closeFrontmatterFromGame() {
+  frontmatterOpenedFromGame = false;
+  showScreen('game-screen');
+}
+
 function showFrontmatterPage() {
   showScreen('frontmatter-screen');
   const page = frontmatterPages[frontmatterIdx];
   document.getElementById('frontmatter-title').textContent = gameData.metadata?.title || 'Gamebook';
+
+  // Page-jump nav: a row of small buttons, one per page, so the player can
+  // jump straight to the page they want without paging through every one.
+  // Especially useful for books with many reference pages (maps, glossaries,
+  // appendices). Hidden when there's only one page.
+  const nav = document.getElementById('frontmatter-page-nav');
+  if (frontmatterPages.length > 1) {
+    nav.innerHTML = frontmatterPages.map((p, i) => {
+      const cls = i === frontmatterIdx ? ' class="current"' : '';
+      const label = p.title || `Page ${i + 1}`;
+      return `<button${cls} onclick="jumpToFrontmatterPage(${i})">${label}</button>`;
+    }).join('');
+    nav.style.display = '';
+  } else {
+    nav.style.display = 'none';
+  }
 
   const content = document.getElementById('frontmatter-content');
   const total = frontmatterPages.length;
@@ -982,11 +1062,47 @@ function showFrontmatterPage() {
     </div>
   `;
 
-  const btn = document.getElementById('frontmatter-next-btn');
-  if (frontmatterIdx < total - 1) {
-    btn.textContent = 'Continue';
+  // Button visibility depends on whether we're in the pre-character-creation
+  // walkthrough or in the in-game reference panel.
+  const nextBtn = document.getElementById('frontmatter-next-btn');
+  const prevBtn = document.getElementById('frontmatter-prev-btn');
+  const closeBtn = document.getElementById('frontmatter-close-btn');
+
+  prevBtn.style.display = frontmatterIdx > 0 ? '' : 'none';
+
+  if (frontmatterOpenedFromGame) {
+    // In-game reference: Close button visible. Continue advances within the
+    // pages and disappears on the last page (Close is the only exit).
+    closeBtn.style.display = '';
+    if (frontmatterIdx < total - 1) {
+      nextBtn.textContent = 'Next \u00bb';
+      nextBtn.style.display = '';
+    } else {
+      nextBtn.style.display = 'none';
+    }
   } else {
-    btn.textContent = 'Begin Character Creation';
+    // Startup walkthrough: original behaviour. Continue paginates and the
+    // last-page button starts character creation.
+    closeBtn.style.display = 'none';
+    nextBtn.style.display = '';
+    if (frontmatterIdx < total - 1) {
+      nextBtn.textContent = 'Continue';
+    } else {
+      nextBtn.textContent = 'Begin Character Creation';
+    }
+  }
+}
+
+function jumpToFrontmatterPage(idx) {
+  if (idx < 0 || idx >= frontmatterPages.length) return;
+  frontmatterIdx = idx;
+  showFrontmatterPage();
+}
+
+function prevFrontmatterPage() {
+  if (frontmatterIdx > 0) {
+    frontmatterIdx--;
+    showFrontmatterPage();
   }
 }
 
@@ -994,7 +1110,12 @@ function nextFrontmatterPage() {
   frontmatterIdx++;
   if (frontmatterIdx < frontmatterPages.length) {
     showFrontmatterPage();
+  } else if (frontmatterOpenedFromGame) {
+    // Past the last page in in-game reference mode. Just close.
+    closeFrontmatterFromGame();
   } else {
+    // Past the last page in startup walkthrough mode. Move to character
+    // creation as before.
     startCharacterCreation();
   }
 }
@@ -1261,7 +1382,21 @@ function showEquipmentAndBegin() {
 // ==================== BEGIN ADVENTURE ====================
 function beginAdventure() {
   showScreen('game-screen');
+  updateReferenceButton();
   navigateTo('1');
+}
+
+// Show or hide the Reference button in the game-screen save bar based on
+// whether the loaded book has any frontmatter pages flagged as
+// accessible-during-play. Books with no frontmatter, or with all pages opted
+// out via accessible_during_play: false, get no Reference button (rather than
+// a button that opens an empty panel). Called from beginAdventure and from
+// loadGame so the button is correct on both new games and restored saves.
+function updateReferenceButton() {
+  const btn = document.getElementById('reference-btn');
+  if (!btn) return;
+  const refPages = inGameFrontmatterPages();
+  btn.style.display = refPages.length > 0 ? '' : 'none';
 }
 
 // ==================== STAT BAR ====================
@@ -2971,6 +3106,7 @@ function debugJumpToSection() {
   // fixed and floats above every screen, so this reassignment is safe
   // regardless of where the player started.
   showScreen('game-screen');
+  updateReferenceButton();
   navigateTo(val);
   // Reset the game-content scroll position too — in case the previous
   // section filled the page with combat logs and the viewport was
@@ -3196,6 +3332,7 @@ function loadSavedGame() {
 function loadGame(saveJson) {
   deserializeState(saveJson.state);
   showScreen('game-screen');
+  updateReferenceButton();
   navigateTo(state.currentSection);
 }
 
