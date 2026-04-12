@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '2.5.0';
+const CODEX_EMULATOR_VERSION = '3.0.0';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -303,6 +303,12 @@ function initialState(bookPath) {
     stats: {},
     initialStats: {},
     inventory: [],
+    // Equipment map: {slot_name -> item_id}. Populated by auto_equip on
+    // add_item when the item is equippable, and by explicit equip/unequip
+    // actions from the player. A slot holds exactly one item; equipping
+    // to an occupied slot displaces the previous occupant (the displaced
+    // item stays in inventory, it's just no longer equipped). Schema v1.5+.
+    equipment: {},
     flags: [],
     provisions: 0,
     gold: 0,
@@ -350,7 +356,7 @@ function loadBook(state) {
 
 // ==================== CONDITION EVALUATION ====================
 
-function evalCondition(cond, state) {
+function evalCondition(cond, state, book) {
   if (!cond) return true;
   switch (cond.type) {
     case 'has_item': return state.inventory.includes(cond.item);
@@ -365,11 +371,38 @@ function evalCondition(cond, state) {
     }
     case 'has_ability':
       return (state.abilities || []).some(a => a.toLowerCase().replace(/ /g, '_') === cond.ability.toLowerCase().replace(/ /g, '_'));
-    case 'not': return !evalCondition(cond.condition, state);
-    case 'and': return (cond.conditions || []).every(c => evalCondition(c, state));
-    case 'or': return (cond.conditions || []).some(c => evalCondition(c, state));
+    case 'not': return !evalCondition(cond.condition, state, book);
+    case 'and': return (cond.conditions || []).every(c => evalCondition(c, state, book));
+    case 'or': return (cond.conditions || []).some(c => evalCondition(c, state, book));
     case 'test_failed': return state.lastTestResult === false;
     case 'test_succeeded': return state.lastTestResult === true;
+    // Schema v1.5+ equipment-aware conditions. Each evaluates the player's
+    // current equipment map (state.equipment: {slot → item_id}) against
+    // the condition parameters. If state.equipment is undefined (pre-v1.5
+    // state carried over from older save formats), treat it as empty.
+    case 'has_equipped_item': {
+      const eq = state.equipment || {};
+      return Object.values(eq).some(id => id === cond.item);
+    }
+    case 'has_equipped_in_slot': {
+      const eq = state.equipment || {};
+      const occupant = eq[cond.slot];
+      if (!occupant) return false;
+      if (cond.item) return occupant === cond.item;
+      return true;  // slot is occupied by anything
+    }
+    case 'has_equipped_with_property': {
+      const eq = state.equipment || {};
+      const catalog = (book && book.items_catalog) || {};
+      for (const itemId of Object.values(eq)) {
+        if (!itemId) continue;
+        const item = catalog[itemId];
+        if (!item) continue;
+        const props = Array.isArray(item.properties) ? item.properties : [];
+        if (props.includes(cond.property)) return true;
+      }
+      return false;
+    }
     default: return true;
   }
 }
@@ -387,6 +420,9 @@ function describeCondition(cond) {
     case 'or': return (cond.conditions || []).map(describeCondition).join(' OR ');
     case 'test_failed': return 'test failed';
     case 'test_succeeded': return 'test succeeded';
+    case 'has_equipped_item': return `has equipped: ${cond.item}`;
+    case 'has_equipped_in_slot': return cond.item ? `${cond.slot} slot has ${cond.item}` : `${cond.slot} slot occupied`;
+    case 'has_equipped_with_property': return `equipped item has property: ${cond.property}`;
     default: return cond.type;
   }
 }
@@ -408,6 +444,236 @@ function getPlayerHealth(state, book) {
 function setPlayerHealth(state, book, val) {
   const { healthStat } = getCombatStats(book);
   if (healthStat) state.stats[healthStat] = val;
+}
+
+// ==================== EQUIPMENT HELPERS (schema v1.5+) ====================
+
+// Return the items_catalog entry for the given item_id, or null.
+function getItemDef(book, itemId) {
+  const catalog = (book && book.items_catalog) || {};
+  return catalog[itemId] || null;
+}
+
+// Is the given item currently equipped in any slot?
+function isItemEquipped(state, itemId) {
+  const eq = state.equipment || {};
+  return Object.values(eq).some(id => id === itemId);
+}
+
+// Can this item be equipped right now given current state (combat active,
+// equip_timing constraints)? Returns {ok: boolean, reason: string}.
+//
+// `isAutoEquip` is true when the check is being made on behalf of an
+// add_item auto-equip (not a player action). Auto-equip bypasses the
+// combat-active check because the narrative moment of acquisition is
+// considered "not yet in combat" for timing purposes, even if a combat
+// event happens to be running.
+function canEquipItem(state, book, itemId, isAutoEquip) {
+  const item = getItemDef(book, itemId);
+  if (!item) return { ok: false, reason: `no item definition for ${itemId}` };
+  if (!item.equippable) return { ok: false, reason: `${itemId} is not equippable` };
+  if (!item.slot) return { ok: false, reason: `${itemId} has no slot declared` };
+  const timing = item.equip_timing || 'out_of_combat';
+  if (timing === 'once' && isItemEquipped(state, itemId)) {
+    return { ok: false, reason: `${itemId} has equip_timing: once and is already equipped` };
+  }
+  if (isAutoEquip) return { ok: true, reason: '' };
+  if (timing === 'out_of_combat' && state.combat) {
+    return { ok: false, reason: `${itemId} cannot be equipped during combat (equip_timing: out_of_combat)` };
+  }
+  return { ok: true, reason: '' };
+}
+
+// Can this item be unequipped right now?
+function canUnequipItem(state, book, itemId) {
+  const item = getItemDef(book, itemId);
+  if (!item) return { ok: false, reason: `no item definition for ${itemId}` };
+  const timing = item.equip_timing || 'out_of_combat';
+  if (timing === 'once') {
+    return { ok: false, reason: `${itemId} has equip_timing: once and cannot be unequipped` };
+  }
+  if (timing === 'out_of_combat' && state.combat) {
+    return { ok: false, reason: `${itemId} cannot be unequipped during combat (equip_timing: out_of_combat)` };
+  }
+  return { ok: true, reason: '' };
+}
+
+// Equip itemId into its declared slot. Displaces any previous occupant
+// (which stays in inventory but is no longer equipped). Assumes caller
+// has already validated the operation via canEquipItem.
+function equipItem(state, book, itemId) {
+  const item = getItemDef(book, itemId);
+  if (!item || !item.slot) return;
+  if (!state.equipment) state.equipment = {};
+  const prev = state.equipment[item.slot];
+  state.equipment[item.slot] = itemId;
+  if (prev && prev !== itemId) {
+    state.log.push(`Equipped ${itemId} in slot ${item.slot} (displaced ${prev})`);
+  } else if (!prev) {
+    state.log.push(`Equipped ${itemId} in slot ${item.slot}`);
+  }
+}
+
+// Unequip the item currently in the given slot, if any. The item stays
+// in inventory; only the equipped pointer is cleared.
+function unequipSlot(state, book, slot) {
+  if (!state.equipment) return;
+  const occupant = state.equipment[slot];
+  if (!occupant) return;
+  delete state.equipment[slot];
+  state.log.push(`Unequipped ${occupant} from slot ${slot}`);
+}
+
+// Auto-unequip any slot containing the named item. Called when remove_item
+// fires so a removed item is no longer shown as equipped.
+function autoUnequipOnRemove(state, itemId) {
+  if (!state.equipment) return;
+  for (const slot of Object.keys(state.equipment)) {
+    if (state.equipment[slot] === itemId) {
+      delete state.equipment[slot];
+    }
+  }
+}
+
+// Handle the auto-equip side of an add_item. If the item is equippable
+// with auto_equip: true (default), move it into its slot, displacing
+// any previous occupant. No-op for non-equippable items or items with
+// auto_equip: false.
+function autoEquipOnAdd(state, book, itemId) {
+  const item = getItemDef(book, itemId);
+  if (!item || !item.equippable) return;
+  const autoEquip = item.auto_equip !== false; // default true
+  if (!autoEquip) return;
+  const check = canEquipItem(state, book, itemId, true);
+  if (!check.ok) {
+    state.log.push(`Auto-equip skipped for ${itemId}: ${check.reason}`);
+    return;
+  }
+  equipItem(state, book, itemId);
+}
+
+// ==================== DAMAGE INTERACTIONS (schema v1.5+) ====================
+
+// Normalize a damage value into a list of component objects
+// { amount: number, sources: string[] }. Accepts three forms:
+//   - undefined / null → empty list (no damage)
+//   - a number → a single untagged component with that amount
+//   - a list of {amount, sources} tables → the full form, passed through
+//   - an array of numbers (unusual) → one untagged component per entry
+function normalizeDamage(raw) {
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw === 'number') {
+    return [{ amount: raw, sources: [] }];
+  }
+  if (Array.isArray(raw)) {
+    const out = [];
+    for (const entry of raw) {
+      if (typeof entry === 'number') {
+        out.push({ amount: entry, sources: [] });
+      } else if (entry && typeof entry === 'object') {
+        const amount = typeof entry.amount === 'number' ? entry.amount : 0;
+        const sources = Array.isArray(entry.sources) ? entry.sources.filter(s => typeof s === 'string')
+          : (entry.sources && typeof entry.sources === 'object' ? Object.values(entry.sources).filter(s => typeof s === 'string') : []);
+        out.push({ amount, sources });
+      }
+    }
+    return out;
+  }
+  // readTable in the Lua bridge converts Lua tables to objects keyed by
+  // 1-based numeric indices. Walk the numeric keys in order.
+  if (typeof raw === 'object') {
+    const keys = Object.keys(raw).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+    if (keys.length > 0) {
+      const out = [];
+      for (const k of keys) {
+        const entry = raw[k];
+        if (typeof entry === 'number') {
+          out.push({ amount: entry, sources: [] });
+        } else if (entry && typeof entry === 'object') {
+          const amount = typeof entry.amount === 'number' ? entry.amount : 0;
+          let sources = [];
+          if (Array.isArray(entry.sources)) {
+            sources = entry.sources.filter(s => typeof s === 'string');
+          } else if (entry.sources && typeof entry.sources === 'object') {
+            // Lua-table form
+            const srcKeys = Object.keys(entry.sources).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+            sources = srcKeys.map(k => entry.sources[k]).filter(s => typeof s === 'string');
+          }
+          out.push({ amount, sources });
+        }
+      }
+      return out;
+    }
+    // A lone {amount, sources} object (not wrapped in a list).
+    if (typeof raw.amount === 'number') {
+      let sources = [];
+      if (Array.isArray(raw.sources)) sources = raw.sources.filter(s => typeof s === 'string');
+      else if (raw.sources && typeof raw.sources === 'object') {
+        const srcKeys = Object.keys(raw.sources).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+        sources = srcKeys.map(k => raw.sources[k]).filter(s => typeof s === 'string');
+      }
+      return [{ amount: raw.amount, sources }];
+    }
+  }
+  return [];
+}
+
+// Test whether a damage_interaction's source filters match a given component.
+// Returns true if the interaction should apply to this component. An
+// interaction with no filters always matches.
+function interactionMatchesComponent(inter, component) {
+  const sources = component.sources || [];
+  if (Array.isArray(inter.source_has_any) && inter.source_has_any.length > 0) {
+    const any = inter.source_has_any.some(tag => sources.includes(tag));
+    if (!any) return false;
+  }
+  if (Array.isArray(inter.source_lacks_all) && inter.source_lacks_all.length > 0) {
+    const lacks = inter.source_lacks_all.every(tag => !sources.includes(tag));
+    if (!lacks) return false;
+  }
+  return true;
+}
+
+// Apply frozen damage_interactions to a list of damage components and
+// return the summed scaled damage. Interactions are filtered by direction
+// (incoming / outgoing), then by source tags per-component. Matching
+// interactions' multipliers compose multiplicatively on a component.
+// Negative damage (healing) bypasses interactions entirely — it is
+// returned unchanged and summed directly.
+function applyDamageInteractions(components, interactions, direction, state, book, round) {
+  let total = 0;
+  const logEntries = [];
+  for (const comp of components) {
+    let amount = comp.amount;
+    if (amount <= 0) {
+      // Healing or no-op: pass through unchanged.
+      total += amount;
+      continue;
+    }
+    for (const inter of interactions) {
+      if ((inter.direction || 'incoming') !== direction) continue;
+      if (!interactionMatchesComponent(inter, comp)) continue;
+      const before = amount;
+      amount = amount * inter.multiplier;
+      if (round === 1) {
+        logEntries.push({ comp, inter, before, after: amount });
+      }
+    }
+    total += amount;
+  }
+  // Log a summary of damage_interactions that fired on round 1, so the
+  // playthrough log shows what's in effect. We only log round 1 to avoid
+  // cluttering the log with per-round spam.
+  if (round === 1 && logEntries.length > 0) {
+    for (const entry of logEntries) {
+      const srcs = entry.comp.sources.length > 0 ? `[${entry.comp.sources.join(',')}]` : '[untagged]';
+      state.log.push(
+        `Damage interaction (${direction}): ${entry.inter.kind} x${entry.inter.multiplier} on ${srcs} — ${entry.before} → ${entry.after}` +
+        (entry.inter.reason ? ` (${entry.inter.reason})` : '')
+      );
+    }
+  }
+  return total;
 }
 
 function getEnemyHealth(enemy, book) {
@@ -455,6 +721,7 @@ function processCreationSteps(state, book) {
       return state;
     } else if (step.action === 'add_item') {
       if (!state.inventory.includes(step.item)) state.inventory.push(step.item);
+      autoEquipOnAdd(state, book, step.item);
       state.creationStep++;
     } else if (step.action === 'set_resource') {
       // Canonical resource slots first.
@@ -576,7 +843,7 @@ function handleEvent(event, state, book) {
   // discipline exempting the player from eat_meal requirements).
   // Absent or null `condition` means the event always fires, so
   // pre-v1.2 books remain valid.
-  if (event.condition && !evalCondition(event.condition, state)) {
+  if (event.condition && !evalCondition(event.condition, state, book)) {
     state.log.push(`Event skipped (${event.type}: ${describeCondition(event.condition)} is false)`);
     return 'continue';
   }
@@ -613,10 +880,12 @@ function handleEvent(event, state, book) {
     case 'add_item':
       if (!state.inventory.includes(event.item)) state.inventory.push(event.item);
       state.log.push(`Acquired: ${event.item}`);
+      autoEquipOnAdd(state, book, event.item);
       return 'continue';
     case 'remove_item': {
       const idx = state.inventory.indexOf(event.item);
       if (idx >= 0) state.inventory.splice(idx, 1);
+      autoUnequipOnRemove(state, event.item);
       state.log.push(`Lost: ${event.item}`);
       return 'continue';
     }
@@ -766,11 +1035,44 @@ function startCombat(event, state, book) {
   }
   const appliedModifiers = [];
   for (const mod of [...eventModifiers, ...intrinsicModifiers]) {
-    if (mod.condition && !evalCondition(mod.condition, state)) continue;
+    if (mod.condition && !evalCondition(mod.condition, state, book)) continue;
     const target = typeof mod.target === 'string' ? mod.target : null;
     const delta = typeof mod.delta === 'number' ? mod.delta : 0;
     if (!target || delta === 0) continue;
     appliedModifiers.push({ target, delta, reason: mod.reason || null });
+  }
+
+  // Evaluate damage_interactions (schema v1.5) once at combat start, the
+  // same way combat_modifiers are frozen. We merge the combat event's
+  // `damage_interactions` with the `intrinsic_damage_interactions` from
+  // each enemy's catalog entry, evaluate each entry's optional condition,
+  // and freeze the passing entries on state.combat.appliedDamageInteractions.
+  // Condition filtering happens once here; source-tag filtering happens
+  // per damage component per round in runCombatRound, because the source
+  // tags are decided by the round_script each round.
+  const eventInteractions = event.damage_interactions || [];
+  const intrinsicInteractions = [];
+  for (const en of enemies) {
+    const cat = en.data || {};
+    if (Array.isArray(cat.intrinsic_damage_interactions)) {
+      intrinsicInteractions.push(...cat.intrinsic_damage_interactions);
+    }
+  }
+  const appliedDamageInteractions = [];
+  for (const inter of [...eventInteractions, ...intrinsicInteractions]) {
+    if (inter.condition && !evalCondition(inter.condition, state, book)) continue;
+    const kind = inter.kind;
+    if (kind !== 'immunity' && kind !== 'resistance' && kind !== 'weakness') continue;
+    const defaultMult = kind === 'immunity' ? 0 : kind === 'resistance' ? 0.5 : 2;
+    const multiplier = typeof inter.multiplier === 'number' ? inter.multiplier : defaultMult;
+    appliedDamageInteractions.push({
+      kind,
+      multiplier,
+      direction: inter.direction || 'incoming',
+      source_has_any: Array.isArray(inter.source_has_any) ? inter.source_has_any.slice() : null,
+      source_lacks_all: Array.isArray(inter.source_lacks_all) ? inter.source_lacks_all.slice() : null,
+      reason: inter.reason || null,
+    });
   }
 
   state.combat = {
@@ -782,6 +1084,9 @@ function startCombat(event, state, book) {
     specialRules: event.special_rules,
     // Frozen, condition-evaluated modifier list for this combat.
     appliedModifiers,
+    // Frozen, condition-evaluated damage_interactions list for this combat.
+    // Source filtering happens per-round per-component in runCombatRound.
+    appliedDamageInteractions,
     round: 0,
     lastRoundResult: null,
     awaitingPostRound: false,
@@ -827,7 +1132,7 @@ function getAvailableActions(state, book) {
       const choices = state.pendingChoices || [];
       for (let i = 0; i < choices.length; i++) {
         const c = choices[i];
-        const ok = evalCondition(c.condition, state);
+        const ok = evalCondition(c.condition, state, book);
         const target = c.target;
         actions.push({
           name: 'choose_section',
@@ -837,6 +1142,37 @@ function getAvailableActions(state, book) {
           available: ok,
           reason: ok ? null : describeCondition(c.condition),
         });
+      }
+      // Equipment actions (schema v1.5+): list equip/unequip options for
+      // any equippable item in inventory. Gated by equip_timing via
+      // canEquipItem/canUnequipItem so out_of_combat items only show up
+      // outside of combat (which is the case here — we're in a section
+      // pause, not a combat pause).
+      {
+        const catalog = book.items_catalog || {};
+        for (const itemId of state.inventory) {
+          const item = catalog[itemId];
+          if (!item || !item.equippable) continue;
+          if (isItemEquipped(state, itemId)) {
+            const check = canUnequipItem(state, book, itemId);
+            if (check.ok) {
+              actions.push({
+                name: 'unequip',
+                arg: itemId,
+                description: `Unequip ${itemId} from ${item.slot}`,
+              });
+            }
+          } else {
+            const check = canEquipItem(state, book, itemId, false);
+            if (check.ok) {
+              actions.push({
+                name: 'equip',
+                arg: itemId,
+                description: `Equip ${itemId} in ${item.slot}`,
+              });
+            }
+          }
+        }
       }
       break;
 
@@ -882,6 +1218,27 @@ function getAvailableActions(state, book) {
         if (combat.fleeTo) actions.push({ name: 'flee', description: 'Flee' });
       }
       actions.push({ name: 'provide_roll', description: 'For next attack: provide_roll <values>' });
+      // Equip/unequip actions for items with equip_timing: "always". Items
+      // with equip_timing: "out_of_combat" are not listed here because
+      // canEquipItem/canUnequipItem reject them while combat is active.
+      {
+        const catalog = book.items_catalog || {};
+        for (const itemId of state.inventory) {
+          const item = catalog[itemId];
+          if (!item || !item.equippable) continue;
+          if (isItemEquipped(state, itemId)) {
+            const check = canUnequipItem(state, book, itemId);
+            if (check.ok) {
+              actions.push({ name: 'unequip', arg: itemId, description: `Unequip ${itemId} from ${item.slot}` });
+            }
+          } else {
+            const check = canEquipItem(state, book, itemId, false);
+            if (check.ok) {
+              actions.push({ name: 'equip', arg: itemId, description: `Equip ${itemId} in ${item.slot}` });
+            }
+          }
+        }
+      }
       break;
 
     case 'ending':
@@ -989,6 +1346,7 @@ function applyAction(state, book, action, args) {
         state.potion = { name: choice, doses: book.rules?.potion?.doses || 2 };
         const id = choice.toLowerCase().replace(/ /g, '_');
         if (!state.inventory.includes(id)) state.inventory.push(id);
+        autoEquipOnAdd(state, book, id);
       } else {
         const flagName = `${step.category}_${choice.toLowerCase().replace(/ /g, '_')}`;
         if (!state.flags.includes(flagName)) state.flags.push(flagName);
@@ -1012,6 +1370,46 @@ function applyAction(state, book, action, args) {
     }
 
     case 'section':
+      if (action === 'equip') {
+        const itemId = args[0];
+        if (!itemId) {
+          state.log.push('equip requires an item_id argument');
+          return state;
+        }
+        if (!state.inventory.includes(itemId)) {
+          state.log.push(`Cannot equip ${itemId}: not in inventory`);
+          return state;
+        }
+        const check = canEquipItem(state, book, itemId, false);
+        if (!check.ok) {
+          state.log.push(`Cannot equip ${itemId}: ${check.reason}`);
+          return state;
+        }
+        equipItem(state, book, itemId);
+        return state;
+      }
+      if (action === 'unequip') {
+        const itemId = args[0];
+        if (!itemId) {
+          state.log.push('unequip requires an item_id argument');
+          return state;
+        }
+        if (!isItemEquipped(state, itemId)) {
+          state.log.push(`Cannot unequip ${itemId}: not currently equipped`);
+          return state;
+        }
+        const check = canUnequipItem(state, book, itemId);
+        if (!check.ok) {
+          state.log.push(`Cannot unequip ${itemId}: ${check.reason}`);
+          return state;
+        }
+        // Find which slot it's in.
+        const item = getItemDef(book, itemId);
+        if (item && item.slot) {
+          unequipSlot(state, book, item.slot);
+        }
+        return state;
+      }
       if (action === 'choose_section') {
         const idx = parseInt(args[0]);
         const choices = state.pendingChoices || [];
@@ -1020,7 +1418,7 @@ function applyAction(state, book, action, args) {
           state.log.push(`Invalid choice index: ${idx}`);
           return state;
         }
-        if (!evalCondition(choice.condition, state)) {
+        if (!evalCondition(choice.condition, state, book)) {
           state.log.push(`Choice not available: ${describeCondition(choice.condition)}`);
           return state;
         }
@@ -1184,22 +1582,28 @@ function applyAction(state, book, action, args) {
       // Auto items
       for (const id of (event.add_automatic || [])) {
         if (!state.inventory.includes(id)) state.inventory.push(id);
+        autoEquipOnAdd(state, book, id);
       }
-      // Replace category if needed
+      // Replace category if needed — also auto-unequip any items being removed.
       if (event.replace_category) {
         const filterKey = Object.keys(event.catalog_filter || {})[0];
         const filterVal = event.catalog_filter[filterKey];
         if (filterKey && filterVal) {
-          state.inventory = state.inventory.filter(id => {
+          const kept = [];
+          for (const id of state.inventory) {
             const item = catalog[id];
-            if (!item || item[filterKey] !== filterVal) return true;
-            // Don't filter out auto items
-            return (event.add_automatic || []).includes(id);
-          });
+            if (!item || item[filterKey] !== filterVal || (event.add_automatic || []).includes(id)) {
+              kept.push(id);
+            } else {
+              autoUnequipOnRemove(state, id);
+            }
+          }
+          state.inventory = kept;
         }
       }
       for (const id of selected) {
         if (!state.inventory.includes(id)) state.inventory.push(id);
+        autoEquipOnAdd(state, book, id);
       }
       state.log.push(`Selected items: ${[...(event.add_automatic || []), ...selected].join(', ')}`);
       state.pause = null;
@@ -1218,6 +1622,35 @@ function handleCombatAction(action, args, state, book) {
   const combat = state.combat;
   const enemy = combat.enemies[combat.currentEnemyIdx];
   const cs = (typeof book.rules?.combat_system === 'object' ? book.rules.combat_system : null) || book.rules?.combat_rules_detail || {};
+
+  // Equip / unequip during combat: only items with equip_timing: "always"
+  // will pass canEquipItem / canUnequipItem here, since combat is active.
+  // Out-of-combat items will return a rejection message from the helpers.
+  if (action === 'equip') {
+    const itemId = args[0];
+    if (!itemId) { state.log.push('equip requires an item_id argument'); return state; }
+    if (!state.inventory.includes(itemId)) {
+      state.log.push(`Cannot equip ${itemId}: not in inventory`);
+      return state;
+    }
+    const check = canEquipItem(state, book, itemId, false);
+    if (!check.ok) { state.log.push(`Cannot equip ${itemId}: ${check.reason}`); return state; }
+    equipItem(state, book, itemId);
+    return state;
+  }
+  if (action === 'unequip') {
+    const itemId = args[0];
+    if (!itemId) { state.log.push('unequip requires an item_id argument'); return state; }
+    if (!isItemEquipped(state, itemId)) {
+      state.log.push(`Cannot unequip ${itemId}: not currently equipped`);
+      return state;
+    }
+    const check = canUnequipItem(state, book, itemId);
+    if (!check.ok) { state.log.push(`Cannot unequip ${itemId}: ${check.reason}`); return state; }
+    const item = getItemDef(book, itemId);
+    if (item && item.slot) unequipSlot(state, book, item.slot);
+    return state;
+  }
 
   if (action === 'flee') {
     const fleeRules = book.rules?.escaping || {};
@@ -1277,20 +1710,30 @@ function runCombatRound(forcedRollsArg, state, book) {
   const { attackStat } = getCombatStats(book);
   if (attackStat) playerData.attack = state.stats[attackStat] || 0;
 
-  // Apply passive equipment (when:"always"). The canonical shape of
-  // stat_modifier per the codex section 2.5 is
+  // Apply passive equipment. The canonical shape of stat_modifier per the
+  // codex section 2.5 is
   //   { "stat": "<stat name>", "amount": <number>, "when": "always|combat|equipped" }
-  // where `stat` is a STRING NAMING the target stat and `amount` is
-  // the bonus/penalty to add. An earlier version of this code walked
-  // Object.entries(item.stat_modifier) and treated every key as a
-  // stat name, which set playerData.stat = "endurance" and
-  // playerData.amount = 2 instead of applying an ENDURANCE bonus.
-  // Now we read the structured fields directly.
+  // As of schema v1.5+, all three `when` values are honored by the emulator:
+  //   - "always"   — applies whenever the item is in inventory, any time.
+  //   - "combat"   — applies only during combat rounds, regardless of equipped state.
+  //   - "equipped" — applies only when the item occupies an equipment slot in state.equipment.
+  // An earlier version of this code walked Object.entries(item.stat_modifier)
+  // and treated every key as a stat name, which set playerData.stat =
+  // "endurance" and playerData.amount = 2 instead of applying an ENDURANCE
+  // bonus. Now we read the structured fields directly.
   const catalog = book.items_catalog || {};
+  const equipmentMap = state.equipment || {};
+  const equippedIds = new Set(Object.values(equipmentMap));
   for (const itemId of state.inventory) {
     const item = catalog[itemId];
     const sm = item?.stat_modifier;
-    if (sm && sm.when === 'always' && typeof sm.stat === 'string' && typeof sm.amount === 'number') {
+    if (!sm || typeof sm.stat !== 'string' || typeof sm.amount !== 'number') continue;
+    const when = sm.when || 'always';
+    let applies = false;
+    if (when === 'always') applies = true;
+    else if (when === 'combat') applies = true;  // we are inside a combat round
+    else if (when === 'equipped') applies = equippedIds.has(itemId);
+    if (applies) {
       playerData[sm.stat] = (typeof playerData[sm.stat] === 'number' ? playerData[sm.stat] : 0) + sm.amount;
     }
   }
@@ -1340,11 +1783,22 @@ function runCombatRound(forcedRollsArg, state, book) {
     standard_damage: cs.details?.standard_damage || cs.standard_damage || 2,
     last_result: '',
     last_damage: 0,
+    // Schema v1.5+ damage contract: the round_script sets these fields
+    // to report the damage it decided for this round. The emulator then
+    // applies damage_interactions (if any) to scale the values and
+    // subtracts the scaled totals from health. Scripts MUST NOT mutate
+    // player.health or enemy.health directly; that contract is gone.
+    damage_to_enemy: 0,
+    damage_to_player: 0,
     // Expose applied modifiers to the round_script via combat.modifiers
     // so book-specific scripts can do per-modifier math if they need
     // to. Most scripts don't need this — they just read the already-
     // modified player.attack / enemy.armor / hit_threshold / etc.
     modifiers: applied,
+    // Expose applied damage_interactions so round_scripts that care
+    // can read them. Most won't — interaction application is the
+    // emulator's job, not the script's.
+    damage_interactions: combat.appliedDamageInteractions || [],
   };
 
   const context = {
@@ -1353,7 +1807,15 @@ function runCombatRound(forcedRollsArg, state, book) {
     combat: combatData,
     inventory: [...state.inventory],
     items_catalog: catalog,
+    // Expose the current equipment map (slot -> item_id) so round_scripts
+    // can do weapon-aware logic if needed. Most scripts read player.attack
+    // directly and don't need this, but it's available for e.g. computing
+    // per-weapon damage formulas. Schema v1.5+.
+    equipment: { ...(state.equipment || {}) },
   };
+  // Also expose equipment via player.equipment for the more natural
+  // player.equipment.weapon access pattern inside round_scripts.
+  playerData.equipment = { ...(state.equipment || {}) };
   // Pass details object keys as globals
   for (const [k, v] of Object.entries(cs.details || {})) {
     if (k !== 'standard_damage') context[k] = v;
@@ -1373,13 +1835,44 @@ function runCombatRound(forcedRollsArg, state, book) {
     return state;
   }
 
-  // Apply results
-  if (result.enemy?.health !== undefined) {
-    enemy.currentHealth = Math.max(0, result.enemy.health);
+  // Schema v1.5+ contract: round_scripts MUST NOT mutate player.health or
+  // enemy.health directly. They report damage via combat.damage_to_enemy
+  // and combat.damage_to_player, and the emulator applies any active
+  // damage_interactions before subtracting from health. Reject the old
+  // contract with a clear error so mismigrated books are easy to spot.
+  if ((result.enemy && result.enemy.health !== undefined && result.enemy.health !== enemy.currentHealth) ||
+      (result.player && result.player.health !== undefined && result.player.health !== playerData.health)) {
+    const msg = 'round_script uses the pre-v1.5 contract (mutated player.health or enemy.health directly). Migrate the script to set combat.damage_to_enemy and combat.damage_to_player instead. See codex Rule 18 / round_script contract.';
+    state.log.push(`ERROR: ${msg}`);
+    state.pause = { type: 'error', message: msg };
+    return state;
   }
-  if (result.player?.health !== undefined) {
-    setPlayerHealth(state, book, Math.max(0, result.player.health));
+
+  // Read the damage values the round_script reported and normalize them
+  // to the component list form { amount, sources } [] so interaction
+  // filters can operate uniformly.
+  const rawEnemy = result.combat?.damage_to_enemy;
+  const rawPlayer = result.combat?.damage_to_player;
+  const enemyComponents = normalizeDamage(rawEnemy);
+  const playerComponents = normalizeDamage(rawPlayer);
+
+  // Apply damage_interactions (scale each component per interaction
+  // filters) then sum into a final scalar damage-to-apply for each side.
+  const interactions = combat.appliedDamageInteractions || [];
+  const enemyTotal = applyDamageInteractions(enemyComponents, interactions, 'incoming', state, book, combat.round);
+  const playerTotal = applyDamageInteractions(playerComponents, interactions, 'outgoing', state, book, combat.round);
+
+  // Subtract damage from health. Negative damage = healing; clamp to 0
+  // on the damage side. Healing is applied directly and can exceed
+  // initial_is_max (the modify_stat path handles those clamps elsewhere).
+  if (enemyTotal !== 0) {
+    enemy.currentHealth = Math.max(0, enemy.currentHealth - enemyTotal);
   }
+  if (playerTotal !== 0) {
+    const currentPlayerHp = getPlayerHealth(state, book);
+    setPlayerHealth(state, book, Math.max(0, currentPlayerHp - playerTotal));
+  }
+
   for (const msg of result.logs || []) state.log.push(msg);
 
   combat.lastRoundResult = result.combat?.last_result;
@@ -1501,6 +1994,8 @@ function compactState(state) {
     stats: state.stats,
     initialStats: state.initialStats,
     inventory: state.inventory,
+    // Schema v1.5+. Equipment map {slot -> item_id}. Survives save/restore.
+    equipment: state.equipment || {},
     flags: state.flags,
     provisions: state.provisions,
     gold: state.gold,

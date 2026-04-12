@@ -6,6 +6,36 @@ It is **not** a guide for end users running the codex on their own books. End us
 
 ---
 
+## ⛔ HARD RULE: NEVER HAND-EDIT MAINTAINED BOOK JSONS
+
+Read this before doing anything else in this repo.
+
+**Maintained book JSONs (`lw_01_*.json`, `ff01_warlock_*.json`, `grailquest_01_*.json`, `wwy_01_*.json`, `gyog06_*.json`, and any other book living in the companion private repo's `books/` directory) are PRODUCTION-LINE OUTPUTS, not source files.** They are produced by running the codex doc against source material. They are not places you open up and fix bugs by hand.
+
+This means:
+
+- **Never** open a book JSON in an editor and change a value because you spotted a bug.
+- **Never** run a `sed`/`awk`/`jq`/Python snippet that rewrites a field in a book file.
+- **Never** "migrate" a book's shape to match a new schema by hand-editing the JSON, even if the change is purely mechanical.
+- **Never** populate a new schema field on an existing book by hand, even if you know what value it should have.
+
+Every change to a book file happens the same way: you improve the production line upstream (the codex doc, the schema, the emulators), then you re-run the production line over the book via a **comprehensive-review sub-agent** (see the "Comprehensive review via sub-agent" section). The sub-agent reads the updated codex + schema + emulators, reviews the book against them, and writes fixes in place. You review the sub-agent's diff, run the regression playbooks, and commit.
+
+**Why this rule is absolute:**
+
+1. **Hand-patches don't compound.** Fixing a value in one book doesn't fix the rule that caused the bug, so the next book we process will reproduce the same bug. The point of the codex doc is that improvements to it benefit every book forever; hand-patching routes around that benefit entirely.
+2. **Hand-patches drift from what the rules say.** Once a book has a hand-patched field, the shape of that field is no longer derivable from the codex doc. The next fresh codex run against the same source text would produce a *different* output, and the discrepancy is invisible until someone tries to reproduce it.
+3. **Hand-patches are silent when the mechanism moves.** If the schema changes shape later, a hand-patched field might quietly stop making sense — there's no rule to regenerate from, so the patch becomes permanent archaeology.
+4. **Hand-patches look cheap and aren't.** "It's just two lines" is exactly the sentence that produces untracked divergence between source-of-truth and output. A two-line hand-edit you forget to document is worse than a 60-line sub-agent prompt that runs once and leaves a commit trail.
+
+**The one permitted exception** is Targeted Fix mode (Step 3a-2), which the "would a rule have prevented this?" section below describes. Targeted Fix is reserved for genuine one-offs where no general rule improvement would catch the issue — a typo in the source book that the codex correctly preserved, or a house rule so unusual that any general rule covering it would over-fit. **For first-party maintained books this should be rare.** When you do use it, document the reasoning in the commit message so future maintainers can see why we deviated.
+
+If you're reading this rule because you're *about* to hand-edit a book, stop. Ask yourself: is the change mechanical (e.g., migrating a field to a new shape because the schema changed)? Then it belongs in the codex doc, and the sub-agent will apply it consistently across every book. Is the change judgment-heavy (e.g., deciding which items are equippable and what slot they go in)? Then it *definitely* belongs in the codex doc as a rule, and the sub-agent will apply the rule to the book using the book's own text as input. Either way, you don't touch the JSON.
+
+This rule is repeated in abbreviated form in `CLAUDE.md` in both the public and private repos so it appears in session-start context automatically. It is not duplicated out of paranoia — it is duplicated because it has already been violated at least once by an assistant that read this doc but didn't apply the rule to its own proposed workflow, and the duplication is the corrective.
+
+---
+
 ## What this project is, in one paragraph
 
 The codex (`gamebook_codex_v2.md`) is a set of instructions for an AI to convert a gamebook into a structured JSON file in the GBF format defined by `codex.schema.json`. The reference emulators (`cli-emulator/play.js` for Node, `index.html` + `fengari-web.js` for the browser) are deterministic players of that JSON. The four artifacts move together: the codex tells the AI what to produce, the schema constrains what the AI can produce, and the emulators define what the AI's output actually does at runtime. Bugs can live in any of the four. The dev process below describes how to figure out where a bug lives and how to fix it without making things worse.
@@ -23,7 +53,7 @@ The first question on every bug is: **which of the four kinds is this?** A sympt
 
 ## The "would a rule have prevented this?" principle
 
-This is the single most important rule for codex maintainers, and it's encoded in the codex doc itself as Rule 16. Restating it here for our own reference:
+This is the single most important rule for codex maintainers, and it's encoded in the codex doc itself as Rule 16. It is the operational consequence of the top-of-file hard rule ("NEVER HAND-EDIT MAINTAINED BOOK JSONS") — the hard rule tells you what's forbidden, this section tells you what to do instead. Restating it here for our own reference:
 
 **When a data bug shows up in a first-party book, the first question is not "how do I patch the symptom?" It is "would a new or expanded codex rule have prevented this?"**
 
@@ -174,16 +204,16 @@ These are intentionally independent. A codex doc change that doesn't affect the 
 
 ## Resolved architectural questions
 
-These were previously listed as open questions waiting for design decisions. Both have been resolved as of this session.
+These were previously listed as open questions waiting for design decisions. All three have been resolved.
 
 1. **~~Combat `special_rules` mechanical enforcement.~~** ✅ Resolved in codex v2.7 / schema v1.4.0 / emulators v2.5.0. The structured `combat_modifiers` sub-object on combat events + `intrinsic_modifiers` on enemies_catalog entries was the chosen approach (Option A from the original discussion). Modifiers use generic dot-path targets (`player.attack`, `player.hit_threshold`, `enemy.armor`, etc.) so they work on any combat system including threshold-based systems with `attack_stat: null`. Conditions are evaluated once at combat start and frozen for the fight's duration. See codex doc Rule 17 for the full specification. Per-book data passes to populate the structured modifiers on existing books are tracked as follow-up iterations (LW iter 9, Warlock iter 7, GrailQuest iter 2).
 
 2. **~~Event-level conditions on the schema.~~** ✅ Resolved in codex v2.4 / schema v1.2.0 / emulators v2.3.0. Every event type now supports an optional `condition` field with the same union as choice conditions. The canonical first use was Lone Wolf's Hunting-exempts-Meals rule (condition on `eat_meal` events). See codex doc Rule 15 for the full specification. Applied to the LW book in iter 8.
 
+3. **~~Ability immunity / damage scaling / equipment framework.~~** ✅ Resolved together in codex v2.8 / schema v1.5.0 / emulators v3.0.0. The originally scoped "ability immunity" question was reframed when we realized that immunities, resistances, and weaknesses are the same concept under different multipliers, and that a more general mechanism (damage_interactions with source-tag filters) covers the whole family while also handling weapon-property-based rules like Lone Wolf 2's Helghast ("only silvered weapons harm them"). The equipment framework (equippable / slot / equip_timing / auto_equip) ships in the same session because gating a damage_interaction on "does the player have a silver weapon" is meaningless without a proper concept of which carried weapon is currently active, and that concept is itself a general RPG mechanic that every series needs. Rule 18 (damage_interactions) and Rule 19 (equipment framework) in the codex doc specify the full mechanism. The round_script contract changes in the same version: scripts now report damage via `combat.damage_to_enemy` / `combat.damage_to_player` instead of mutating `*.health` directly, so the emulator can apply interaction multipliers to each damage component before subtracting from health. This is a breaking change for v3.0.0 emulators; the three maintained books (LW1, Warlock, GrailQuest) were migrated in lockstep via comprehensive-review sub-agents in the same session. **Canonical source for LW's one-weapon-at-a-time rule:** the Mongoose Publishing reprint of *Flight from the Dark* includes Footnote 1, which states *"The new Mongoose Publishing editions of the gamebooks clarify that 'You may only use one Weapon at a time in combat.'"* This is a published errata clarification, not an inference, and is why LW equipment uses `equip_timing: "out_of_combat"` with a single `weapon` slot. The narrower "ability-bonus suppression" sub-case (e.g., Mindblast suppression on enemies immune to psychic attacks) is still handled imperatively inside the round_script — it's a legitimately narrower scope than damage_interactions and does not have a second use case to justify a dedicated schema field yet; see Rule 17's closing notes for the current handling and the trigger for reopening it.
+
 ## Open architectural questions
 
 1. **Lua runtime migration.** Currently using Fengari (unmaintained but stable, pinned at 0.1.5). [wasmoon](https://github.com/ceifa/wasmoon) is the maintained alternative. Documented in the codex doc as a back-burner option. Not blocking any current work.
-
-2. **Ability immunity as a structured field.** Currently, an enemy being immune to an ability (e.g. Mindblast) is handled inside the round_script, not structurally. A future schema version could add an `immune_abilities: ["Mindblast"]` field on enemies_catalog entries. This would require updating each book's round_script to read the field and skip the corresponding ability bonus. Deferred because it requires coordinated book-data + round_script changes, and the special_rules text + combat_modifiers together cover the numeric modifier portion without needing this.
 
 When attacking any of these, the fix is a multi-part change spanning the doc, schema, and both emulators. Plan a dedicated session, not a drive-by.

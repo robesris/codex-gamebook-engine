@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.4.0",
+  "title": "Gamebook Format (GBF) v1.5.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -545,17 +545,19 @@
     "condition": {
       "type": "object",
       "required": ["type"],
-      "description": "A condition that evaluates to true or false based on the player's current state.",
+      "description": "A condition that evaluates to true or false based on the player's current state. Used by choices, events (for conditional event gating — see Rule 15), combat_modifiers, and damage_interactions. The emulator evaluates conditions at the moment they matter: choice conditions at section render time, event conditions at event dispatch time, combat_modifier and damage_interaction conditions once at combat start (frozen for the fight's duration). All condition types are series-neutral — the specific item, flag, stat, ability, or slot names come from the book's data, never from hardcoded enum values in the schema or emulator.",
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "not", "and", "or", "test_failed"]
+          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "not", "and", "or", "test_failed", "has_equipped_item", "has_equipped_in_slot", "has_equipped_with_property"]
         },
-        "item": { "type": "string", "description": "For has_item: item_id to check." },
+        "item": { "type": "string", "description": "For has_item: item_id to check in inventory. For has_equipped_item: item_id to check in any equipped slot. For has_equipped_in_slot: optional item_id to require in the named slot (if omitted, the condition evaluates true as long as the slot is non-empty)." },
         "flag": { "type": "string", "description": "For has_flag: flag name to check." },
         "stat": { "type": "string", "description": "For stat_gte/stat_lte: stat name." },
         "value": { "type": "number", "description": "For stat_gte/stat_lte: threshold value." },
         "ability": { "type": "string", "description": "For has_ability: ability name." },
+        "slot": { "type": "string", "description": "For has_equipped_in_slot: the slot name to check (e.g. 'head', 'weapon', 'body', 'main_hand'). Schema v1.5+." },
+        "property": { "type": "string", "description": "For has_equipped_with_property: the property tag string to look for in any currently equipped item's `properties` array. Example: `property: \"silver\"` returns true if the player has any equipped item whose items_catalog entry includes \"silver\" in its `properties` field. Typical use: Helghast-style 'only silvered weapons harm me' immunity gating on a damage_interaction. Schema v1.5+." },
         "condition": {
           "$ref": "#/definitions/condition",
           "description": "For 'not': the condition to negate."
@@ -638,6 +640,11 @@
           "type": "array",
           "description": "combat: an ordered list of generic per-combat modifiers that the emulator applies to playerData / enemyData before each round_script invocation. Each modifier has a target dot-path (e.g. 'player.attack', 'player.hit_threshold', 'enemy.armor', 'enemy.attack', 'player.damage_bonus'), a signed numeric delta, and optional condition + reason fields. Modifiers whose condition evaluates to false at combat start are skipped; passing modifiers stay in effect for the duration of the fight. The emulator adds the delta to the current value of the target field on the relevant side (player or enemy) before calling the round_script, so scripts that read `player.attack` or `enemy.armor` as-is automatically see the modified value. Books that want to read the raw value can access `combat.modifiers` inside the round_script — it's exposed as an array of `{target, delta, reason}` objects. Modifiers are a series-agnostic mechanism: the target dot-paths reference whatever numeric fields the book's round_script cares about. For threshold-based combat systems (attack_stat: null), use targets like `player.hit_threshold` or `player.weapon_bonus` or `enemy.armor`. For attack-vs-attack systems, use `player.attack` and `enemy.attack`. For per-enemy intrinsic traits (rules that travel with the enemy across every section it appears in), use the `intrinsic_modifiers` field on the enemy's catalog entry instead of repeating the modifier on every combat event.",
           "items": { "$ref": "#/definitions/combat_modifier" }
+        },
+        "damage_interactions": {
+          "type": "array",
+          "description": "combat: Schema v1.5+. An ordered list of per-encounter damage_interactions — immunities, resistances, and weaknesses that scale the damage flowing through the combat. Each entry has a `kind` (immunity/resistance/weakness), an optional `multiplier` override, an optional `direction` (incoming/outgoing), optional source filters (`source_has_any`/`source_lacks_all`), an optional `condition` gating the interaction on player state, and an optional human-readable `reason`. The emulator evaluates each entry's `condition` at combat start (frozen for the fight), then applies the passing entries to each damage component reported by the round_script, multiplying damage by the appropriate factor (0 for immunity, 0.5 for resistance, 2.0 for weakness, or whatever `multiplier` overrides). Use per-encounter `damage_interactions` for situational rules that apply only to this specific fight (e.g., 'in this chamber, fire damage is doubled'); for traits that belong to the enemy type itself, use the enemy's `intrinsic_damage_interactions` field instead. See Rule 18 for the full specification.",
+          "items": { "$ref": "#/definitions/damage_interaction" }
         },
         "interrupt_on_first_player_hit": { "type": "boolean", "description": "combat: if true, redirect after player's first successful wound." },
 
@@ -762,7 +769,30 @@
               }
             },
             { "type": "null" }
-          ]
+          ],
+          "description": "Passive stat modifier granted by owning or equipping this item. `when: \"always\"` applies whenever the item is in inventory. `when: \"combat\"` applies only during combat rounds, regardless of equipped state. `when: \"equipped\"` applies only when the item occupies one of the player's equipment slots (see `equippable` and `slot` below). Schema v1.5+ emulators honor all three values; pre-v1.5 emulators treated \"equipped\" and \"combat\" as no-ops."
+        },
+        "equippable": {
+          "type": "boolean",
+          "description": "Schema v1.5+. If true, this item can occupy an equipment slot (see `slot`) and its equipped state contributes to the player's `player.equipment` map. Non-equippable items (potions, gold, keys, quest tokens, most consumables) ignore the rest of the equipment fields and are carried only in inventory. Default false when absent."
+        },
+        "slot": {
+          "type": "string",
+          "description": "Schema v1.5+. The slot name this item occupies when equipped. Free-form string — the schema does not enforce a vocabulary, but the following names are suggested for consistency across books: `head`, `body`, `weapon`, `main_hand`, `off_hand`, `shield`, `feet`, `hands`, `neck`, `finger_1`, `finger_2`, `back`, `waist`, `wrist_1`, `wrist_2`. Books may invent new slot names freely for genres the suggested list doesn't cover (e.g. a naval game could use `mast_lookout`, a sci-fi game could use `cybernetic_arm`). A slot holds exactly one item at a time; equipping a new item to an occupied slot unequips the previous occupant (the previous item stays in inventory, it's just no longer equipped). Required when `equippable: true`."
+        },
+        "equip_timing": {
+          "type": "string",
+          "enum": ["always", "out_of_combat", "once"],
+          "description": "Schema v1.5+. Controls when the player may equip or unequip this item. `always` = any time including mid-combat (rare — for systems where weapon swapping is a tactical choice during a fight). `out_of_combat` = only when combat is not active, which is the default for most equipment. `once` = equipped at character creation or at the moment of acquisition and cannot be unequipped or swapped afterward (cursed items, permanent magical attunements, grafted implants). The emulator enforces the timing on player-driven equip/unequip actions; it does not prevent automatic equip from `add_item` with `auto_equip: true`, which happens at any time (the moment of acquisition is considered 'not yet in combat' for timing purposes, even if a combat event is currently running). Default `out_of_combat` when absent."
+        },
+        "auto_equip": {
+          "type": "boolean",
+          "description": "Schema v1.5+. If true (the default when absent), an equippable item is automatically placed into its slot when added to inventory via `add_item`, displacing any previous occupant of that slot. Matches the typical 'you pick up the helmet and put it on' narrative for most gamebook equipment. Set to false for items the player must consciously choose to equip — a cursed ring the player finds but shouldn't wear unknowingly, a second weapon the player might not want as their active, an experimental potion in armor form, etc. Only meaningful when `equippable: true`."
+        },
+        "properties": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Schema v1.5+. Free-form tag strings describing intrinsic properties of this item. Used by the `has_equipped_with_property` condition and by damage_interaction source-filtering (see the `damage_interaction` definition and Rule 18). The schema does not enumerate legal property names — books define their own vocabulary based on the mechanics they need to express. Common examples: `silver`, `blessed`, `magical`, `cold_iron`, `fire`, `cold`, `holy`, `poison`, `edged`, `blunt`, `piercing`, `ranged`, `two_handed`. A book's items_catalog declares which items have which properties, and the book's enemies_catalog (or per-encounter combat events) declares which interactions key on which properties. Tags are case-sensitive; use a consistent convention within a book. Default empty when absent."
         },
         "description": { "type": "string" }
       }
@@ -783,6 +813,11 @@
           "type": "array",
           "description": "Schema v1.4+. Per-enemy combat modifiers that apply every time this enemy is encountered, across every section that references this catalog entry. Each modifier has the same shape as a `combat_modifier` (target dot-path, signed delta, optional condition, optional reason). Use intrinsic_modifiers for rules that are properties of the *enemy type* rather than of a specific encounter: Vordak / Helghast / Gourgaz in Lone Wolf all have a '-2 COMBAT SKILL unless Mindshield' rule that applies wherever they appear; undead enemies in many series have 'only killable on a roll of N+' rules that travel with the creature. The emulator merges intrinsic_modifiers from every enemy in the combat with any per-section combat_modifiers on the combat event itself, then evaluates conditions once at combat start and applies the passing deltas to playerData / enemyData before the round_script runs. Per-enemy intrinsics and per-encounter modifiers are additive — if a section has a surprise attack (+4 player attack) and the enemy has a '-2 unless Mindshield' intrinsic, the player who doesn't have Mindshield gets +4 - 2 = +2. See codex doc Rule 17.",
           "items": { "$ref": "#/definitions/combat_modifier" }
+        },
+        "intrinsic_damage_interactions": {
+          "type": "array",
+          "description": "Schema v1.5+. Per-enemy damage_interactions (immunities, resistances, weaknesses) that travel with this enemy type across every section it appears in. Canonical example: Helghast in Lone Wolf 2 are immune to any weapon that is not silver, blessed, or the Sommerswerd — encoded as `{kind: 'immunity', source_lacks_all: ['silver', 'blessed', 'sommerswerd'], reason: 'Helghast are harmed only by silvered or blessed weapons'}`. Other examples: a fire elemental resisting blunt damage and taking double from cold (two separate entries), an undead creature immune to poison damage, a golem taking half damage from edged weapons. The emulator merges intrinsic_damage_interactions from every enemy in the combat with any per-section damage_interactions on the combat event itself, evaluates the optional conditions once at combat start, and applies the surviving entries to each damage component the round_script reports. Source filtering (`source_has_any` / `source_lacks_all`) happens per-component per-round because the source set depends on what the round_script emits that round. See codex doc Rule 18 for the full specification and worked examples.",
+          "items": { "$ref": "#/definitions/damage_interaction" }
         }
       },
       "additionalProperties": {
@@ -819,6 +854,49 @@
           "type": "string",
           "enum": ["fight", "first_round", "round"],
           "description": "Reserved for future use. As of schema v1.4 all modifiers behave as if `duration: \"fight\"` — they apply for the entire combat. The field is documented so books can declare their intent (and a future schema version can honor it) but currently the emulator treats 'first_round' and 'round' the same as 'fight'. Document the intent anyway so future emulator versions can back-fill the semantics without re-parsing books."
+        }
+      }
+    },
+
+    "damage_interaction": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "Schema v1.5+. A single damage_interaction — an immunity, resistance, or weakness that scales damage flowing through a combat by a multiplicative factor. Where `combat_modifier` (schema v1.4) handles additive per-fight bonuses and penalties that modify inputs to the round_script (e.g., 'add 4 to COMBAT SKILL for this fight'), `damage_interaction` handles multiplicative adjustments to the *output* of the round_script (e.g., 'take zero damage from non-silver weapons', 'take double damage from fire'). The two mechanisms are independent and compose: a combat can have both modifiers (changing what the script sees as input) and interactions (scaling the damage the script produces as output). Interactions live in two places: `damage_interactions` on combat events (for per-encounter situational rules) and `intrinsic_damage_interactions` on enemies_catalog entries (for traits that travel with the enemy type). Both use this same shape. The emulator merges both lists at combat start, evaluates each entry's optional `condition`, and applies the passing entries to each damage component reported by the round_script, per round. Source filtering (via `source_has_any` / `source_lacks_all`) happens per-component per-round because the source tags on damage components depend on what the round_script reports each round. See codex doc Rule 18 for the full specification.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["immunity", "resistance", "weakness"],
+          "description": "Required. Semantic category driving the default multiplier: `immunity` = 0 (no damage applied), `resistance` = 0.5 (half damage), `weakness` = 2.0 (double damage). The kind is also surfaced in the combat UI so the player sees a label like 'Immune' / 'Resistant' / 'Weak' alongside the numeric effect, rather than a bare multiplier. Choose the kind that matches the narrative intent; override the default with `multiplier` if the book specifies a non-standard value."
+        },
+        "multiplier": {
+          "type": "number",
+          "description": "Optional override for the damage multiplier. If omitted, the default for the `kind` is used (immunity=0, resistance=0.5, weakness=2.0). Use an explicit value for non-standard cases: 0.25 for 'heavy resistance', 1.5 for 'mild weakness', 3.0 for 'triple damage from fire on the fire-vulnerable troll'. Must be ≥ 0. Negative multipliers are not supported — an interaction cannot turn damage into healing; if a book needs that, use a modify_stat event or a round_script health adjustment instead. Values greater than 1 should use `kind: 'weakness'`; values less than 1 but greater than 0 should use `kind: 'resistance'`; 0 should use `kind: 'immunity'`. The emulator does not enforce this convention but the UI labels are chosen from `kind`, so mismatched values will display confusingly."
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["incoming", "outgoing"],
+          "description": "Which damage flow the interaction applies to. `incoming` (default when absent) means damage dealt TO the enemy BY the player — the common case, used for 'enemy is immune to non-silver weapons' and similar rules. `outgoing` means damage dealt BY the enemy TO the player — used for 'player is resistant to fire damage while wearing the dragon amulet' or 'player takes double damage from this specific boss's breath weapon'. The emulator scales the relevant damage value (damage_to_enemy or damage_to_player) by the interaction's multiplier before subtracting from health."
+        },
+        "source_has_any": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional source-tag filter. If present and non-empty, the interaction applies only to damage components whose source list contains at least one of the listed tags. Examples: `['fire']` matches fire-tagged damage only; `['silver', 'blessed']` matches damage tagged silver OR blessed. Use this for 'double damage from fire' (weakness with source_has_any: ['fire']) or 'half damage from blunt or piercing' (resistance with source_has_any: ['blunt', 'piercing']). Omit (or use an empty array) for an interaction that should apply regardless of source tags. Source filtering is evaluated per-component per-round because a single attack can produce multiple damage components with different tags; this is what makes compound-damage cases like a poisoned silver weapon against a poison-immune silver-weak enemy work correctly. See Rule 18 for worked examples."
+        },
+        "source_lacks_all": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional inverse source-tag filter. If present and non-empty, the interaction applies only to damage components whose source list contains NONE of the listed tags. Canonical use: Helghast immunity — `{kind: 'immunity', source_lacks_all: ['silver', 'blessed', 'sommerswerd']}` → any damage component whose sources do not contain silver, blessed, or sommerswerd is zeroed. Damage tagged with `['silver']` bypasses the immunity because the component's sources include 'silver'; untagged damage (source list empty) is still matched because it contains none of the listed tags. The two source filters (`source_has_any` and `source_lacks_all`) can be combined on a single interaction — both must pass for the interaction to apply. See Rule 18 for worked examples."
+        },
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Optional gate evaluated once at combat start. Same condition union as combat_modifiers and event/choice conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`). Condition filtering gates the entire interaction on player/world state; source filtering (`source_has_any` / `source_lacks_all`) gates per damage component on what the round_script emits. The two filters compose: a condition of `{has_equipped_with_property: 'holy'}` combined with `source_has_any: ['undead_slayer']` means 'this interaction applies only when the player has a holy-tagged equipped item AND the damage component is tagged with undead_slayer'. Condition filtering is frozen at combat start so mid-combat state changes do not re-evaluate. Null or absent means the interaction is not condition-gated."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of why the interaction applies. Shown in the combat UI's damage interactions panel so the player knows what's in effect, and written to the playthrough log when the interaction fires. Not interpreted by the emulator; purely for display and debugging. Examples: 'Helghast are harmed only by silvered or blessed weapons', 'Fire elemental is disrupted by cold', 'Skeleton is immune to poison', 'Undead take double damage from holy attacks'."
         }
       }
     }

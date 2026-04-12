@@ -179,8 +179,57 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 .inventory-items li {
   background: rgba(0,0,0,0.2); border: 1px solid var(--border);
   border-radius: 4px; padding: 3px 10px; font-size: 0.85em;
+  display: inline-flex; align-items: center; gap: 6px;
 }
 .inventory-items .empty { color: var(--text-dim); font-style: italic; }
+.inventory-items .equip-btn {
+  font-size: 0.8em; padding: 1px 6px; border-radius: 3px;
+  background: rgba(0,180,255,0.15); border: 1px solid rgba(0,180,255,0.4);
+  color: inherit; cursor: pointer;
+}
+.inventory-items .equip-btn:hover:not(:disabled) { background: rgba(0,180,255,0.3); }
+.inventory-items .equip-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Equipment panel (schema v1.5+). Sits inside the inventory toggle body
+   and shows a compact slot → item view. */
+.equipment-wrap {
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.equipment-header {
+  font-size: 0.8em; font-weight: bold; letter-spacing: 1px;
+  color: var(--text-dim); text-transform: uppercase; margin-bottom: 4px;
+}
+.equipment-panel {
+  font-size: 0.85em;
+}
+.equipment-panel .equip-row { padding: 2px 0; }
+.equipment-panel .slot-name {
+  color: var(--text-dim); text-transform: capitalize; margin-right: 4px;
+}
+.equipment-panel .slot-item { font-weight: bold; }
+.equipment-panel .empty { color: var(--text-dim); font-style: italic; }
+
+/* Damage interactions panel (schema v1.5+). Appears in the combat panel
+   next to the combat_modifiers panel. */
+.damage-interactions-panel {
+  margin: 6px 0; padding: 6px 10px;
+  background: rgba(255,80,80,0.08);
+  border: 1px solid rgba(255,80,80,0.3);
+  border-radius: 4px; font-size: 0.85em;
+}
+.damage-interactions-panel .di-header {
+  font-weight: bold; color: #ff8080; margin-bottom: 3px;
+  text-transform: uppercase; letter-spacing: 1px; font-size: 0.8em;
+}
+.damage-interactions-panel .di-row { padding: 1px 0; }
+.damage-interactions-panel .di-kind {
+  display: inline-block; min-width: 60px;
+  font-weight: bold; text-transform: capitalize;
+}
+.damage-interactions-panel .di-immunity  { color: #ff6060; }
+.damage-interactions-panel .di-resistance { color: #ffa060; }
+.damage-interactions-panel .di-weakness  { color: #ffd060; }
 
 /* --- Section Text --- */
 .section-header {
@@ -550,6 +599,12 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
       </div>
       <div class="inventory-body">
         <ul class="inventory-items" id="inventory-list"></ul>
+        <!-- Equipment panel — schema v1.5+. Shows each currently
+             occupied equipment slot. Populated by renderEquipmentPanel(). -->
+        <div class="equipment-wrap">
+          <div class="equipment-header">Equipped</div>
+          <div class="equipment-panel" id="equipment-panel"></div>
+        </div>
       </div>
     </div>
     <div id="game-content"></div>
@@ -566,7 +621,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '2.5.0';
+const CODEX_EMULATOR_VERSION = '3.0.0';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -581,6 +636,8 @@ let state = {
   stats: {},
   initialStats: {},
   inventory: [],
+  // Equipment map {slot -> item_id}. Schema v1.5+.
+  equipment: {},
   flags: new Set(),
   abilities: [],
   // Per-ability remaining-uses counters, populated by set_ability_uses
@@ -1132,6 +1189,7 @@ function startCharacterCreation() {
     stats: {},
     initialStats: {},
     inventory: [],
+    equipment: {},
     flags: new Set(),
     provisions: 0,
     gold: 0,
@@ -1211,9 +1269,11 @@ function startCharacterCreation() {
     }
   }
 
-  // Add starting items
+  // Add starting items. Auto-equip any equippable ones so the character
+  // starts wearing the Helmet, Chainmail, etc. declared in character_creation.
   for (const item of items) {
     if (!state.inventory.includes(item)) state.inventory.push(item);
+    autoEquipOnAdd(item);
   }
 
   // Process interactive steps sequentially
@@ -1262,10 +1322,13 @@ function processCreationSteps(steps, items) {
             const prevId = state.potion.toLowerCase().replace(/ /g, '_');
             const idx = state.inventory.indexOf(prevId);
             if (idx >= 0) state.inventory.splice(idx, 1);
+            autoUnequipOnRemove(prevId);
           }
           state.potion = opt;
           state.potionDoses = gameData.rules.potion?.doses || 2;
-          state.inventory.push(opt.toLowerCase().replace(/ /g, '_'));
+          const newPotionId = opt.toLowerCase().replace(/ /g, '_');
+          state.inventory.push(newPotionId);
+          autoEquipOnAdd(newPotionId);
         } else {
           // Generic choose_one: set a flag for the choice
           const flagName = category + '_' + opt.toLowerCase().replace(/ /g, '_');
@@ -1499,13 +1562,65 @@ function updateInventory() {
   const displayItems = state.inventory.filter(i => i !== potionId);
   if (displayItems.length === 0) {
     list.innerHTML = '<li class="empty">Empty</li>';
+    renderEquipmentPanel();
     return;
   }
+  const catalog = gameData?.items_catalog || {};
   for (const item of displayItems) {
     const li = document.createElement('li');
-    li.textContent = getItemName(item);
+    const def = catalog[item];
+    const equipped = isItemEquipped(item);
+    const label = document.createElement('span');
+    label.textContent = getItemName(item) + (equipped ? ' (equipped)' : '');
+    li.appendChild(label);
+    // Add equip/unequip button for equippable items.
+    if (def && def.equippable) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm equip-btn';
+      if (equipped) {
+        const chk = canUnequipItem(item);
+        btn.textContent = 'Unequip';
+        btn.disabled = !chk.ok;
+        btn.title = chk.reason || '';
+        btn.addEventListener('click', () => playerUnequipItem(item));
+      } else {
+        const chk = canEquipItem(item, false);
+        btn.textContent = 'Equip';
+        btn.disabled = !chk.ok;
+        btn.title = chk.reason || '';
+        btn.addEventListener('click', () => playerEquipItem(item));
+      }
+      li.appendChild(btn);
+    }
     list.appendChild(li);
   }
+  renderEquipmentPanel();
+}
+
+// Render the Equipment slot panel in the sidebar. Shows each slot that
+// has an occupant, with an Unequip button if the item allows it.
+function renderEquipmentPanel() {
+  const panel = document.getElementById('equipment-panel');
+  if (!panel) return;
+  const eq = state.equipment || {};
+  const slots = Object.keys(eq).filter(k => eq[k]);
+  if (slots.length === 0) {
+    panel.innerHTML = '<div class="empty">Nothing equipped</div>';
+    return;
+  }
+  const lines = slots.map(slot => {
+    const itemId = eq[slot];
+    const name = getItemName(itemId);
+    return `<div class="equip-row"><span class="slot-name">${slot}:</span> <span class="slot-item">${name}</span></div>`;
+  });
+  panel.innerHTML = lines.join('');
+}
+
+// Convenience wrapper: stat bar + inventory + equipment.
+function updateStatDisplay() {
+  updateStatBar();
+  updateInventory();
+  renderEquipmentPanel();
 }
 
 function toggleInventory() {
@@ -1797,24 +1912,28 @@ function handleAddItem(event) {
   if (!state.inventory.includes(item)) {
     state.inventory.push(item);
   }
+  autoEquipOnAdd(item);
   const content = document.getElementById('game-content');
   const msg = document.createElement('div');
   msg.className = 'event-msg gain';
   msg.textContent = `Acquired: ${getItemName(item)}`;
   content.appendChild(msg);
   updateInventory();
+  renderEquipmentPanel();
 }
 
 // --- Remove Item ---
 function handleRemoveItem(event) {
   const idx = state.inventory.indexOf(event.item);
   if (idx >= 0) state.inventory.splice(idx, 1);
+  autoUnequipOnRemove(event.item);
   const content = document.getElementById('game-content');
   const msg = document.createElement('div');
   msg.className = 'event-msg loss';
   msg.textContent = `Lost: ${getItemName(event.item)}`;
   content.appendChild(msg);
   updateInventory();
+  renderEquipmentPanel();
 }
 
 // --- Set Flag ---
@@ -2079,28 +2198,39 @@ function handleChooseItems(event) {
     const confirmBtn = area.querySelector('#confirm-items-btn');
     if (confirmBtn) {
       confirmBtn.addEventListener('click', () => {
-        // Remove existing items in category if replace_category
+        // Remove existing items in category if replace_category. Also
+        // auto-unequip any displaced items so their equipment slot
+        // is cleared alongside the inventory removal.
         if (replaceCategory) {
           const filterKey = Object.keys(filter)[0];
           const filterVal = filter[filterKey];
           if (filterKey && filterVal) {
-            state.inventory = state.inventory.filter(itemId => {
+            const kept = [];
+            for (const itemId of state.inventory) {
               const catItem = catalog[itemId];
-              return !catItem || catItem[filterKey] !== filterVal;
-            });
+              if (!catItem || catItem[filterKey] !== filterVal) {
+                kept.push(itemId);
+              } else {
+                autoUnequipOnRemove(itemId);
+              }
+            }
+            state.inventory = kept;
           }
         }
-        // Add automatic items
+        // Add automatic items (auto-equip if applicable)
         for (const id of addAutomatic) {
           if (!state.inventory.includes(id)) state.inventory.push(id);
+          autoEquipOnAdd(id);
         }
-        // Add selected items
+        // Add selected items (auto-equip if applicable)
         for (const id of selected) {
           if (!state.inventory.includes(id)) state.inventory.push(id);
+          autoEquipOnAdd(id);
         }
         area.innerHTML = `<div class="event-msg gain">Selected: ${[...addAutomatic.map(id => getItemName(id)), ...[...selected].map(id => getItemName(id))].join(', ')}</div>`;
         updateInventory();
         updateStatBar();
+        renderEquipmentPanel();
         processNextEvent();
       });
     }
@@ -2164,6 +2294,27 @@ function handleCombat(event) {
         return `<div>${m.target} ${sign}${m.delta}${reason}</div>`;
       }).join('');
       html += `<div class="special-rules-box"><strong>Modifiers:</strong>${rows}</div>`;
+    }
+    if (c.appliedDamageInteractions && c.appliedDamageInteractions.length > 0) {
+      // Schema v1.5 damage_interactions panel. Shows immunities /
+      // resistances / weaknesses that will scale damage components
+      // this fight. Source-tag filters are displayed so the player
+      // understands when the interaction will fire.
+      const rows = c.appliedDamageInteractions.map(inter => {
+        const parts = [];
+        parts.push(`<span class="di-kind di-${inter.kind}">${inter.kind}</span>`);
+        parts.push(`×${inter.multiplier}`);
+        if (inter.direction && inter.direction !== 'incoming') parts.push(`(${inter.direction})`);
+        if (Array.isArray(inter.source_has_any) && inter.source_has_any.length > 0) {
+          parts.push(`for damage tagged [${inter.source_has_any.join(', ')}]`);
+        }
+        if (Array.isArray(inter.source_lacks_all) && inter.source_lacks_all.length > 0) {
+          parts.push(`except damage tagged [${inter.source_lacks_all.join(', ')}]`);
+        }
+        if (inter.reason) parts.push(`— ${inter.reason}`);
+        return `<div class="di-row">${parts.join(' ')}</div>`;
+      }).join('');
+      html += `<div class="damage-interactions-panel"><div class="di-header">Damage Interactions</div>${rows}</div>`;
     }
 
     const playerStatLine = (attackStat ? `${attackStat} ${playerAttack} | ` : '') + `${healthStat} ${playerHealth}`;
@@ -2248,6 +2399,33 @@ function handleCombat(event) {
     appliedModifiers.push({ target, delta, reason: mod.reason || null });
   }
 
+  // Evaluate damage_interactions (schema v1.5) the same way combat_modifiers
+  // are frozen. See CLI emulator startCombat() for the reference shape.
+  const eventInteractions = event.damage_interactions || [];
+  const intrinsicInteractions = [];
+  for (const en of enemies) {
+    const cat = getEnemy(en.ref) || {};
+    if (Array.isArray(cat.intrinsic_damage_interactions)) {
+      intrinsicInteractions.push(...cat.intrinsic_damage_interactions);
+    }
+  }
+  const appliedDamageInteractions = [];
+  for (const inter of [...eventInteractions, ...intrinsicInteractions]) {
+    if (inter.condition && !evaluateCondition(inter.condition)) continue;
+    const kind = inter.kind;
+    if (kind !== 'immunity' && kind !== 'resistance' && kind !== 'weakness') continue;
+    const defaultMult = kind === 'immunity' ? 0 : kind === 'resistance' ? 0.5 : 2;
+    const multiplier = typeof inter.multiplier === 'number' ? inter.multiplier : defaultMult;
+    appliedDamageInteractions.push({
+      kind,
+      multiplier,
+      direction: inter.direction || 'incoming',
+      source_has_any: Array.isArray(inter.source_has_any) ? inter.source_has_any.slice() : null,
+      source_lacks_all: Array.isArray(inter.source_lacks_all) ? inter.source_lacks_all.slice() : null,
+      reason: inter.reason || null,
+    });
+  }
+
   // Store combat state for callbacks — all mutable state lives here
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules,
@@ -2255,6 +2433,8 @@ function handleCombat(event) {
     // combat's duration. See comment above for why this is
     // snapshotted at combat start rather than re-evaluated each round.
     appliedModifiers,
+    // Frozen damage_interactions — scale damage at round end.
+    appliedDamageInteractions,
     roundNum: 0, combatLog: [], waitingForLuckChoice: false,
     combatOver: false,
     // When combat ends (victory or flee), this holds the section id
@@ -2263,6 +2443,9 @@ function handleCombat(event) {
     combatEndTarget: null,
     lastRoundResult: null, renderCombat, checkCombatEnd, area,
   };
+  // Keep window._combatContext alive for equipment helpers to detect
+  // in-combat state. It's the same object as window._combat.
+  window._combatContext = window._combat;
 
   // Callback bound to the Continue button that appears after combat ends
   // (either the player wins or successfully flees). Navigates to the
@@ -2300,24 +2483,29 @@ function handleCombat(event) {
       name: 'You',
       ...state.stats,
     };
-    // Apply passive equipment modifiers (when:"always") — e.g., armor,
-    // shields. Weapon bonuses (when:"combat") are NOT applied automatically —
-    // the Lua round_script must decide which weapon is active using the
-    // inventory/items globals.
-    //
-    // The canonical shape of stat_modifier per the codex section 2.5 is
-    //   { "stat": "<stat name>", "amount": <number>, "when": "always|combat|equipped" }
-    // where `stat` is a STRING NAMING the target stat and `amount` is the
-    // bonus/penalty to add. An earlier version of this loop walked
-    // Object.entries(item.stat_modifier) and treated every key as a stat
-    // name, which wrote playerData.stat = "endurance" and playerData.amount
-    // = 2 instead of applying an ENDURANCE bonus. Now we read the
-    // structured fields directly.
+    // Apply passive equipment modifiers. Schema v1.5+ honors all three
+    // stat_modifier.when values:
+    //   - "always"   — applies whenever the item is in inventory.
+    //   - "combat"   — applies during combat rounds (we're in one now).
+    //   - "equipped" — applies only when the item is in an equipment slot
+    //                  in state.equipment. This is the canonical way to
+    //                  express "wielded weapon bonus" / "worn armor bonus".
+    // An earlier version of this loop walked Object.entries(item.stat_modifier)
+    // and treated every key as a stat name, which wrote playerData.stat =
+    // "endurance" and playerData.amount = 2 instead of applying an ENDURANCE
+    // bonus. Now we read the structured fields directly.
     const catalog = gameData.items_catalog || {};
+    const equippedIds = new Set(Object.values(state.equipment || {}));
     for (const itemId of state.inventory) {
       const item = catalog[itemId];
       const sm = item?.stat_modifier;
-      if (sm && sm.when === 'always' && typeof sm.stat === 'string' && typeof sm.amount === 'number') {
+      if (!sm || typeof sm.stat !== 'string' || typeof sm.amount !== 'number') continue;
+      const when = sm.when || 'always';
+      let applies = false;
+      if (when === 'always') applies = true;
+      else if (when === 'combat') applies = true;
+      else if (when === 'equipped') applies = equippedIds.has(itemId);
+      if (applies) {
         playerData[sm.stat] = (typeof playerData[sm.stat] === 'number' ? playerData[sm.stat] : 0) + sm.amount;
       }
     }
@@ -2367,12 +2555,23 @@ function handleCombat(event) {
       standard_damage: cs?.details?.standard_damage || gameData.rules.combat_rules_detail?.standard_damage || 2,
       last_result: '',
       last_damage: 0,
+      // Schema v1.5+ damage contract: round_scripts report damage here
+      // rather than mutating *.health directly.
+      damage_to_enemy: 0,
+      damage_to_player: 0,
       // Expose applied modifiers to the round_script so book-specific
       // scripts can do per-modifier math if they need to. Most scripts
       // don't need this — they just read the already-modified
       // player.attack / enemy.armor / hit_threshold / etc.
       modifiers: c.appliedModifiers || [],
+      // Expose applied damage_interactions for scripts that want to
+      // introspect them. Most won't.
+      damage_interactions: c.appliedDamageInteractions || [],
     };
+
+    // Expose equipment to the round_script as player.equipment so
+    // weapon-aware scripts can pick up the active slot contents.
+    playerData.equipment = { ...(state.equipment || {}) };
 
     // Pass extra context: combat_system.details, inventory, items catalog,
     // and initial_stats so combat round_scripts can reference starting
@@ -2384,6 +2583,7 @@ function handleCombat(event) {
       inventory: [...state.inventory],
       items_catalog: catalog,
       initial_stats: { ...(state.initialStats || {}) },
+      equipment: { ...(state.equipment || {}) },
     };
     const details = cs?.details || {};
     for (const [key, val] of Object.entries(details)) {
@@ -2391,6 +2591,11 @@ function handleCombat(event) {
         extraContext[key] = typeof val === 'object' ? val : val;
       }
     }
+
+    // Record health before the script runs so we can detect old-contract
+    // scripts that still mutate *.health directly.
+    const preEnemyHealth = enemy.currentHealth;
+    const prePlayerHealth = getPlayerHealth();
 
     const result = LuaEngine.runCombatRound(roundScript, playerData, enemyData, combatData, extraContext);
 
@@ -2400,9 +2605,30 @@ function handleCombat(event) {
       return;
     }
 
-    // Apply results back to game state
-    enemy.currentHealth = Math.max(0, result.enemy?.health ?? enemy.currentHealth);
-    setPlayerHealth(Math.max(0, result.player?.health ?? getPlayerHealth()));
+    // Schema v1.5+ contract: reject round_scripts that still mutate
+    // player.health / enemy.health directly. The emulator has no way to
+    // apply damage_interactions to a value the script already subtracted.
+    if ((result.enemy && result.enemy.health !== undefined && result.enemy.health !== preEnemyHealth) ||
+        (result.player && result.player.health !== undefined && result.player.health !== prePlayerHealth)) {
+      c.combatLog.push(`<span class="hit">ERROR: round_script uses the pre-v1.5 contract (mutated *.health directly). Migrate to combat.damage_to_enemy / combat.damage_to_player. See Rule 18.</span>`);
+      c.renderCombat();
+      return;
+    }
+
+    // Apply damage reported by the script, scaled by any active
+    // damage_interactions per damage component.
+    const enemyComponents = normalizeDamage(result.combat?.damage_to_enemy);
+    const playerComponents = normalizeDamage(result.combat?.damage_to_player);
+    const interactions = c.appliedDamageInteractions || [];
+    const enemyTotal = applyDamageInteractions(enemyComponents, interactions, 'incoming', c.combatLog, c.roundNum);
+    const playerTotal = applyDamageInteractions(playerComponents, interactions, 'outgoing', c.combatLog, c.roundNum);
+
+    if (enemyTotal !== 0) {
+      enemy.currentHealth = Math.max(0, enemy.currentHealth - enemyTotal);
+    }
+    if (playerTotal !== 0) {
+      setPlayerHealth(Math.max(0, getPlayerHealth() - playerTotal));
+    }
 
     // Add logs
     for (const msg of result.logs || []) {
@@ -3040,6 +3266,32 @@ function evaluateCondition(cond) {
       return window._lastTestResult === false;
     case 'test_succeeded':
       return window._lastTestResult === true;
+    // Schema v1.5+ equipment-aware conditions. Each reads state.equipment,
+    // a map from slot name to item_id. See the CLI emulator (play.js) for
+    // the matching reference implementation.
+    case 'has_equipped_item': {
+      const eq = state.equipment || {};
+      return Object.values(eq).some(id => id === cond.item);
+    }
+    case 'has_equipped_in_slot': {
+      const eq = state.equipment || {};
+      const occupant = eq[cond.slot];
+      if (!occupant) return false;
+      if (cond.item) return occupant === cond.item;
+      return true;
+    }
+    case 'has_equipped_with_property': {
+      const eq = state.equipment || {};
+      const catalog = gameData?.items_catalog || {};
+      for (const itemId of Object.values(eq)) {
+        if (!itemId) continue;
+        const item = catalog[itemId];
+        if (!item) continue;
+        const props = Array.isArray(item.properties) ? item.properties : [];
+        if (props.includes(cond.property)) return true;
+      }
+      return false;
+    }
     default:
       return true;
   }
@@ -3068,9 +3320,205 @@ function describeCondition(cond) {
       return 'Requires: failed the test';
     case 'test_succeeded':
       return 'Requires: passed the test';
+    case 'has_equipped_item':
+      return `Requires equipped: ${getItemName(cond.item)}`;
+    case 'has_equipped_in_slot':
+      return cond.item ? `Requires ${getItemName(cond.item)} equipped in ${cond.slot}` : `Requires something in ${cond.slot} slot`;
+    case 'has_equipped_with_property':
+      return `Requires equipped item with property: ${cond.property}`;
     default:
       return 'Condition not met';
   }
+}
+
+// ==================== EQUIPMENT HELPERS (schema v1.5+) ====================
+
+function getItemDef(itemId) {
+  const catalog = gameData?.items_catalog || {};
+  return catalog[itemId] || null;
+}
+
+function isItemEquipped(itemId) {
+  const eq = state.equipment || {};
+  return Object.values(eq).some(id => id === itemId);
+}
+
+function isInCombat() {
+  return !!(window._combat && !window._combat.combatOver);
+}
+
+// Can this item be equipped right now? Returns {ok, reason}.
+// isAutoEquip=true bypasses the combat-active check (auto-equip at add_item
+// time is considered "the moment of acquisition" for timing purposes).
+function canEquipItem(itemId, isAutoEquip) {
+  const item = getItemDef(itemId);
+  if (!item) return { ok: false, reason: `no item definition for ${itemId}` };
+  if (!item.equippable) return { ok: false, reason: `${itemId} is not equippable` };
+  if (!item.slot) return { ok: false, reason: `${itemId} has no slot declared` };
+  const timing = item.equip_timing || 'out_of_combat';
+  if (timing === 'once' && isItemEquipped(itemId)) {
+    return { ok: false, reason: `${itemId} has equip_timing: once and is already equipped` };
+  }
+  if (isAutoEquip) return { ok: true, reason: '' };
+  if (timing === 'out_of_combat' && isInCombat()) {
+    return { ok: false, reason: `${itemId} cannot be equipped during combat` };
+  }
+  return { ok: true, reason: '' };
+}
+
+function canUnequipItem(itemId) {
+  const item = getItemDef(itemId);
+  if (!item) return { ok: false, reason: `no item definition for ${itemId}` };
+  const timing = item.equip_timing || 'out_of_combat';
+  if (timing === 'once') {
+    return { ok: false, reason: `${itemId} is permanent (equip_timing: once)` };
+  }
+  if (timing === 'out_of_combat' && isInCombat()) {
+    return { ok: false, reason: `${itemId} cannot be unequipped during combat` };
+  }
+  return { ok: true, reason: '' };
+}
+
+function equipItem(itemId) {
+  const item = getItemDef(itemId);
+  if (!item || !item.slot) return;
+  if (!state.equipment) state.equipment = {};
+  state.equipment[item.slot] = itemId;
+}
+
+function unequipSlot(slot) {
+  if (!state.equipment) return;
+  delete state.equipment[slot];
+}
+
+function autoUnequipOnRemove(itemId) {
+  if (!state.equipment) return;
+  for (const slot of Object.keys(state.equipment)) {
+    if (state.equipment[slot] === itemId) {
+      delete state.equipment[slot];
+    }
+  }
+}
+
+function autoEquipOnAdd(itemId) {
+  const item = getItemDef(itemId);
+  if (!item || !item.equippable) return;
+  const autoEquip = item.auto_equip !== false;
+  if (!autoEquip) return;
+  const check = canEquipItem(itemId, true);
+  if (!check.ok) return;
+  equipItem(itemId);
+}
+
+// Player-driven equip/unequip entry points (called from UI buttons).
+function playerEquipItem(itemId) {
+  if (!state.inventory.includes(itemId)) return;
+  const check = canEquipItem(itemId, false);
+  if (!check.ok) {
+    alert(`Cannot equip: ${check.reason}`);
+    return;
+  }
+  equipItem(itemId);
+  updateStatDisplay();
+  renderEquipmentPanel();
+}
+
+function playerUnequipItem(itemId) {
+  if (!isItemEquipped(itemId)) return;
+  const check = canUnequipItem(itemId);
+  if (!check.ok) {
+    alert(`Cannot unequip: ${check.reason}`);
+    return;
+  }
+  const item = getItemDef(itemId);
+  if (item && item.slot) unequipSlot(item.slot);
+  updateStatDisplay();
+  renderEquipmentPanel();
+}
+
+// ==================== DAMAGE INTERACTIONS (schema v1.5+) ====================
+
+function normalizeDamage(raw) {
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw === 'number') {
+    return [{ amount: raw, sources: [] }];
+  }
+  if (Array.isArray(raw)) {
+    const out = [];
+    for (const entry of raw) {
+      if (typeof entry === 'number') {
+        out.push({ amount: entry, sources: [] });
+      } else if (entry && typeof entry === 'object') {
+        const amount = typeof entry.amount === 'number' ? entry.amount : 0;
+        let sources = [];
+        if (Array.isArray(entry.sources)) {
+          sources = entry.sources.filter(s => typeof s === 'string');
+        } else if (entry.sources && typeof entry.sources === 'object') {
+          const srcKeys = Object.keys(entry.sources).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+          sources = srcKeys.map(k => entry.sources[k]).filter(s => typeof s === 'string');
+        }
+        out.push({ amount, sources });
+      }
+    }
+    return out;
+  }
+  if (typeof raw === 'object') {
+    const keys = Object.keys(raw).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+    if (keys.length > 0) {
+      return normalizeDamage(keys.map(k => raw[k]));
+    }
+    if (typeof raw.amount === 'number') {
+      let sources = [];
+      if (Array.isArray(raw.sources)) sources = raw.sources.filter(s => typeof s === 'string');
+      else if (raw.sources && typeof raw.sources === 'object') {
+        const srcKeys = Object.keys(raw.sources).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+        sources = srcKeys.map(k => raw.sources[k]).filter(s => typeof s === 'string');
+      }
+      return [{ amount: raw.amount, sources }];
+    }
+  }
+  return [];
+}
+
+function interactionMatchesComponent(inter, component) {
+  const sources = component.sources || [];
+  if (Array.isArray(inter.source_has_any) && inter.source_has_any.length > 0) {
+    if (!inter.source_has_any.some(tag => sources.includes(tag))) return false;
+  }
+  if (Array.isArray(inter.source_lacks_all) && inter.source_lacks_all.length > 0) {
+    if (!inter.source_lacks_all.every(tag => !sources.includes(tag))) return false;
+  }
+  return true;
+}
+
+function applyDamageInteractions(components, interactions, direction, combatLogRef, round) {
+  let total = 0;
+  const logEntries = [];
+  for (const comp of components) {
+    let amount = comp.amount;
+    if (amount <= 0) {
+      total += amount;
+      continue;
+    }
+    for (const inter of interactions) {
+      if ((inter.direction || 'incoming') !== direction) continue;
+      if (!interactionMatchesComponent(inter, comp)) continue;
+      const before = amount;
+      amount = amount * inter.multiplier;
+      if (round === 1) logEntries.push({ comp, inter, before, after: amount });
+    }
+    total += amount;
+  }
+  if (round === 1 && logEntries.length > 0 && combatLogRef) {
+    for (const entry of logEntries) {
+      const srcs = entry.comp.sources.length > 0 ? `[${entry.comp.sources.join(',')}]` : '[untagged]';
+      const reason = entry.inter.reason ? ` — ${entry.inter.reason}` : '';
+      combatLogRef.push(
+        `<span class="modifier">Damage interaction (${direction}): ${entry.inter.kind} ×${entry.inter.multiplier} on ${srcs} — ${entry.before} → ${entry.after}${reason}</span>`
+      );
+    }
+  }
+  return total;
 }
 
 // ==================== ENDINGS ====================
@@ -3096,6 +3544,7 @@ function playAgain() {
     stats: {},
     initialStats: {},
     inventory: [],
+    equipment: {},
     flags: new Set(),
     provisions: 0,
     gold: 0,

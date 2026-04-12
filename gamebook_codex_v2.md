@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.7
+# THE GAMEBOOK CODEX v2.8
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.7
+**Codex version:** 2.8
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -13,10 +13,10 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.4.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 2.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 2.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 2.5.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `codex.schema.json` (GBF format) | ≥ 1.5.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 3.0.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 3.0.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 3.0.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -600,12 +600,211 @@ The Mindshield-conditional -2 travels with the Vordak catalog entry, so every se
 
 **What's NOT in scope for `combat_modifiers` (use a different mechanism):**
 
-- **Ability immunity** — an enemy being immune to Mindblast, Animal Kinship, or similar abilities — is currently handled by the round_script, not by combat_modifiers. A future schema version may add a structured `immune_abilities` field on the enemy; for now, document the immunity in `special` text and have the round_script check the player's abilities manually.
+- **Damage scaling (immunities, resistances, weaknesses).** "Enemy is immune to non-silver weapons," "takes half damage from blunt attacks," "takes double damage from fire." These are multiplicative effects on damage *output* from the round_script, not additive deltas on *inputs* to it. Encode them as `damage_interactions` — see Rule 18.
 - **Per-round dynamic effects** — "add 1 to damage each round the enemy stays alive," "the player gets a re-roll on the first round only," etc. — these require round_script code, not static modifiers. The modifier list is frozen at combat start.
 - **Choice-driven modifiers** — "the player chose to wield the cursed sword, which does +3 damage but takes -1 LUCK per round" — this belongs in the combat event AFTER the choice that enables it, not as a condition on a modifier. If the player's *decision* before combat gates the bonus, use choice-level branching to route to a combat event with the modifier pre-baked in.
 - **Damage overrides** — "this enemy deals 3 damage per hit instead of the standard 2," "this fight uses 1d6 damage instead of flat 2" — these change the damage formula, not an input to it. Encode them directly in the round_script's `standard_damage` or in a per-combat damage override (future schema extension).
 
-**Rule of thumb:** if the modifier can be expressed as "add N to this numeric field before the round_script runs," use `combat_modifiers`. If it requires changing the combat flow, re-computing damage, or applying effects mid-round, encode it in the round_script directly.
+**Ability-bonus suppression (narrow scope).** A specific case not yet covered by either Rule 17 or Rule 18: an enemy that suppresses a player-side ability bonus without affecting damage scaling (e.g., 'this enemy is immune to Mindblast, so the +2 Kai-Discipline bonus does not apply'). As of codex v2.8 this is still handled imperatively inside the round_script (the Lua script reads the player's disciplines and conditionally omits the bonus). A future schema version may introduce a structured `suppress_abilities: ["Mindblast"]` field on enemies_catalog entries once a second book demonstrates the need for it; until then, document the rule in `special` text and handle it in the round_script. Do not try to fake ability-bonus suppression via a negative `combat_modifier` that cancels the bonus — it works numerically but the UI will show both a +2 Mindblast modifier and a -2 suppression, which is confusing and narratively wrong.
+
+**Rule of thumb:** if the rule adds or subtracts a number from a field the round_script reads as input, use `combat_modifiers`. If the rule scales damage the round_script produces as output (including zeroing it for immunities), use `damage_interactions` (Rule 18). If the rule requires per-round dynamic decision-making, encode it in the round_script directly.
+
+---
+
+### Rule 18: Encode Damage Interactions (Immunities, Resistances, Weaknesses) with Source Tags for Compound Damage
+
+**The rule:** When a combat has a mechanical rule that scales the *damage dealt* — an immunity, a resistance, a weakness, or any other multiplicative effect on how much damage gets through — encode it as a structured `damage_interactions` entry on the combat event (for per-encounter situational rules) or as an `intrinsic_damage_interactions` entry on the enemy's catalog entry (for traits that travel with the enemy type across every section it appears in). Do not try to fake damage scaling with large negative `combat_modifiers`; combat_modifiers are additive deltas on inputs to the round_script, and they cannot express "× 0" or "× 2" on the script's output.
+
+As of schema v1.5.0 (codex v2.8), `damage_interaction` entries have the following shape:
+
+```json
+{
+  "kind": "immunity",
+  "multiplier": 0,
+  "direction": "incoming",
+  "source_has_any": ["fire"],
+  "source_lacks_all": ["silver", "blessed"],
+  "condition": { "type": "has_equipped_with_property", "property": "holy" },
+  "reason": "Fire elemental: immune to non-silvered non-blessed non-holy weapons"
+}
+```
+
+Every field except `kind` is optional. The `multiplier` defaults to 0 for `immunity`, 0.5 for `resistance`, 2.0 for `weakness`. The `direction` defaults to `incoming` (damage dealt to the enemy by the player). The source filters and `condition` default to "no filtering" (the interaction applies to all damage regardless of source tags or player state). The `reason` is purely for display and logging.
+
+**The round_script contract for structured damage.** Schema v1.5+ emulators require round_scripts to report damage as values on the `combat` table, *not* by directly mutating `player.health` or `enemy.health`. The script sets:
+
+```lua
+combat.damage_to_enemy = <value>   -- damage dealt to the enemy this round
+combat.damage_to_player = <value>  -- damage dealt to the player this round
+```
+
+The emulator reads these values, applies any active `damage_interactions` to scale them (multiplying each component by the appropriate factor), then subtracts the scaled damage from the appropriate health value. This replaces the pre-v1.5 contract where scripts wrote `enemy.health = enemy.health - damage` directly. Round_scripts that still mutate health directly are rejected by v3.0.0+ emulators with a clear error message, because the emulator has no way to apply damage interactions to a value that was already subtracted.
+
+**Two forms for damage values.** The damage value may be either a bare number or a list of *damage components*, each with its own source tags:
+
+```lua
+-- Shorthand: a single damage component with no source tags.
+-- Untagged damage is still matched by interactions whose filters it satisfies
+-- (e.g., a 'source_lacks_all: [silver]' interaction zeroes untagged damage
+-- because the component's sources don't include silver).
+combat.damage_to_enemy = 5
+
+-- Full form: a list of {amount, sources} tables. Each component flows through
+-- the interaction filter independently, so different parts of the attack can
+-- interact differently with the enemy's immunities/resistances/weaknesses.
+combat.damage_to_enemy = {
+  { amount = 4, sources = {"physical", "silver"} },
+  { amount = 3, sources = {"poison"} }
+}
+```
+
+The emulator normalizes both forms to the same internal component list before applying interactions, so scripts can use whichever is simpler for the combat system they're implementing. LW1's combat ratio table emits a single damage number per round per side, so shorthand is correct. A book with a weapon that does physical + fire + poison damage in a single swing needs the full form.
+
+**Source tags are series-agnostic and book-defined.** The schema does not enumerate legal source tags — books declare their own vocabulary based on the mechanics they need. Common tag names (for consistency across books) include `physical`, `edged`, `blunt`, `piercing`, `ranged`, `silver`, `blessed`, `magical`, `cold_iron`, `fire`, `cold`, `lightning`, `acid`, `poison`, `holy`, `two_handed`. A book's items_catalog declares which weapons have which properties (via the item's `properties` array, schema v1.5+), and the book's round_script reads those properties to tag the damage it emits. The enemy's `intrinsic_damage_interactions` then filter on those tags.
+
+**Worked example 1: Helghast immunity (Lone Wolf series).**
+
+```json
+"helghast_s1": {
+  "name": "Helghast",
+  "COMBAT SKILL": 20,
+  "ENDURANCE": 32,
+  "special": "Helghast are creatures of shadow. Only silvered or blessed weapons can harm them. Additionally: deduct 2 from COMBAT SKILL unless you have Mindshield.",
+  "intrinsic_modifiers": [
+    {
+      "target": "player.attack",
+      "delta": -2,
+      "reason": "Helghast Mindforce",
+      "condition": { "type": "not", "condition": { "type": "has_ability", "ability": "Mindshield" } }
+    }
+  ],
+  "intrinsic_damage_interactions": [
+    {
+      "kind": "immunity",
+      "source_lacks_all": ["silver", "blessed", "sommerswerd"],
+      "reason": "Helghast are harmed only by silvered or blessed weapons"
+    }
+  ]
+}
+```
+
+Two orthogonal mechanisms on the same enemy — an additive modifier (Mindshield gate on player attack) and a multiplicative damage interaction (weapon-property gate on damage output). They do not interact with each other; they compose at different points in the round pipeline.
+
+**Worked example 2: Compound damage against a fire elemental.**
+
+Enemy definition:
+
+```json
+"fire_elemental": {
+  "name": "Fire Elemental",
+  "intrinsic_damage_interactions": [
+    { "kind": "immunity",   "source_has_any": ["poison"],        "reason": "No biology to poison" },
+    { "kind": "resistance", "source_has_any": ["physical"],      "reason": "Physical blows glance off its fiery body" },
+    { "kind": "weakness",   "source_has_any": ["cold", "water"], "reason": "Cold and water disrupt the elemental form" }
+  ]
+}
+```
+
+Player attacks with a poisoned silver spear whose tag set includes `physical`, `silver`, and `poison`. Suppose the round_script emits:
+
+```lua
+combat.damage_to_enemy = {
+  { amount = 4, sources = {"physical", "silver"} },
+  { amount = 3, sources = {"poison"} }
+}
+```
+
+Emulator processing:
+
+- **Component 1** `{4, [physical, silver]}`:
+  - Immunity (poison): component lacks `poison` → no match.
+  - Resistance (physical): component has `physical` → **match**, scale 4 × 0.5 = 2.
+  - Weakness (cold, water): component lacks both → no match.
+  - Final: 2.
+- **Component 2** `{3, [poison]}`:
+  - Immunity (poison): component has `poison` → **match**, scale 3 × 0 = 0.
+  - Resistance (physical): component lacks `physical` → no match.
+  - Weakness (cold, water): component lacks both → no match.
+  - Final: 0.
+- **Total damage to enemy this round:** 2 + 0 = **2**.
+
+This is exactly the arithmetic the book's rules would predict: the spear's physical blow is halved by the elemental's armor, and the poison component is completely ineffective because elementals have no biology. The mechanism supports it because each component flows through the filters independently.
+
+**Combining source filters with conditions.** Source filters (`source_has_any`, `source_lacks_all`) gate an interaction on what the damage *is*. The optional `condition` field gates it on player/world state. Both must pass for the interaction to apply. A common combined case: "the player's holy symbol doubles damage to undead, but only against undead, and only when the symbol is equipped." Encoded as:
+
+```json
+{
+  "kind": "weakness",
+  "multiplier": 2,
+  "source_has_any": ["holy"],
+  "condition": { "type": "has_equipped_with_property", "property": "blessed" },
+  "reason": "Your holy symbol channels divine power into the attack"
+}
+```
+
+The source filter ensures the 2× multiplier only applies to holy-tagged damage components; the condition ensures the interaction is inactive if the player hasn't equipped the holy symbol. Both clauses are needed because the symbol can be in inventory without being equipped, and the player might do holy damage from another source (a spell, a blessed weapon) that the symbol doesn't enhance.
+
+**Interaction freezing and evaluation order.** The emulator evaluates interactions the same way it evaluates `combat_modifiers`: both lists are merged at combat start, each entry's optional `condition` is evaluated once against current state, and the passing entries are frozen on the combat object for the duration of the fight. Mid-combat state changes (equipping a new item, losing an ability) do not re-evaluate frozen conditions. Source filtering, in contrast, happens per-round per-component because the source tags on damage come from the round_script's current-round output, not from persistent state.
+
+When multiple interactions match a single component, their multipliers compose multiplicatively. A component that is both resisted (0.5) and weak-to (2.0) ends up at 1.0 (unchanged). A component that is resisted (0.5) and immune (0) ends up at 0 (immunity always wins once it applies, since anything × 0 = 0). This is the intuitive behavior but it's worth being explicit about.
+
+**What's NOT in scope for `damage_interactions`:**
+
+- **Static input modifiers.** "Player has surprise attack +4 to COMBAT SKILL" is an additive bonus on the round_script's input. Use `combat_modifiers` (Rule 17).
+- **Ability-bonus suppression.** "Enemy is immune to Mindblast, so the +2 Kai bonus doesn't apply." Handled in the round_script imperatively; see Rule 17's closing notes.
+- **Per-round dynamic damage logic.** "The player's sword does an extra +1 damage per round while the enemy is bleeding." This requires round_script code; encode it there.
+- **Damage-type conversion.** "All fire damage against this enemy becomes cold damage." The `damage_interaction` mechanism scales damage but does not transform source tags. If a book needs this, encode it in the round_script.
+
+**Rule of thumb:** if the rule is "this combat scales damage by a factor of N for components matching some filter," use `damage_interactions`. If the rule is "this combat adds or subtracts a number from a field the round_script reads," use `combat_modifiers`. If it requires per-round dynamic decisions, use the round_script.
+
+---
+
+### Rule 19: Encode Equipment Slots Structurally for Worn and Wielded Items
+
+**The rule:** When a gamebook distinguishes between items a character *carries* and items a character *wears, wields, or has equipped*, encode that distinction structurally using the schema v1.5+ equipment framework. Do not encode equipment implicitly via narrative text or via ad-hoc flags that only the round_script understands. Every item the player can wear, wield, or otherwise activate by putting it on gets the following fields in its items_catalog entry:
+
+- `equippable: true`
+- `slot: "<slot name>"`
+- `equip_timing: "<always | out_of_combat | once>"` (default `"out_of_combat"` if omitted)
+- `auto_equip: <boolean>` (default `true` if omitted)
+
+**Why equipment slots are a first-class mechanism.** Many gamebook series have an implicit equipment system that the rules text describes in passing. Lone Wolf 1's rules refer to "the helmet you are wearing" and "the chainmail waistcoat worn under your Kai Monk's robes" — these are clearly slot-based (you wear one helmet, not three, and you wear it on your head). Fighting Fantasy's Warlock sidesteps the issue by saying "you may only carry one weapon at a time" and handling the swap via explicit `drop old, take new` narrative, which works for single-slot books but doesn't scale to more sophisticated games. The more general framing — and the one the schema adopts — is that every equipment concept, whether for worn armor, wielded weapons, or carried talismans, is a named slot that holds at most one item at a time. Books that need only a single weapon slot use `slot: "weapon"`. Books with two-hand / off-hand distinctions use `main_hand` and `off_hand`. Books with a full RPG-style character sheet can use `head`, `body`, `feet`, `hands`, `neck`, `finger_1`, `finger_2`, `back`, etc. The schema does not enforce a vocabulary — books pick slot names that match their rules.
+
+**The one-weapon-at-a-time rule is canonical in Lone Wolf.** The Mongoose Publishing reprint of *Flight from the Dark* includes Footnote 1, which states: *"The new Mongoose Publishing editions of the gamebooks clarify that 'You may only use one Weapon at a time in combat.'"* This is not an inference from the 2-weapons-carried rule; it is a published clarification. An LW player carrying two weapons always has exactly one of them active at any given moment, and the active weapon is what contributes to combat bonuses and damage tagging. This maps directly to a single `slot: "weapon"` with `equip_timing: "out_of_combat"` — the player selects which carried weapon is active between combats, and cannot swap during a fight unless a specific section grants the ability.
+
+**When to use which `equip_timing`:**
+
+- **`out_of_combat`** (default) — covers the vast majority of equipment. LW's helmet and chainmail, LW's weapons, Warlock's weapons, FF armor, AD&D armor. The player can equip or unequip any time combat is not running.
+- **`always`** — rare. Use when the book explicitly allows mid-combat equipment swapping as a tactical choice. Occasional Fabled Lands encounters that let you 'draw your alternate weapon as a free action' qualify. Do not default to this; it bypasses combat timing enforcement and should be reserved for explicit allowances.
+- **`once`** — for items that attach permanently: cursed rings the player cannot remove, magical tattoos, the results of certain rituals, undead transformations, rings of regeneration that state "once worn, cannot be removed." When `equip_timing: "once"` is set, the emulator refuses unequip actions entirely; the only way the item leaves the slot is a `remove_item` event (e.g., a narrative cure that removes the curse).
+
+**When to use `auto_equip: false`:** the default is `true` (matching the "pick up the helmet, you're wearing it" narrative). Set it to `false` for items the player must consciously choose to equip: a second carried weapon that the player might prefer not to use as their active, a suspicious ring the player wants to identify before wearing, an unfamiliar magical robe. With `auto_equip: false`, `add_item` adds the item to inventory but does not change the equipment slot; the player must issue an explicit equip action later.
+
+**Equipment and stat_modifier.** The items_catalog `stat_modifier.when` field has three values: `always`, `combat`, and `equipped`. Schema v1.5+ emulators honor all three:
+
+- `always` — applies whenever the item is in inventory, regardless of equipped state.
+- `combat` — applies only during combat rounds, regardless of equipped state.
+- `equipped` — applies only when the item currently occupies one of the player's equipment slots.
+
+For equipment like LW's Shield (+2 COMBAT SKILL while carried and usable) or the Chainmail Waistcoat (+2 ENDURANCE while worn), set `when: "equipped"` so the bonus activates only while the item is in its slot. A future version of the book that lets the player lose the chainmail without losing the shield (because shield is stored separately, say) correctly handles the chainmail bonus going away without touching the shield.
+
+**Equipment-aware conditions.** Schema v1.5+ adds three new condition types for events, choices, combat_modifiers, and damage_interactions:
+
+- **`has_equipped_item`** — true if the named item is in any equipped slot. Use for checks like "does the player have the Sommerswerd equipped?" where you want a specific item by id.
+- **`has_equipped_in_slot`** — true if the named slot holds a specific item (if `item` is given) or any item at all (if `item` is omitted). Use for "is anything in the weapon slot?" or "is the Helm of Truesight specifically in the head slot?"
+- **`has_equipped_with_property`** — true if any currently equipped item has the named string in its `properties` array. Use for property-driven rules: "does the player have a silver weapon equipped?" (`{type: "has_equipped_with_property", property: "silver"}`). This is the canonical Helghast check.
+
+The `has_equipped_with_property` condition is particularly important for damage_interaction gating: Helghast's immunity is naturally expressed as `{kind: "immunity", condition: {not: {has_equipped_with_property: "silver"}}}`, which reads correctly: "the enemy is immune to damage UNLESS the player has a silver-tagged item in an equipped slot." The source-tag filter `source_lacks_all: ["silver"]` is the alternative phrasing that gates per-damage-component rather than per-combat; both expressions are valid and the choice depends on whether the book treats "silver-ness" as a persistent player state or as a per-attack property.
+
+**Starting equipment.** When character creation grants equipment (LW's Helmet and Chainmail as starting Special Items, AD&D's class-specific weapon packs, FF's starting sword), the items are added via the character_creation steps the same as any other starting gear, and `auto_equip: true` on the item definition ensures they occupy their slots from the start. The character_creation JSON does not need to explicitly populate an `equipment` state field — the emulator derives it from the items the character starts with, based on each item's `auto_equip` setting.
+
+**Displacement semantics on add.** When `add_item` fires for an equippable item with `auto_equip: true`, and the item's slot is already occupied by a different item, the emulator moves the new item into the slot and leaves the old item in plain inventory (no longer equipped, but still carried). This is "displacement," not "dropping" — the old item does not leave inventory. If a book wants the "drop old weapon when taking new" semantics (e.g., Warlock, where the narrative explicitly says "you must leave your old sword behind"), the section that grants the new weapon should include an explicit `remove_item` event for the old one *before* or *after* the `add_item` for the new one. The equipment framework does not change the inventory semantics; it adds a layer of slot-based state on top.
+
+**Removal clears equipped state.** When `remove_item` fires on an item currently occupying an equipment slot, the slot is automatically cleared. This matches the intuition: if the player loses the sword, they're no longer wielding it.
+
+**What Rule 19 does not do:** it does not add a full inventory UI (that's an emulator concern), it does not implement encumbrance beyond the existing `inventory.capacity` rule, it does not model durability, and it does not handle item enchantment beyond what `properties` can express. These are potential future extensions, but none are required to ship the equipment framework.
+
+**Round_script access.** Round_scripts that care about active equipment can read `player.equipment` — a table mapping slot name to item_id (or nil for empty slots). Example use: a book where the weapon's damage formula depends on the weapon's type (sword does 1d6, axe does 1d8) can look up `player.equipment.weapon`, fetch the corresponding items_catalog entry, and select the formula. Most current round_scripts do not need this — they work with the modifier-based system from Rule 17 — but it's available for books that do.
 
 ---
 
@@ -1287,18 +1486,40 @@ This means the `round_script` has full control over weapon selection logic — i
 
 ### Round Script Contract
 
+**Schema v1.5+ / Codex v2.8+ / Emulators v3.0+.** The round_script reports its verdict by setting *damage values* on the `combat` table. It does not mutate `player.health` or `enemy.health` directly — the emulator is responsible for translating damage into state changes, because the emulator is the layer that knows how to apply `damage_interactions` (Rule 18) to scale the damage before subtracting from health.
+
 After execution, the emulator reads:
-- `player.health` — new player health value
-- `enemy.health` — new enemy health value
-- `combat.last_result` — one of: `"player_wounds_enemy"`, `"enemy_wounds_player"`, `"tie"`, `"simultaneous"`
-- `combat.last_damage` — damage amount (used by post-round scripts)
+
+- `combat.damage_to_enemy` — damage dealt to the enemy this round. Either a bare number (shorthand for a single untagged damage component) or a list of component tables `{ { amount = N, sources = {...} }, ... }` for compound damage. 0 means "no damage this round" (a miss or tie).
+- `combat.damage_to_player` — damage dealt to the player this round, same shape.
+- `combat.last_result` — one of: `"player_wounds_enemy"`, `"enemy_wounds_player"`, `"tie"`, `"simultaneous"`, `"player_wounds_simultaneous"`, etc. Used by the UI and post-round scripts for flavor text.
+- `combat.last_damage` — optional summary of damage this round, used by post-round scripts that care about a single scalar. Typically equal to the larger of `damage_to_enemy` / `damage_to_player`, or 0 for a tie. Can be set to any convenient value.
+
+**Important:** round_scripts that still use the pre-v1.5 contract — writing to `enemy.health` or `player.health` directly — are rejected by v3.0+ emulators with a clear error message. The emulator has no way to apply damage_interactions to a value the script has already subtracted. When migrating an older book to the new contract, replace every `enemy.health = enemy.health - X` with `combat.damage_to_enemy = X` and every `player.health = player.health - Y` with `combat.damage_to_player = Y`.
+
+**Damage value forms:**
+
+```lua
+-- Shorthand: bare number for a single untagged damage component.
+combat.damage_to_enemy = 5
+
+-- Full form: a list of {amount, sources} tables for compound damage.
+combat.damage_to_enemy = {
+  { amount = 4, sources = {"physical", "silver"} },
+  { amount = 3, sources = {"poison"} }
+}
+```
+
+Use the shorthand for any round_script whose combat system reports a single damage number per side per round (LW's Combat Ratio Table, FF's 2d6 matchup, GrailQuest's threshold roll). Use the full form when the script explicitly computes multiple damage components with different source tags — e.g., a book whose weapons inflict both physical and elemental damage, where the enemy might interact differently with each. See Rule 18 for source-tag semantics and worked examples.
+
+**Negative values = healing.** A round_script that wants to heal the player can set `combat.damage_to_player = -3` — a negative damage value. The emulator applies healing directly (no damage_interactions are consulted, because healing is not damage). This is the cleanest way to express "this round, the player regenerates 3 ENDURANCE." Most round_scripts will not need this.
 
 ### Post-Round Script Contract
 
 After execution, the emulator reads the same fields plus:
-- `player.stats_changed` — optional table of `{stat_name = new_value}` to update player stats (e.g., deducting Luck)
+- `player.stats_changed` — optional table of `{stat_name = new_value}` to update player stats (e.g., deducting Luck after a Test Your Luck call in FF post-round).
 
-### Example: Fighting Fantasy
+### Example: Fighting Fantasy (v3.0+ contract)
 
 ```lua
 local player_roll = roll('2d6')
@@ -1308,12 +1529,12 @@ local enemy_as = enemy_roll.total + enemy.attack
 local dmg = combat.standard_damage or 2
 
 if player_as > enemy_as then
-  enemy.health = enemy.health - dmg
+  combat.damage_to_enemy = dmg
   log('Round ' .. combat.round .. ': You ' .. player_as .. ' vs ' .. enemy.name .. ' ' .. enemy_as .. ' — You wound!')
   combat.last_result = 'player_wounds_enemy'
   combat.last_damage = dmg
 elseif enemy_as > player_as then
-  player.health = player.health - dmg
+  combat.damage_to_player = dmg
   log('Round ' .. combat.round .. ': You ' .. player_as .. ' vs ' .. enemy.name .. ' ' .. enemy_as .. ' — Wounded!')
   combat.last_result = 'enemy_wounds_player'
   combat.last_damage = dmg
@@ -1324,7 +1545,7 @@ else
 end
 ```
 
-### Example: Lone Wolf (Combat Ratio Table)
+### Example: Lone Wolf Combat Ratio Table (v3.0+ contract)
 
 ```lua
 local ratio = player.attack - enemy.attack
@@ -1342,13 +1563,13 @@ local entry = combat_results_table[cr_key] and combat_results_table[cr_key][tost
 local e_loss = entry and entry.E or 0
 local p_loss = entry and entry.LW or 0
 
-enemy.health = enemy.health - e_loss
-player.health = player.health - p_loss
+combat.damage_to_enemy = e_loss
+combat.damage_to_player = p_loss
 
 log('Round ' .. combat.round .. ': Ratio ' .. ratio .. ', R10=[' .. rval .. '] — ' ..
     enemy.name .. ' -' .. e_loss .. ', You -' .. p_loss)
 combat.last_result = 'simultaneous'
-combat.last_damage = 0
+combat.last_damage = math.max(e_loss, p_loss)
 ```
 
 ### Writing Combat Scripts
@@ -2089,6 +2310,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.8 — Damage interactions and equipment framework. Two independent but complementary mechanisms ship together to unblock several adjacent gaps. Schema bumped to GBF 1.5.0; both reference emulators bumped to 3.0.0 (major — the round_script contract is breaking). **Mechanism A: damage_interactions (Rule 18).** A new structured field on combat events (`damage_interactions`) and on enemies_catalog entries (`intrinsic_damage_interactions`) lets books express immunities, resistances, and weaknesses as multiplicative damage scaling rather than forcing them into the additive `combat_modifiers` shape from Rule 17. Each entry has a `kind` (immunity = 0x, resistance = 0.5x, weakness = 2x), an optional `multiplier` override, an optional `direction` (incoming/outgoing), optional source-tag filters (`source_has_any` / `source_lacks_all`), an optional `condition` gating the interaction on player state, and an optional `reason` string. The round_script contract changes in lockstep: round_scripts now report damage by setting `combat.damage_to_enemy` and `combat.damage_to_player` (bare number or list of `{amount, sources}` components), and do NOT mutate `*.health` directly. The emulator reads the reported damage, applies source-filtered interaction multipliers to each component per round, then subtracts the scaled total from the appropriate health value. This is a breaking change to the round_script contract — v3.0+ emulators reject scripts that write to `enemy.health` / `player.health`. The driving use case is Lone Wolf 2's Helghast ("immune to non-silver weapons") and compound-damage cases like a poisoned silver spear vs. a poison-immune silver-weak enemy, where the damage components must flow through the interaction filters independently. **Mechanism B: equipment framework (Rule 19).** A new structured equipment system on items_catalog entries: `equippable`, `slot` (free-form string, common suggested vocabulary: head/body/weapon/main_hand/off_hand/feet/hands/neck/finger_1/finger_2/back), `equip_timing` (always/out_of_combat/once, default out_of_combat), and `auto_equip` (default true). A new `properties` array on items holds tag strings like `silver` / `blessed` / `magical` that feed damage_interaction source filters and equipment-aware conditions. State gains a `character.equipment` map from slot to item_id. `stat_modifier.when` values `"equipped"` and `"combat"` are now honored by both emulators (previously silently ignored). Three new condition types: `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`. Equipment slots hold exactly one item; auto-equip displaces the previous occupant, which stays in inventory but is no longer active. Removing an equipped item clears its slot automatically. Player-driven equip/unequip actions gate on `equip_timing` (out_of_combat items cannot be swapped during a combat event). The driving use case is LW's one-weapon-at-a-time rule (per the Mongoose Publishing reprint errata: *"You may only use one Weapon at a time in combat"*), which is canonical not an inference, and LW's implicit head/body slots for the Helmet and Chainmail Special Items. Rule 17 updated to cross-reference Rule 18 and remove the deferred "ability immunity" note. Both emulators gain new UI panels: a Damage Interactions panel next to the existing Combat Modifiers panel showing active immunities/resistances/weaknesses, and an Equipment panel in the player sidebar showing each declared slot and its occupant with click-to-unequip affordance. All three maintained first-party books (LW1, Warlock, GrailQuest) are re-run through the updated codex via comprehensive-review sub-agents in the same session to migrate their round_scripts to the new contract and to apply equipment tagging to their items_catalog entries per Rule 19. Regression story: none of the three books populates any damage_interactions this session, and none of the existing combats key on equipment, so combat outcomes are byte-identical to pre-v2.8 runs — the mechanism is in place but unexercised until future book data (LW2, etc.) populates it. Schema changes are strictly additive; the round_script contract change is the only breaking piece, and it's contained by the lockstep book migration.
 - v2.7 — Combat modifiers (Batch 2). Schema bumped to GBF 1.4.0 with two new optional fields: `combat_modifiers` on combat events (for per-section narrative modifiers) and `intrinsic_modifiers` on enemies_catalog entries (for per-enemy-type traits that travel with the enemy across every section it appears in). Both fields accept a list of generic `combat_modifier` objects with shape `{target: dot-path, delta: number, condition?, reason?, duration?}`. The target is a dot-path string identifying any numeric field on `player` or `enemy` (not an enum), so the mechanism works for any combat system: `player.attack` for attack-vs-attack systems (Lone Wolf, Fighting Fantasy), `player.hit_threshold` / `player.damage_bonus` / `enemy.armor` for threshold-based systems (GrailQuest, many AD&D gamebooks). The design is deliberately series-agnostic and does not assume `attack_stat` is non-null, so it works on the full range of combat systems the stress test validated. The emulator evaluates each modifier's optional condition once at combat start, freezes the resulting list, and applies the passing deltas to playerData / enemyData before each round_script invocation. Per-section modifiers and per-enemy intrinsics stack additively. Both reference emulators (CLI 2.4.0 → 2.5.0, HTML 2.4.0 → 2.5.0) implement the mechanism identically. The HTML emulator's combat panel now displays the active modifier list alongside the special_rules text box so the player sees what's in effect. New Rule 17 in the codex doc specifies the encoding with worked examples for narrative surprise attacks, torch-penalty conditionals, threshold-based damage modifiers, and per-enemy Mindshield-conditional intrinsic traits. Rule 14 (Combat Modifier Scope) updated to cross-reference Rule 17: both fields should be populated on any combat with a mechanical modifier — `special_rules` text is for display, `combat_modifiers` is for enforcement. The schema change is strictly additive; books with no modifier fields continue to work unchanged. First tested against a synthetic book verifying condition evaluation, stacking of event-level and intrinsic modifiers, both buff and debuff deltas, and modifier application to multiple target fields (player.attack, enemy.armor, player.damage_bonus). All existing playbooks (LW, Warlock, WWY, GrailQuest — 10 total) pass with 0 errors since none of them currently populate the new fields.
 - v2.6 — Schema nullability + emulator gap fixes from the GrailQuest stress test. The first real test of the series-agnostic claim (running a Step 3a-1 review on GrailQuest 01: The Castle of Darkness, an unprofiled series with `series_profile: unknown` that uses unusual stat names like `LIFE POINTS` / `EXPERIENCE` / `GOLD` and has `attack_stat: null`) surfaced several schema and emulator gaps that were silently affecting quality on unprofiled books. This version closes them. Schema bumped to GBF 1.3.0 with these additive relaxations: `rules.attack_stat` is now nullable (for threshold-based combat systems that don't use a player attack stat); `combat_system.post_round_script` and `post_round_label` are now nullable (most books don't have a post-round phase); `rules.provisions.when_usable` is now nullable (for books where provisions are disabled); `roll_dice.results[range].target` is now nullable with explicit fall-through semantics (for branches that produce a side effect but don't navigate, e.g. "1-3 the lock holds, try again; 4-6 the lock breaks, turn to 42"); and a new `set_ability_uses` action is added to the character_creation step enum for books that track per-ability remaining-uses counters (limited-use spells, rationed potions-as-abilities, talents with fixed castings). Both reference emulators (CLI and HTML bumped to 2.4.0) gained corresponding changes: `set_resource` now falls through to `state.stats[name]` when the resource name matches a declared stat (so books like GrailQuest that carry currency as a first-class stat get the value instead of silently dropping it); `set_ability_uses` is handled via a new `state.abilityUses` map; the stat bar on both emulators now avoids rendering duplicate currency rows when a book already declares currency as a stat. Codex doc updates: Rule 10 (Enemy ID Naming) now explicitly permits bare snake-case names for unique enemies (only the `_s<N>` suffix is required for recurring generic enemy names that collide across sections); Rule 14 (Combat Modifier Scope) vocabulary extended with terse stat-block-style modifier phrasing ("first strike," "+N dmg," "need N+ to hit," etc.) to catch books like GrailQuest that use compressed stat-line modifiers instead of narrative phrasing; Section 7.2 (unprofiled-series Workflow) now documents both currency-encoding strategies (canonical-slot vs. stat encoding) and when to use which. This version also validates the series-agnostic principle for real: codex v2.6 + Section 7 + Rules 6–16 produce a fully-playable unprofiled-series file (GrailQuest probe 166/0, smoke 20/0) with a quality gap of less than 5% from a profiled parse. Post-schema-validation the remaining GrailQuest issues are all documented as DATA gaps (needs source re-parse) rather than SCHEMA / EMULATOR / CODEX RULE gaps.
 - v2.5 — Series-agnostic cleanup pass. This version introduces no new features, no new schema fields, and no new emulator behavior. It exists to retire series-centric framing accumulated in earlier versions and to bring the doc into alignment with the series-agnostic design principle codified in DEV_PROCESS.md. Schema changes: the `enemy` object no longer declares named `skill`/`stamina`/`combat_skill`/`endurance` properties — all enemy stats are carried via `additionalProperties` using whatever stat names the book's rules section declares (which the emulators already normalize case/spacing variants of). Codex doc changes: Rule 15 rewritten to lead with the general rule and treat Lone Wolf Hunting, FF class exemptions, AD&D class abilities, and hypothetical unprofiled-series cases as parallel illustrations rather than one canonical example. Section 2 gains a framing note that all schema-sample examples are illustrative, not prescriptive. Section 7 (Unknown/Other Series) rewritten from an 11-line stub to a full chapter describing the workflow, what NOT to do, and the expected quality bar, so unprofiled parses have a proper canonical reference. Schema field descriptions for `currency_display_name`, `provisions.display_name`, `abilities.requires_roll`, and `event.condition` rebalanced to avoid naming specific series in the enumeration while keeping them as illustrative examples. No book files are touched by this commit. GBF format version unchanged (still 1.2.0) — no breaking changes, no new fields, the schema is just more generic in its descriptions and the enemy object's named-property enumeration is gone.
