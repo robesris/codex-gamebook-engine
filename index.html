@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Codex Gamebook Engine — Browser Emulator
-  Version: 2.4.0
-  Compatible with codex doc >= 2.6 and GBF schema >= 1.3.0
+  Version: 2.5.0
+  Compatible with codex doc >= 2.7 and GBF schema >= 1.4.0
 -->
 <html lang="en">
 <head>
@@ -566,7 +566,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '2.4.0';
+const CODEX_EMULATOR_VERSION = '2.5.0';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -2152,6 +2152,19 @@ function handleCombat(event) {
     if (c.specialRules) {
       html += `<div class="special-rules-box"><strong>Special Rules:</strong> ${c.specialRules}</div>`;
     }
+    if (c.appliedModifiers && c.appliedModifiers.length > 0) {
+      // Render the frozen combat-modifier list for this fight. Schema
+      // v1.4 combat_modifiers. Each entry shows target (dot-path), the
+      // signed delta, and the reason if present. Purely informational —
+      // the math is applied to playerData/enemyData before the
+      // round_script runs in combatAttack.
+      const rows = c.appliedModifiers.map(m => {
+        const sign = m.delta >= 0 ? '+' : '';
+        const reason = m.reason ? ` — ${m.reason}` : '';
+        return `<div>${m.target} ${sign}${m.delta}${reason}</div>`;
+      }).join('');
+      html += `<div class="special-rules-box"><strong>Modifiers:</strong>${rows}</div>`;
+    }
 
     const playerStatLine = (attackStat ? `${attackStat} ${playerAttack} | ` : '') + `${healthStat} ${playerHealth}`;
     const enemyStatLine = (attackStat ? `${attackStat} ${enemyAttack} | ` : '') + `${healthStat} ${enemy.currentHealth}`;
@@ -2206,9 +2219,42 @@ function handleCombat(event) {
     if (log) log.scrollTop = log.scrollHeight;
   }
 
+  // Evaluate combat_modifiers (schema v1.4) once at combat start. We
+  // merge the combat event's `combat_modifiers` with the intrinsic
+  // modifiers from each enemy's catalog entry, evaluate each modifier's
+  // condition against current state, and freeze the result. The frozen
+  // list is used for both UI display (in the combat header) and the
+  // round_script math (applied to playerData/enemyData before each
+  // round). Modifiers are NOT re-evaluated each round, which means a
+  // mid-combat state change (losing an item that gated a modifier)
+  // doesn't update the modifier list. This matches player expectations
+  // — modifiers announced at combat start stay in effect — and simplifies
+  // the code. If a book needs per-round dynamic modifiers, it should
+  // encode them in the round_script directly.
+  const eventModifiers = event.combat_modifiers || [];
+  const intrinsicModifiers = [];
+  for (const en of enemies) {
+    const cat = getEnemy(en.ref) || {};
+    if (Array.isArray(cat.intrinsic_modifiers)) {
+      intrinsicModifiers.push(...cat.intrinsic_modifiers);
+    }
+  }
+  const appliedModifiers = [];
+  for (const mod of [...eventModifiers, ...intrinsicModifiers]) {
+    if (mod.condition && !evaluateCondition(mod.condition)) continue;
+    const target = typeof mod.target === 'string' ? mod.target : null;
+    const delta = typeof mod.delta === 'number' ? mod.delta : 0;
+    if (!target || delta === 0) continue;
+    appliedModifiers.push({ target, delta, reason: mod.reason || null });
+  }
+
   // Store combat state for callbacks — all mutable state lives here
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules,
+    // Frozen, condition-evaluated list of active modifiers for this
+    // combat's duration. See comment above for why this is
+    // snapshotted at combat start rather than re-evaluated each round.
+    appliedModifiers,
     roundNum: 0, combatLog: [], waitingForLuckChoice: false,
     combatOver: false,
     // When combat ends (victory or flee), this holds the section id
@@ -2284,11 +2330,48 @@ function handleCombat(event) {
     };
     // Ensure health is the current value, not the catalog max
     enemyData.health = enemy.currentHealth;
+
+    // Apply the frozen combat_modifiers list (schema v1.4). The list was
+    // evaluated once at combat start — see the combat-init block further
+    // up in this function. Each modifier has a target dot-path like
+    // "player.attack", "player.hit_threshold", "enemy.armor", etc. The
+    // delta is added to the existing field value on playerData or
+    // enemyData. Fields that are currently undefined are treated as 0
+    // so books can introduce new fields purely via modifiers.
+    for (const mod of c.appliedModifiers || []) {
+      const target = mod.target;
+      const delta = mod.delta;
+      const dotIdx = target.indexOf('.');
+      if (dotIdx < 0) continue;
+      const scope = target.slice(0, dotIdx);
+      const field = target.slice(dotIdx + 1);
+      let dataObj = null;
+      if (scope === 'player') dataObj = playerData;
+      else if (scope === 'enemy') dataObj = enemyData;
+      if (!dataObj) continue;
+      const current = typeof dataObj[field] === 'number' ? dataObj[field] : 0;
+      dataObj[field] = current + delta;
+    }
+    // Surface the applied modifier list in the combat log on round 1 so
+    // the player knows what's in effect for the duration of the fight.
+    // Subsequent rounds don't re-log because nothing has changed.
+    if (c.roundNum === 1 && c.appliedModifiers && c.appliedModifiers.length > 0) {
+      for (const m of c.appliedModifiers) {
+        const sign = m.delta >= 0 ? '+' : '';
+        c.combatLog.push(`<span class="lucky">Modifier: ${m.target} ${sign}${m.delta}${m.reason ? ' (' + m.reason + ')' : ''}</span>`);
+      }
+    }
+
     const combatData = {
       round: c.roundNum,
       standard_damage: cs?.details?.standard_damage || gameData.rules.combat_rules_detail?.standard_damage || 2,
       last_result: '',
       last_damage: 0,
+      // Expose applied modifiers to the round_script so book-specific
+      // scripts can do per-modifier math if they need to. Most scripts
+      // don't need this — they just read the already-modified
+      // player.attack / enemy.armor / hit_threshold / etc.
+      modifiers: c.appliedModifiers || [],
     };
 
     // Pass extra context: combat_system.details, inventory, items catalog,

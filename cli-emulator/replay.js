@@ -2,8 +2,8 @@
 /**
  * Codex Gamebook Engine — CLI Replay Tool
  *
- * Version: 2.4.0
- * Compatible with codex doc >= 2.6 and GBF schema >= 1.3.0
+ * Version: 2.5.0
+ * Compatible with codex doc >= 2.7 and GBF schema >= 1.4.0
  *
  * Runs a scripted playthrough from a "playbook" file. Each line is either:
  *   - A blank line (skipped)
@@ -37,7 +37,7 @@
 
 'use strict';
 
-const CODEX_REPLAY_VERSION = '2.4.0';
+const CODEX_REPLAY_VERSION = '2.5.0';
 // Lua runtime is pinned via play.js (which requires fengari). See
 // package.json for the exact version and play.js for the rationale.
 

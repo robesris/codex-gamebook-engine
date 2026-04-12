@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.6
+# THE GAMEBOOK CODEX v2.7
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.6
+**Codex version:** 2.7
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -13,10 +13,10 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.3.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 2.4.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 2.4.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 2.4.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `codex.schema.json` (GBF format) | ≥ 1.4.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 2.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 2.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 2.5.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -426,7 +426,7 @@ The parser's special_rules extraction should attribute every such phrase that oc
 
 Real example: LW section 55 ("Just as the Giak makes his leap, you race forward and strike out with your weapon — knocking the creature away from the young wizard's back. You jump onto the struggling Giak and strike again. Due to the surprise of your attack, add 4 points to your COMBAT SKILL for the duration of this fight but remember to deduct it again as soon as the fight is over."). The +4 surprise bonus appears in the narrative setup paragraph, not in the same paragraph as "Giak: COMBAT SKILL N ENDURANCE M." A parser scoped to the stat-block paragraph alone will miss the bonus and emit `special_rules: null`. The correct encoding is `special_rules: "Add 4 to COMBAT SKILL for the duration of this fight (surprise attack). Deduct again after the fight ends."`
 
-Note that as of codex v2.2, capturing the modifier into the `special_rules` text is a *display* fix only — the emulators render `special_rules` as flavor text but do not mechanically apply it. Mechanical enforcement of combat modifiers is a separate open issue tracked under the special_rules enforcement gap. The Rule 14 work is still required because (a) it makes the modifier visible to the player so they can apply it themselves and (b) it gives the eventual mechanical-enforcement implementation a clean source of truth to work from.
+Note that `special_rules` text is a *display* field — the emulators render it as flavor text above the combat panel but do not interpret it. For mechanical enforcement of combat modifiers, use the structured `combat_modifiers` field on the combat event (per-section modifiers) or the `intrinsic_modifiers` field on the enemies_catalog entry (per-enemy-type intrinsic traits) alongside the narrative `special_rules` string. The two can and should coexist: the string documents the rule in the book's narrative language for display, and the structured field encodes the math for enforcement. See Rule 17 for the full combat_modifiers specification and worked examples of how it composes with the Rule 14 special_rules extraction.
 
 ### Rule 15: Event Conditions for Rule-Mandated Exemptions and Gates
 
@@ -499,6 +499,113 @@ Practical workflow when triaging a bug from a playthrough:
 7. Ship the doc change and the regenerated book in lockstep.
 
 If the rule improvement turns out to be ambiguous or hard to specify in general terms, that itself is useful signal — it means the bug class is genuinely subtle and may need a different mitigation (schema extension, emulator change, or human-in-the-loop review). Surface that finding rather than forcing a poor rule.
+
+### Rule 17: Encode Combat Modifiers Structurally, Not Just as Narrative Text
+
+**The rule:** When a combat has a mechanical modifier — a per-fight bonus or penalty that changes the math of the round — encode it as a structured `combat_modifiers` entry on the combat event (for per-section narrative modifiers) or as an `intrinsic_modifiers` entry on the enemy's catalog entry (for per-enemy-type traits that travel across every section the enemy appears in). Do not rely on `special_rules` text alone. The string field is for display and narrative fidelity; the structured modifier field is for enforcement. Both should be populated for any combat with a mechanical modifier — they coexist and carry complementary information.
+
+As of schema v1.4.0 (codex v2.7), both combat events and enemies_catalog entries support an optional modifier list with the shape:
+
+```json
+{
+  "target": "player.attack",
+  "delta": 4,
+  "condition": { "type": "not", "condition": { "type": "has_ability", "ability": "Mindshield" } },
+  "reason": "Wraith mental attack"
+}
+```
+
+**Key design principles.** The mechanism is deliberately generic:
+
+- **Target is a dot-path string, not an enum.** Use `player.attack`, `player.hit_threshold`, `player.weapon_bonus`, `player.damage_bonus`, `enemy.attack`, `enemy.armor`, `enemy.hp` — whatever numeric field the book's round_script reads. The schema does not enumerate legal target names because different gamebook series use different ones. Attack-vs-attack systems use `player.attack` / `enemy.attack`. Threshold-based systems (where `rules.attack_stat: null`) use fields like `player.hit_threshold`, `player.weapon_bonus`, `enemy.armor`. The emulator applies the delta to whatever field the target names; if the field doesn't exist on the data object, it's treated as 0 so books can introduce new fields purely via modifiers.
+- **Delta is a signed number.** Positive for buffs, negative for penalties.
+- **Condition is optional and uses the same union as event/choice conditions.** `has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`, `and`, `or`, `test_failed`, `test_succeeded`. A condition that evaluates to false at combat start means the modifier does NOT apply.
+- **Reason is a human-readable string** for the UI and the playthrough log. Not interpreted by the emulator.
+- **Modifiers are snapshotted at combat start.** Conditions are evaluated once, and the passing modifiers stay in effect for the entire combat. A mid-combat state change (losing an item, expending a discipline) does not re-evaluate. This matches the player expectation that modifiers announced at the fight's start stay in effect, and avoids re-evaluation complexity. If a book has truly dynamic per-round modifiers, encode them in the round_script directly.
+- **Duration is reserved for future extension.** The schema accepts `duration: "fight"` | `"first_round"` | `"round"`, but as of v1.4 all modifiers behave as `"fight"`. Document the intent anyway so future emulator versions can honor the field without re-parsing books.
+
+**Where to put which modifier:**
+
+- **On the combat event's `combat_modifiers`** — for per-section narrative modifiers that are specific to this particular encounter. Examples: "Due to your surprise attack, add 4 to your COMBAT SKILL for the duration of this fight" (a setup-paragraph modifier that only applies in this section); "You fight the guardian in the dark. If you do not have a torch, deduct 3 from your COMBAT SKILL" (a conditional per-section modifier); "The Warlord is weakened by his recent wound; deduct 2 from his Attack Strength for this fight" (a narrative per-section enemy debuff).
+
+- **On the enemy's `intrinsic_modifiers`** — for traits that are properties of the enemy *type* rather than of a specific encounter. Examples: "Vordak / Helghast / Gourgaz: deduct 2 from your COMBAT SKILL unless you have the Mindshield Kai Discipline" (applies to every fight against this enemy type in any Lone Wolf book); "Undead: can only be hit on a roll of 10+" (applies to every skeleton/zombie encounter in this book and any future books that reuse the catalog entry); "Incorporeal: immune to physical weapons without the silver keyword" (applies wherever this creature type appears).
+
+The emulator merges both lists at combat start, evaluates the conditions, and applies the passing deltas in order. Per-section and per-enemy modifiers stack additively — if a section says "surprise attack +4 to your COMBAT SKILL" and the enemy is a Vordak with "-2 unless Mindshield," a player without Mindshield gets 19 + 4 - 2 = 21 effective attack; a player with Mindshield gets 19 + 4 = 23.
+
+**Composing with Rule 14.** Rule 14 (Combat Modifier Scope) says to scan the whole section for modifier phrasing and put the text into `special_rules`. Rule 17 adds the structural counterpart: the same modifier should ALSO be encoded as a `combat_modifiers` entry so the emulator actually applies the math. Both fields should reflect the same rule. Real example using LW section 55:
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "giak_s55",
+  "win_to": 325,
+  "special_rules": "Add 4 to COMBAT SKILL for the duration of this fight (surprise attack). Deduct again after the fight ends.",
+  "combat_modifiers": [
+    {
+      "target": "player.attack",
+      "delta": 4,
+      "reason": "Surprise attack"
+    }
+  ]
+}
+```
+
+The `special_rules` text is displayed verbatim above the combat panel (so the player sees the narrative rule as the book wrote it). The `combat_modifiers` entry is what the emulator actually applies to `playerData.attack` before the round_script runs. Both are required; neither alone is sufficient.
+
+**Threshold-based combat example** (GrailQuest, `attack_stat: null`):
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "wraith",
+  "win_to": 142,
+  "special_rules": "Wraith gets first strike. You suffer -4 to any damage you deal. Cannot befriend.",
+  "combat_modifiers": [
+    {
+      "target": "player.damage_bonus",
+      "delta": -4,
+      "reason": "Wraith drains your blows"
+    }
+  ]
+}
+```
+
+Here the target is `player.damage_bonus` because GrailQuest's round_script reads that field instead of `player.attack`. The mechanism is the same; the target name reflects the book's combat vocabulary.
+
+**Per-enemy intrinsic example** (a Vordak in any Lone Wolf book):
+
+```json
+{
+  "vordak_s29": {
+    "name": "Vordak",
+    "COMBAT SKILL": 17,
+    "ENDURANCE": 25,
+    "special": "Vordaks attack with Mindforce. Deduct 2 from COMBAT SKILL unless you have Mindshield. Enemy is immune to Mindblast.",
+    "intrinsic_modifiers": [
+      {
+        "target": "player.attack",
+        "delta": -2,
+        "reason": "Vordak Mindforce",
+        "condition": {
+          "type": "not",
+          "condition": { "type": "has_ability", "ability": "Mindshield" }
+        }
+      }
+    ]
+  }
+}
+```
+
+The Mindshield-conditional -2 travels with the Vordak catalog entry, so every section that has a Vordak combat automatically picks up the modifier without the modifier needing to be restated on each combat event. If LW has 14 Vordak fights across all 28 books in the main series, the rule is encoded once, not 14 times.
+
+**What's NOT in scope for `combat_modifiers` (use a different mechanism):**
+
+- **Ability immunity** — an enemy being immune to Mindblast, Animal Kinship, or similar abilities — is currently handled by the round_script, not by combat_modifiers. A future schema version may add a structured `immune_abilities` field on the enemy; for now, document the immunity in `special` text and have the round_script check the player's abilities manually.
+- **Per-round dynamic effects** — "add 1 to damage each round the enemy stays alive," "the player gets a re-roll on the first round only," etc. — these require round_script code, not static modifiers. The modifier list is frozen at combat start.
+- **Choice-driven modifiers** — "the player chose to wield the cursed sword, which does +3 damage but takes -1 LUCK per round" — this belongs in the combat event AFTER the choice that enables it, not as a condition on a modifier. If the player's *decision* before combat gates the bonus, use choice-level branching to route to a combat event with the modifier pre-baked in.
+- **Damage overrides** — "this enemy deals 3 damage per hit instead of the standard 2," "this fight uses 1d6 damage instead of flat 2" — these change the damage formula, not an input to it. Encode them directly in the round_script's `standard_damage` or in a per-combat damage override (future schema extension).
+
+**Rule of thumb:** if the modifier can be expressed as "add N to this numeric field before the round_script runs," use `combat_modifiers`. If it requires changing the combat flow, re-computing damage, or applying effects mid-round, encode it in the round_script directly.
 
 ---
 
@@ -1982,6 +2089,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.7 — Combat modifiers (Batch 2). Schema bumped to GBF 1.4.0 with two new optional fields: `combat_modifiers` on combat events (for per-section narrative modifiers) and `intrinsic_modifiers` on enemies_catalog entries (for per-enemy-type traits that travel with the enemy across every section it appears in). Both fields accept a list of generic `combat_modifier` objects with shape `{target: dot-path, delta: number, condition?, reason?, duration?}`. The target is a dot-path string identifying any numeric field on `player` or `enemy` (not an enum), so the mechanism works for any combat system: `player.attack` for attack-vs-attack systems (Lone Wolf, Fighting Fantasy), `player.hit_threshold` / `player.damage_bonus` / `enemy.armor` for threshold-based systems (GrailQuest, many AD&D gamebooks). The design is deliberately series-agnostic and does not assume `attack_stat` is non-null, so it works on the full range of combat systems the stress test validated. The emulator evaluates each modifier's optional condition once at combat start, freezes the resulting list, and applies the passing deltas to playerData / enemyData before each round_script invocation. Per-section modifiers and per-enemy intrinsics stack additively. Both reference emulators (CLI 2.4.0 → 2.5.0, HTML 2.4.0 → 2.5.0) implement the mechanism identically. The HTML emulator's combat panel now displays the active modifier list alongside the special_rules text box so the player sees what's in effect. New Rule 17 in the codex doc specifies the encoding with worked examples for narrative surprise attacks, torch-penalty conditionals, threshold-based damage modifiers, and per-enemy Mindshield-conditional intrinsic traits. Rule 14 (Combat Modifier Scope) updated to cross-reference Rule 17: both fields should be populated on any combat with a mechanical modifier — `special_rules` text is for display, `combat_modifiers` is for enforcement. The schema change is strictly additive; books with no modifier fields continue to work unchanged. First tested against a synthetic book verifying condition evaluation, stacking of event-level and intrinsic modifiers, both buff and debuff deltas, and modifier application to multiple target fields (player.attack, enemy.armor, player.damage_bonus). All existing playbooks (LW, Warlock, WWY, GrailQuest — 10 total) pass with 0 errors since none of them currently populate the new fields.
 - v2.6 — Schema nullability + emulator gap fixes from the GrailQuest stress test. The first real test of the series-agnostic claim (running a Step 3a-1 review on GrailQuest 01: The Castle of Darkness, an unprofiled series with `series_profile: unknown` that uses unusual stat names like `LIFE POINTS` / `EXPERIENCE` / `GOLD` and has `attack_stat: null`) surfaced several schema and emulator gaps that were silently affecting quality on unprofiled books. This version closes them. Schema bumped to GBF 1.3.0 with these additive relaxations: `rules.attack_stat` is now nullable (for threshold-based combat systems that don't use a player attack stat); `combat_system.post_round_script` and `post_round_label` are now nullable (most books don't have a post-round phase); `rules.provisions.when_usable` is now nullable (for books where provisions are disabled); `roll_dice.results[range].target` is now nullable with explicit fall-through semantics (for branches that produce a side effect but don't navigate, e.g. "1-3 the lock holds, try again; 4-6 the lock breaks, turn to 42"); and a new `set_ability_uses` action is added to the character_creation step enum for books that track per-ability remaining-uses counters (limited-use spells, rationed potions-as-abilities, talents with fixed castings). Both reference emulators (CLI and HTML bumped to 2.4.0) gained corresponding changes: `set_resource` now falls through to `state.stats[name]` when the resource name matches a declared stat (so books like GrailQuest that carry currency as a first-class stat get the value instead of silently dropping it); `set_ability_uses` is handled via a new `state.abilityUses` map; the stat bar on both emulators now avoids rendering duplicate currency rows when a book already declares currency as a stat. Codex doc updates: Rule 10 (Enemy ID Naming) now explicitly permits bare snake-case names for unique enemies (only the `_s<N>` suffix is required for recurring generic enemy names that collide across sections); Rule 14 (Combat Modifier Scope) vocabulary extended with terse stat-block-style modifier phrasing ("first strike," "+N dmg," "need N+ to hit," etc.) to catch books like GrailQuest that use compressed stat-line modifiers instead of narrative phrasing; Section 7.2 (unprofiled-series Workflow) now documents both currency-encoding strategies (canonical-slot vs. stat encoding) and when to use which. This version also validates the series-agnostic principle for real: codex v2.6 + Section 7 + Rules 6–16 produce a fully-playable unprofiled-series file (GrailQuest probe 166/0, smoke 20/0) with a quality gap of less than 5% from a profiled parse. Post-schema-validation the remaining GrailQuest issues are all documented as DATA gaps (needs source re-parse) rather than SCHEMA / EMULATOR / CODEX RULE gaps.
 - v2.5 — Series-agnostic cleanup pass. This version introduces no new features, no new schema fields, and no new emulator behavior. It exists to retire series-centric framing accumulated in earlier versions and to bring the doc into alignment with the series-agnostic design principle codified in DEV_PROCESS.md. Schema changes: the `enemy` object no longer declares named `skill`/`stamina`/`combat_skill`/`endurance` properties — all enemy stats are carried via `additionalProperties` using whatever stat names the book's rules section declares (which the emulators already normalize case/spacing variants of). Codex doc changes: Rule 15 rewritten to lead with the general rule and treat Lone Wolf Hunting, FF class exemptions, AD&D class abilities, and hypothetical unprofiled-series cases as parallel illustrations rather than one canonical example. Section 2 gains a framing note that all schema-sample examples are illustrative, not prescriptive. Section 7 (Unknown/Other Series) rewritten from an 11-line stub to a full chapter describing the workflow, what NOT to do, and the expected quality bar, so unprofiled parses have a proper canonical reference. Schema field descriptions for `currency_display_name`, `provisions.display_name`, `abilities.requires_roll`, and `event.condition` rebalanced to avoid naming specific series in the enumeration while keeping them as illustrative examples. No book files are touched by this commit. GBF format version unchanged (still 1.2.0) — no breaking changes, no new fields, the schema is just more generic in its descriptions and the enemy object's named-property enumeration is gone.
 - v2.4 — Event-level conditions. Schema bumped to GBF 1.2.0 with a new optional `condition` field on the event object, typed as the existing condition union (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`/`and`/`or`, `test_failed`, `test_succeeded`). When present and false at dispatch time, the event is skipped entirely — no state change, no pause, no UI. Both reference emulators (CLI `play.js` 2.3.0 and browser `index.html` 2.3.0) gained a pre-dispatch condition check at the top of their event processors. Rule 15 (previously a tracked gap) is fully closed: discipline-driven exemptions like Lone Wolf's Hunting-exempts-eat_meal now have a canonical structural encoding, and the codex is required to emit the exemption as an event condition when the book's rules section describes it. Section 2.4 (sections and events) documents the new field with concrete examples. The change is strictly additive — pre-v1.2 books with no event conditions continue to behave exactly as before. First use: a parser pass over every `eat_meal` site in LW that adds the Hunting exemption condition.

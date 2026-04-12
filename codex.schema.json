@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.3.0",
+  "title": "Gamebook Format (GBF) v1.4.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -633,7 +633,12 @@
         },
         "win_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to on victory. Integer or string (see codex 7.6.8 for string sub-section ids)." },
         "flee_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to when fleeing. Null = cannot flee." },
-        "special_rules": { "type": ["string", "null"], "description": "combat: per-encounter special rules in plain English." },
+        "special_rules": { "type": ["string", "null"], "description": "combat: per-encounter special rules in plain English. Purely informational — the emulator displays this text above the combat panel but does not interpret it. For mechanically-enforced modifiers, use the structured `combat_modifiers` field alongside this one; the two can coexist (the string documents the rule in the book's narrative language, the structured field encodes the math)." },
+        "combat_modifiers": {
+          "type": "array",
+          "description": "combat: an ordered list of generic per-combat modifiers that the emulator applies to playerData / enemyData before each round_script invocation. Each modifier has a target dot-path (e.g. 'player.attack', 'player.hit_threshold', 'enemy.armor', 'enemy.attack', 'player.damage_bonus'), a signed numeric delta, and optional condition + reason fields. Modifiers whose condition evaluates to false at combat start are skipped; passing modifiers stay in effect for the duration of the fight. The emulator adds the delta to the current value of the target field on the relevant side (player or enemy) before calling the round_script, so scripts that read `player.attack` or `enemy.armor` as-is automatically see the modified value. Books that want to read the raw value can access `combat.modifiers` inside the round_script — it's exposed as an array of `{target, delta, reason}` objects. Modifiers are a series-agnostic mechanism: the target dot-paths reference whatever numeric fields the book's round_script cares about. For threshold-based combat systems (attack_stat: null), use targets like `player.hit_threshold` or `player.weapon_bonus` or `enemy.armor`. For attack-vs-attack systems, use `player.attack` and `enemy.attack`. For per-enemy intrinsic traits (rules that travel with the enemy across every section it appears in), use the `intrinsic_modifiers` field on the enemy's catalog entry instead of repeating the modifier on every combat event.",
+          "items": { "$ref": "#/definitions/combat_modifier" }
+        },
         "interrupt_on_first_player_hit": { "type": "boolean", "description": "combat: if true, redirect after player's first successful wound." },
 
         "method": { "type": "string", "description": "stat_test: test method (e.g., '2d6_under')." },
@@ -772,12 +777,49 @@
         "section": { "type": "integer", "description": "Section number where this enemy first appears, for cross-referencing and debugging. Optional." },
         "special": {
           "type": ["string", "null"],
-          "description": "Free-form text describing any per-enemy special combat rules as the book's narrative presents them (e.g. 'Deduct 1 from your COMBAT SKILL for this fight due to the enemy's poisonous breath'). For mechanical enforcement of these rules the combat event should also carry a structured `combat_modifiers` block — see Rule 14/17 in the codex doc. Leaving this as plain text is acceptable for enemies whose special rules are purely flavor, but for books with many mechanical modifiers the structured form is preferred."
+          "description": "Free-form text describing any per-enemy special combat rules as the book's narrative presents them (e.g. 'Deduct 1 from your COMBAT SKILL for this fight due to the enemy's poisonous breath'). For mechanical enforcement of these rules the enemy should also carry a structured `intrinsic_modifiers` block — see Rule 17 in the codex doc. Leaving this as plain text is acceptable for enemies whose special rules are purely flavor, but for books where the enemy has a combat-affecting intrinsic (like 'Deduct 2 unless you have Mindshield', 'immune to fire damage', '+2 to its own attacks when wounded') the structured form is preferred because it travels with the enemy across every section it appears in instead of needing to be restated on each combat event."
+        },
+        "intrinsic_modifiers": {
+          "type": "array",
+          "description": "Schema v1.4+. Per-enemy combat modifiers that apply every time this enemy is encountered, across every section that references this catalog entry. Each modifier has the same shape as a `combat_modifier` (target dot-path, signed delta, optional condition, optional reason). Use intrinsic_modifiers for rules that are properties of the *enemy type* rather than of a specific encounter: Vordak / Helghast / Gourgaz in Lone Wolf all have a '-2 COMBAT SKILL unless Mindshield' rule that applies wherever they appear; undead enemies in many series have 'only killable on a roll of N+' rules that travel with the creature. The emulator merges intrinsic_modifiers from every enemy in the combat with any per-section combat_modifiers on the combat event itself, then evaluates conditions once at combat start and applies the passing deltas to playerData / enemyData before the round_script runs. Per-enemy intrinsics and per-encounter modifiers are additive — if a section has a surprise attack (+4 player attack) and the enemy has a '-2 unless Mindshield' intrinsic, the player who doesn't have Mindshield gets +4 - 2 = +2. See codex doc Rule 17.",
+          "items": { "$ref": "#/definitions/combat_modifier" }
         }
       },
       "additionalProperties": {
         "type": ["integer", "string", "boolean", "number"],
         "description": "Any stat or flag the book's rules define. Numeric stats use the stat names from `rules.stats[].name`; string-valued fields like alignment, creature type, or narrative tags are also allowed. Boolean flags like `incorporeal` or `immune_to_mundane_weapons` may be used where the round_script reads them."
+      }
+    },
+
+    "combat_modifier": {
+      "type": "object",
+      "required": ["target", "delta"],
+      "description": "A single combat modifier. Schema v1.4+. Modifiers are emitted in two places: on `combat` events (via the event's `combat_modifiers` array) for per-section narrative bonuses and penalties, and on `enemies_catalog` entries (via the entry's `intrinsic_modifiers` array) for traits that travel with the enemy type across every section it appears in. Both use the same shape. The emulator merges the two lists at combat start, evaluates each modifier's optional condition, and applies the passing deltas to playerData / enemyData before each round_script invocation. Modifiers are snapshotted at combat start — a mid-combat state change does not re-evaluate conditions. For dynamic per-round logic, encode it in the round_script directly.",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Dot-path identifying which numeric field the delta is applied to. The prefix is `player` or `enemy`; the field after the dot is whatever numeric field the round_script reads. Examples: `player.attack` (attack-vs-attack systems), `player.hit_threshold` and `enemy.armor` (threshold-based systems like GrailQuest), `player.damage_bonus`, `enemy.attack`, `player.weapon_bonus`. The target is free-form because different gamebook series use different fields — the schema does not enumerate them. Fields the round_script doesn't read are harmless (the modifier is still applied to the data object, but has no effect on the round math). Fields that are currently undefined on the data object are treated as 0 so books can introduce new fields purely via modifiers."
+        },
+        "delta": {
+          "type": "number",
+          "description": "Signed numeric delta added to the target field. Positive values buff, negative values penalize. The modifier stays in effect for the duration of the combat."
+        },
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Optional gate evaluated once at combat start. If the condition evaluates to false the modifier is NOT applied. Uses the same condition union as event/choice conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`, `and`, `or`, `test_failed`, `test_succeeded`). Typical uses: 'Deduct 2 COMBAT SKILL unless you have Mindshield' = `{target: 'player.attack', delta: -2, condition: {type: 'not', condition: {type: 'has_ability', ability: 'Mindshield'}}}`; 'Deduct 3 COMBAT SKILL if you do not have a torch' = `{target: 'player.attack', delta: -3, condition: {type: 'not', condition: {type: 'has_item', item: 'torch'}}}`. Null or absent means the modifier always applies."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of why the modifier applies. Shown in the combat UI's modifier box so the player knows what's in effect, and logged when the playthrough record is generated. Not interpreted by the emulator; purely for display and debugging. Examples: 'Surprise attack', 'No torch in the dark', 'Dust attack', 'Mindblast bonus', 'Wounded opponent'."
+        },
+        "duration": {
+          "type": "string",
+          "enum": ["fight", "first_round", "round"],
+          "description": "Reserved for future use. As of schema v1.4 all modifiers behave as if `duration: \"fight\"` — they apply for the entire combat. The field is documented so books can declare their intent (and a future schema version can honor it) but currently the emulator treats 'first_round' and 'round' the same as 'fight'. Document the intent anyway so future emulator versions can back-fill the semantics without re-parsing books."
+        }
       }
     }
   }

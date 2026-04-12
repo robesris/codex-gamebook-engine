@@ -2,8 +2,8 @@
 /**
  * Codex Gamebook Engine — CLI Emulator
  *
- * Version: 2.4.0
- * Compatible with codex doc >= 2.6 and GBF schema >= 1.3.0
+ * Version: 2.5.0
+ * Compatible with codex doc >= 2.7 and GBF schema >= 1.4.0
  *
  * Stateless command-line emulator for GBF game data files.
  * Each invocation takes a state JSON + an action and outputs a new state.
@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '2.4.0';
+const CODEX_EMULATOR_VERSION = '2.5.0';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -744,6 +744,35 @@ function startCombat(event, state, book) {
     const data = book.enemies_catalog[event.enemy_ref] || {};
     enemies = [{ ref: event.enemy_ref, name: data.name, currentHealth: getEnemyHealth(data, book), data }];
   }
+  // Evaluate combat_modifiers (schema v1.4) once at combat start. We
+  // merge the combat event's `combat_modifiers` with the intrinsic
+  // modifiers from each enemy's catalog entry, evaluate each modifier's
+  // condition against current state, and freeze the result on
+  // state.combat.appliedModifiers. The list is then used verbatim for
+  // every round's math and for the summary display. Modifiers are NOT
+  // re-evaluated each round, so mid-combat state changes (losing an
+  // item that gated a modifier, etc.) don't update the list. That
+  // matches player expectations (modifiers announced at combat start
+  // stay in effect) and simplifies the code. A book that needs truly
+  // dynamic per-round modifiers should encode them in the round_script
+  // directly instead of via combat_modifiers.
+  const eventModifiers = event.combat_modifiers || [];
+  const intrinsicModifiers = [];
+  for (const en of enemies) {
+    const cat = en.data || {};
+    if (Array.isArray(cat.intrinsic_modifiers)) {
+      intrinsicModifiers.push(...cat.intrinsic_modifiers);
+    }
+  }
+  const appliedModifiers = [];
+  for (const mod of [...eventModifiers, ...intrinsicModifiers]) {
+    if (mod.condition && !evalCondition(mod.condition, state)) continue;
+    const target = typeof mod.target === 'string' ? mod.target : null;
+    const delta = typeof mod.delta === 'number' ? mod.delta : 0;
+    if (!target || delta === 0) continue;
+    appliedModifiers.push({ target, delta, reason: mod.reason || null });
+  }
+
   state.combat = {
     enemies,
     currentEnemyIdx: 0,
@@ -751,6 +780,8 @@ function startCombat(event, state, book) {
     winTo: event.win_to,
     fleeTo: event.flee_to,
     specialRules: event.special_rules,
+    // Frozen, condition-evaluated modifier list for this combat.
+    appliedModifiers,
     round: 0,
     lastRoundResult: null,
     awaitingPostRound: false,
@@ -1272,11 +1303,48 @@ function runCombatRound(forcedRollsArg, state, book) {
   };
   enemyData.health = enemy.currentHealth;
 
+  // Apply the frozen combat_modifiers list (schema v1.4). The list was
+  // evaluated once at combat start in startCombat() and stored on
+  // combat.appliedModifiers. Each modifier has a target dot-path like
+  // "player.attack", "player.hit_threshold", "enemy.armor", etc. The
+  // delta is added to the existing value of the target field on
+  // playerData or enemyData. Fields that are currently undefined are
+  // treated as 0 so books can introduce new fields purely via
+  // modifiers (e.g., `hit_threshold_penalty`).
+  const applied = combat.appliedModifiers || [];
+  for (const mod of applied) {
+    const target = mod.target;
+    const delta = mod.delta;
+    const dotIdx = target.indexOf('.');
+    if (dotIdx < 0) continue;
+    const scope = target.slice(0, dotIdx);
+    const field = target.slice(dotIdx + 1);
+    let dataObj = null;
+    if (scope === 'player') dataObj = playerData;
+    else if (scope === 'enemy') dataObj = enemyData;
+    if (!dataObj) continue;
+    const current = typeof dataObj[field] === 'number' ? dataObj[field] : 0;
+    dataObj[field] = current + delta;
+  }
+  // First round logs the applied modifiers so the playthrough log
+  // and the summary display can see what's in effect.
+  if (combat.round === 1 && applied.length > 0) {
+    for (const m of applied) {
+      const sign = m.delta >= 0 ? '+' : '';
+      state.log.push(`Combat modifier: ${m.target} ${sign}${m.delta}${m.reason ? ' (' + m.reason + ')' : ''}`);
+    }
+  }
+
   const combatData = {
     round: combat.round,
     standard_damage: cs.details?.standard_damage || cs.standard_damage || 2,
     last_result: '',
     last_damage: 0,
+    // Expose applied modifiers to the round_script via combat.modifiers
+    // so book-specific scripts can do per-modifier math if they need
+    // to. Most scripts don't need this — they just read the already-
+    // modified player.attack / enemy.armor / hit_threshold / etc.
+    modifiers: applied,
   };
 
   const context = {
