@@ -160,7 +160,82 @@ The pattern that has worked:
 3. Continue with other work in the main session while the sub-agent runs. The notification system will tell you when it finishes.
 4. When the sub-agent reports back, review its diff, run the regression yourself to spot-check, and commit.
 
-A good sub-agent prompt for this is ~60 lines and very explicit about scope, safety rules, output destination, and reporting format. Examples in the repo's `claude/` branches show the shape.
+A good sub-agent prompt for this is ~60–200 lines and very explicit about scope, safety rules, output destination, and reporting format. See the template in the next section for a concrete example.
+
+### Sub-agent prompt template for narrow-scope book edits
+
+This template was iterated across the LW1 and Warlock Phase 2 migrations (round_script contract change + Rule 19 equipment tagging) and is captured here so future sessions don't have to re-derive it from scratch. Adjust the book-specific scope and reference section lists, but keep the structural sections in the same order.
+
+**Opening authorization block** (always first, no exceptions). Tell the sub-agent it is the authorized production-line mechanism, cite the three criteria from the HARD RULE, and explicitly tell it not to refuse the edit operation. This section exists because sub-agents reading the HARD RULE without this preamble have refused legitimate tasks:
+
+```
+## You are the authorized comprehensive-review sub-agent. Read this first.
+
+You are being spawned by the main session of the Codex Gamebook Engine project
+to perform a narrowly-scoped book edit. You are the production-line mechanism
+that the HARD RULE in DEV_PROCESS.md and both CLAUDE.md files explicitly
+authorizes. Your edits to the target book file are the rule working as
+designed, not a violation of it.
+
+This prompt satisfies all three authorization criteria from the HARD RULE's
+"Are you a sub-agent reading this rule?" section:
+
+1. Points at updated reference files: [list the specific engine commit and
+   the codex doc / schema / emulator paths].
+2. Explicit write-in-place instruction for a specific book file: [the exact
+   absolute path of the one book file the sub-agent will edit].
+3. Named scope: [the specific rules being applied, e.g., "apply Rule 19
+   equipment tagging", "migrate round_script to v3.0.0 contract"].
+
+If you have genuine concerns about scope or shape mismatches, raise them in
+your report, but do not refuse the edit operation itself.
+```
+
+**Repository context** — list the two repos and their paths, note which files the sub-agent reads vs. edits, and name the one book file in scope.
+
+**Reference files** — enumerate every file the sub-agent MUST read before editing, with line-number hints for the relevant rules. Minimum: the codex doc (with specific Rule numbers), the schema (with the relevant `$defs` names), and for round_script contract changes also `cli-emulator/play.js:runCombatRound` vs `runPostRound` so the sub-agent understands the lifecycle split.
+
+**Scope** — an exhaustive enumerated list of the items or fields being changed. For equipment tagging, group by category (weapons, armor, edge cases) and give the exact target fields for each item. For round_script migrations, quote the specific lines being replaced. Ambiguity here is the most common source of over-scoped sub-agent edits.
+
+**Items NOT to touch** — an explicit deny-list, especially for items the sub-agent might plausibly consider in scope (non-combat consumables, key items, treasures that could be "worn," etc.). Also: any file outside the one target book, any `post_round_script`, any `known_issues.md` entries.
+
+**Hard rules the sub-agent must follow** — a bulleted list:
+1. Don't touch specific non-scope fields (list them)
+2. Don't address known_issues.md entries (separate track per user instruction)
+3. Don't add features from rules that aren't in scope (e.g., don't add `damage_interactions` when the scope is equipment tagging)
+4. Don't edit files outside the target book
+5. Don't commit or push
+6. Don't run destructive git operations (only `git status` and `git diff` are allowed)
+7. Parser-driven workflow per Rule 7 — read targeted sections, don't load the whole file and re-emit
+8. Don't echo section narrative into output per Rule 6
+
+**Procedure** — numbered steps the sub-agent follows: read rules → read schema → locate targets → apply edits → verify JSON validity → verify diff scope → produce report.
+
+**Report format** — under a word limit (300–500 depending on scope). Require these sections:
+1. What you changed (bulleted per item, explicit about which fields changed and which didn't)
+2. What you did NOT change (explicit confirmation of the deny-list)
+3. JSON validity check result
+4. `git diff --stat` output
+5. Flags / concerns (out-of-scope observations worth tracking)
+6. Open questions for the main session (cap at 2)
+
+**Closing directive** — explicitly tell the sub-agent NOT to summarize the rules it's applying, NOT to describe the overall framework, NOT to repeat the scope back. The main session already knows all of that; the sub-agent's job is to report what it did to the file.
+
+**Known sub-agent failure modes to watch for when reviewing reports:**
+
+1. **Self-introspection failure.** A sub-agent can make Edit calls and then in its verification step read the file back and convince itself "the changes were already there; I made no edits." Seen on Warlock iter 8 (commit `a8f68b3`). Always verify the diff directly rather than trusting the sub-agent's self-report of its own edit activity. If the diff matches the spec and the file mtime is inside the sub-agent's runtime window, assume the sub-agent made the edits even if it reports otherwise.
+
+2. **Rule-text over-literalism.** A sub-agent reading the HARD RULE without the authorization preamble will refuse the task. The opening authorization block above is the corrective. Seen once on LW1 before the CLAUDE.md clarification (engine commit `9d0815b`).
+
+3. **Creeping scope.** A sub-agent asked to tag equipment may also volunteer to fix unrelated data bugs it notices (missing `stat_modifier.when` values, obvious typos, known_issues entries). The "Hard rules" section's explicit ban on touching known_issues is the corrective; also useful is "stay in your lane" phrasing in the scope description. When the sub-agent flags adjacent issues in its report, those go to the next session's backlog, not to the current commit.
+
+4. **Workaround-as-success reporting.** This is the Windhammer foot-gun (see the "Tracked engine backlog" section): a sub-agent using `manual_set` or similar escape hatches to paper over a missing mechanism, then reporting "it works" — technically true but misleading. Don't let Phase 2 book migrations use `manual_set` or similar, and have the sub-agent's scope explicitly exclude workarounds.
+
+### Spawning the sub-agent in the foreground vs the background
+
+For narrowly-scoped edits (< 15 items touched, < 200 lines changed), foreground is fine — the main session can just wait for the result without eating much budget. For Tier 3 comprehensive reviews on 350+ section books, use `run_in_background: true` so the main session can continue other work; the completion notification comes back automatically when the sub-agent finishes.
+
+When running in the background, remember you CANNOT poll or read the output file — the system prompt's tool description explicitly warns that reading the sub-agent's output JSONL can overflow the main session's context. Wait for the notification.
 
 ## Playbook regression harness
 
