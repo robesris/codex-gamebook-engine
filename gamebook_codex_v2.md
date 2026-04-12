@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.3
+# THE GAMEBOOK CODEX v2.4
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.3
+**Codex version:** 2.4
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -13,10 +13,10 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.1.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 2.2.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 2.2.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 2.2.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `codex.schema.json` (GBF format) | ≥ 1.2.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 2.3.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 2.3.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 2.3.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -420,11 +420,11 @@ Real example: LW section 55 ("Just as the Giak makes his leap, you race forward 
 
 Note that as of codex v2.2, capturing the modifier into the `special_rules` text is a *display* fix only — the emulators render `special_rules` as flavor text but do not mechanically apply it. Mechanical enforcement of combat modifiers is a separate open issue tracked under the special_rules enforcement gap. The Rule 14 work is still required because (a) it makes the modifier visible to the player so they can apply it themselves and (b) it gives the eventual mechanical-enforcement implementation a clean source of truth to work from.
 
-### Rule 15: Discipline-Driven Default Conditions (Tracked Gap)
+### Rule 15: Discipline- and Item-Driven Event Conditions
 
-Books often describe discipline- or item-driven exemptions from mechanics in their rules section. The canonical example is Lone Wolf's Hunting discipline, whose rules text says: *"If you have chosen the Kai Discipline of Hunting as one of your five skills, you will not need to tick off a Meal when instructed to eat."* This rule means every `eat_meal` event in a Lone Wolf book should be conditional on the player NOT having the Hunting discipline.
+Books often describe discipline- or item-driven exemptions from rule-mandated mechanics in their rules section. The canonical example is Lone Wolf's Hunting discipline, whose rules text says: *"If you have chosen the Kai Discipline of Hunting as one of your five skills, you will not need to tick off a Meal when instructed to eat."* This rule means every `eat_meal` event in a Lone Wolf book should be conditional on the player NOT having the Hunting discipline.
 
-The cleanest encoding would be a `condition` field on the event itself:
+As of schema v1.2.0 (codex v2.4), events support an optional `condition` field that gates execution. When the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI. Encode discipline- and item-driven exemptions as event conditions:
 
 ```json
 {
@@ -435,15 +435,31 @@ The cleanest encoding would be a `condition` field on the event itself:
 }
 ```
 
-**However: as of codex v2.2 the schema does not allow `condition` fields on events** — only on choices. Neither emulator checks for one. Adding event-level conditions is a tracked schema/emulator gap.
+A player with Hunting never sees the eat_meal pause. A player without Hunting is prompted to tick a meal or take the penalty. No restructuring of the section is required; the event simply short-circuits for the exempt cohort.
 
-**Until that gap is closed**: when emitting a Lone Wolf `eat_meal` event (or any analogous discipline-exempt mechanic in any series), leave the event as-is with `required: true`, AND emit a `confidence.flagged_for_review` entry in metadata noting that the discipline exemption is not encoded due to the event-level-conditions limitation. Do NOT attempt to work around the limitation by restructuring the section into Hunting-vs-non-Hunting sub-sections — the workaround creates more visible structural noise than the original gap and makes the eventual fix harder. Track the gap, don't paper over it.
+**Required encoding rule**: when the book's rules section describes any discipline-, item-, or flag-driven exemption from a per-event mechanic, every event that triggers that mechanic MUST encode the exemption as an event `condition`. Do not rely on narrative text alone, do not flag the section for later, and do not restructure into sub-sections to work around the gate — the condition field is the canonical encoding.
 
-Other series-specific discipline-exemption patterns to be aware of (incomplete list):
+**Other series-specific exemption patterns to look for:**
 
-- **Lone Wolf**: Hunting exempts Meals (above). Healing restores 1 ENDURANCE per non-combat section, which the emulator does enforce via a different mechanism (it's a passive between-section effect, not a per-event condition).
-- **Fighting Fantasy**: usually no discipline-exempt mechanics, but watch for book-specific rules that exempt the player from certain encounters.
-- **AD&D Adventure Gamebooks**: class-based exemptions (e.g., a thief class can avoid certain trap stat tests). These should be encoded as conditional choices if the choice itself is gated, or flagged for review if the gate is on a non-conditional event.
+- **Lone Wolf**: Hunting exempts Meals (above). Healing restores 1 ENDURANCE per non-combat section, which is a passive between-section effect and is enforced separately — do not try to encode Healing as an event condition.
+- **Fighting Fantasy**: some books exempt certain classes from stat tests (e.g. a Shapechanger's "you may choose to turn into an animal" mechanics). Encode as conditional events where the book's rules support it.
+- **Advanced Dungeons & Dragons Adventure Gamebooks**: class-based exemptions (thief avoiding trap stat tests, cleric's undead turn, paladin immunity to disease) should be encoded as conditional events wherever the mechanic lives on an event rather than a choice.
+
+**What to use event conditions for (beyond discipline exemptions):**
+
+- **Conditional narrative stat penalties**: "if you have the lantern, continue safely; otherwise lose 2 STAMINA" → conditional `modify_stat` with `has_item: lantern` negated.
+- **Conditional pickups**: "if your Backpack has room, you may also take the extra meal" → conditional `add_item`.
+- **Flag-gated events**: "if you have already visited the shrine, gain 1 LUCK" → conditional `modify_stat` with `has_flag: visited_shrine`.
+- **Roll branches that fire conditional side effects**: already supported via `roll_dice.results[].events`, but event conditions are cleaner when the condition is a single state check rather than a roll outcome.
+
+**What NOT to use event conditions for:**
+
+- Choice gating — that's what choice-level conditions are for. If the player's decision point is "do you search the chest," that's a choice condition, not an event condition.
+- Combat outcome routing (win/flee/death) — those are `win_to`/`flee_to` targets, not event conditions.
+- Per-round combat modifiers — those go on the combat event's `combat_modifiers` sub-object (see Rule 14 and Rule 17).
+- Mechanics the book's rules section doesn't describe — the codex must not invent conditions that aren't in the source.
+
+**Backward compatibility**: events without a `condition` field (the vast majority) continue to fire unconditionally. Pre-v1.2 books remain valid without modification. The field is strictly additive.
 
 ### Rule 16: Codex Maintainer Discipline (When You Are Editing This Document)
 
@@ -788,6 +804,21 @@ Events are things that happen in a section before or independent of the choices.
 2. **Stat-application roll.** The dice result is added to or subtracted from a player stat. Use `apply_to_stat: "<stat>"` together with `amount_sign: "positive"` or `amount_sign: "negative"`. Do NOT also set `results` — the emulator will apply the roll directly to the stat and continue to the next event. "Roll 1d6 and lose that many STAMINA" MUST be encoded this way, not as a `custom` event and not as `results: "subtract_from_stamina"` or any other ad-hoc string.
 
 If neither shape fits (e.g., the roll drives multi-step branching logic that touches several stats, or there is a complex lookup table), promote the mechanic to a `script` event and perform the roll inside Lua via `roll('1d6')`.
+
+**Event-level `condition` (schema v1.2+):** Every event type supports an optional `condition` field that gates execution. When the condition is present and evaluates to false at dispatch time, the event is skipped entirely — no state change, no pause, no UI. This is the canonical encoding for discipline-, item-, and flag-driven exemptions from per-event mechanics. See Rule 15 for the full requirements and examples; in brief:
+
+```json
+{"type": "eat_meal", "required": true, "penalty_amount": -3,
+ "condition": {"type": "not", "condition": {"type": "has_ability", "ability": "Hunting"}}}
+
+{"type": "modify_stat", "stat": "STAMINA", "amount": -2, "reason": "no lantern",
+ "condition": {"type": "not", "condition": {"type": "has_item", "item": "lantern"}}}
+
+{"type": "add_item", "item": "extra_meal",
+ "condition": {"type": "stat_lte", "stat": "backpack_used", "value": 7}}
+```
+
+Event conditions use the same condition definition as choice conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`, `and`, `or`, `test_failed`, `test_succeeded`). Absent or null `condition` means the event always fires.
 
 #### Condition Types
 
@@ -1881,6 +1912,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.4 — Event-level conditions. Schema bumped to GBF 1.2.0 with a new optional `condition` field on the event object, typed as the existing condition union (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`/`and`/`or`, `test_failed`, `test_succeeded`). When present and false at dispatch time, the event is skipped entirely — no state change, no pause, no UI. Both reference emulators (CLI `play.js` 2.3.0 and browser `index.html` 2.3.0) gained a pre-dispatch condition check at the top of their event processors. Rule 15 (previously a tracked gap) is fully closed: discipline-driven exemptions like Lone Wolf's Hunting-exempts-eat_meal now have a canonical structural encoding, and the codex is required to emit the exemption as an event condition when the book's rules section describes it. Section 2.4 (sections and events) documents the new field with concrete examples. The change is strictly additive — pre-v1.2 books with no event conditions continue to behave exactly as before. First use: a parser pass over every `eat_meal` site in LW that adds the Hunting exemption condition.
 - v2.3 — In-game reference panel feature. Schema bumped to GBF 1.1.0 with two new optional fields on `frontmatter.pages[]`: `show_at_start` (default true) and `accessible_during_play` (default true). Pages can opt out of either flow individually so books can mark intro-only material vs. reference-only material vs. dual-purpose material. Type enum on frontmatter pages expanded with `map`, `appendix`, `errata`, and `glossary` for finer categorization. HTML emulator gains a Reference button in the game-screen save bar (visible only when the book has any in-game-accessible frontmatter pages) that opens the existing frontmatter screen with a Close button instead of Continue→Begin Character Creation, plus a page-jump nav row with one button per page so the player can jump straight to maps, glossaries, or appendices without paging through the whole intro. Browser emulator bumped to 2.2.0; CLI emulator constants bumped to 2.2.0 for parity (no behavioural change in CLI — frontmatter is a player-facing feature). Section 2.0 (frontmatter) of the codex doc fully rewritten to describe both pre-play and in-game uses, with the new fields documented and concrete examples for Lone Wolf and Fighting Fantasy. The triggering observation: both LW and Warlock had no frontmatter block at all in their iter-N JSONs, so the player couldn't see the story intro or any reference material. The schema and emulator changes ship now; the data updates (populating frontmatter for LW especially, with Map of Sommerlund, Kai Disciplines reference, and the Game Rules narrative) come in the next comprehensive review.
 - v2.2 — Rule expansion pass informed by triaging the Lone Wolf 1 backlog. Added Rule 12 (no duplicate penalty events that double-count `eat_meal`/`combat`/`roll_dice`/`stat_test` outcomes), Rule 13 (conditional-choice text/condition consistency verification — every "If you have…" choice must have a non-null condition), Rule 14 (combat modifier extraction must scan the whole section, not just the stat-block paragraph), Rule 15 (discipline-driven default conditions, currently a tracked gap pending event-level conditions on the schema), and Rule 16 (codex maintainer discipline — when finding a bug in a first-party book, prefer improving the rule over hand-patching the output). Expanded Section 9.5's loot-detection vocabulary to catch pickup phrasing beyond the canonical "Action Chart" trigger. Added Rule 13/14/12 verification checks to Section 10's verification checklist. Added a maintainer note inside Step 3a-2 (Targeted Fix) warning codex maintainers against using targeted fix as a crutch on first-party books. No schema or emulator changes; all v2.2 rules are doc-only and apply to the existing GBF format. The discipline-exemption gap (Rule 15) and the special_rules mechanical enforcement gap (logged in known_issues) are the two open architectural decisions the next iteration should address.
 - v2.1 — Process and safety update informed by a from-scratch conversion experiment on Lone Wolf 1 (clean PDF source). Added Codex Version and Compatibility header with commit-SHA pinning guidance and a Lua runtime pin section. Added Step 2a (Optional Resources Checklist) and Step 2b (Development Tier Selection) for budget-aware runs on Free/Pro accounts. Restructured Step 3a (existing-GBF handling) into two modes: Step 3a-1 Comprehensive Review (the original full-audit workflow) and Step 3a-2 Targeted Fix (a narrow-scope mode for fixing specific sections without re-auditing the whole file). Added Rule 6 (Never Echo Book Narrative into Model Output) to address cumulative-context safety-classifier trips observed on dark-themed gamebooks. Added Rule 7 (Prefer Parser-Driven Conversion) codifying the file-to-file transformation workflow. Added Rule 8 (Extract Enemy Special Rules Verbatim) to prevent template copy-paste errors seen in hand-iterated files. Added Rule 9 (Multi-Event Sections) and Rule 10 (Enemy ID Naming Discipline) from observed encoding gaps. Added Rule 11 (Starting Resources That Require Rolls) from observed character-creation regressions. Added Section 9.5 (Parser-Driven Workflow), 9.6 (Self-Testing with the Canonical Emulator), 9.7 (Playbook Deliverables), and 9.8 (Fetching Canonical Artifacts from GitHub). Added optional `rules.inventory.currency_display_name` and `rules.provisions.display_name` fields so books can specify canonical UI labels (e.g., "Gold Crowns" / "Meals" for Lone Wolf, "Gold Pieces" for Fighting Fantasy). No breaking changes to the output format; the GBF JSON schema is fully backward compatible.

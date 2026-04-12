@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Codex Gamebook Engine — Browser Emulator
-  Version: 2.2.0
-  Compatible with codex doc >= 2.3 and GBF schema >= 1.1.0
+  Version: 2.3.0
+  Compatible with codex doc >= 2.4 and GBF schema >= 1.2.0
 -->
 <html lang="en">
 <head>
@@ -566,7 +566,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '2.2.0';
+const CODEX_EMULATOR_VERSION = '2.3.0';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -1577,6 +1577,19 @@ function processNextEvent() {
 
   const event = pendingEvents.shift();
   const content = document.getElementById('game-content');
+
+  // Event-level condition gate (schema v1.2+). If the event carries a
+  // `condition` field and it evaluates to false at dispatch time, skip
+  // the event entirely: no state mutation, no pause, no UI. This is the
+  // primary mechanism for discipline- and item-driven exemptions from
+  // rule-mandated mechanics (e.g. Lone Wolf's Hunting discipline
+  // exempting the player from eat_meal requirements). Absent or null
+  // `condition` means the event always fires, so pre-v1.2 books remain
+  // valid.
+  if (event.condition && !evaluateCondition(event.condition)) {
+    processNextEvent();
+    return;
+  }
 
   switch (event.type) {
     case 'modify_stat':

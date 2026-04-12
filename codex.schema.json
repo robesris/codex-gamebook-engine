@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.1.0",
+  "title": "Gamebook Format (GBF) v1.2.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -560,7 +560,7 @@
     "event": {
       "type": "object",
       "required": ["type"],
-      "description": "An event that occurs in a section. Events are processed in order before the player makes choices.",
+      "description": "An event that occurs in a section. Events are processed in order before the player makes choices. Events may carry an optional `condition` field that gates execution; events whose condition evaluates to false are skipped entirely (no state mutation, no UI display).",
       "properties": {
         "type": {
           "type": "string",
@@ -580,6 +580,14 @@
             "return_to_caller",
             "custom"
           ]
+        },
+
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Optional gate that must evaluate to true for this event to fire. If the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI — and the next event in the queue runs. Use this for discipline- or item-driven exemptions from rule-mandated mechanics: for example, Lone Wolf's Hunting discipline exempts the player from `eat_meal` requirements, which is encoded as `condition: {type: 'not', condition: {type: 'has_ability', ability: 'Hunting'}}` on the eat_meal event. Other examples: conditional narrative stat penalties ('if you have the lantern, continue safely; otherwise lose 2 STAMINA' -> conditional modify_stat), conditional pickups ('if your Backpack has room, take the extra meal' -> conditional add_item), or flag-gated events ('if you have already visited the shrine, gain LUCK' -> conditional modify_stat with `has_flag`). Null or absent means the event always fires."
         },
 
         "stat": { "type": "string", "description": "modify_stat, stat_test: which stat." },

@@ -2,8 +2,8 @@
 /**
  * Codex Gamebook Engine — CLI Emulator
  *
- * Version: 2.2.0
- * Compatible with codex doc >= 2.3 and GBF schema >= 1.1.0
+ * Version: 2.3.0
+ * Compatible with codex doc >= 2.4 and GBF schema >= 1.2.0
  *
  * Stateless command-line emulator for GBF game data files.
  * Each invocation takes a state JSON + an action and outputs a new state.
@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '2.2.0';
+const CODEX_EMULATOR_VERSION = '2.3.0';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -527,6 +527,18 @@ function processNextEvent(state, book) {
 }
 
 function handleEvent(event, state, book) {
+  // Event-level condition gate (schema v1.2+). If the event carries a
+  // `condition` field and it evaluates to false at dispatch time, skip
+  // the event entirely: no state mutation, no pause, no log side effect.
+  // This is the primary mechanism for discipline- and item-driven
+  // exemptions from rule-mandated mechanics (e.g. Lone Wolf's Hunting
+  // discipline exempting the player from eat_meal requirements).
+  // Absent or null `condition` means the event always fires, so
+  // pre-v1.2 books remain valid.
+  if (event.condition && !evalCondition(event.condition, state)) {
+    state.log.push(`Event skipped (${event.type}: ${describeCondition(event.condition)} is false)`);
+    return 'continue';
+  }
   switch (event.type) {
     case 'modify_stat': {
       const stat = event.stat;
