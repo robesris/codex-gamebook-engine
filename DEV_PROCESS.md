@@ -166,18 +166,24 @@ When in doubt: if it changes constantly and is project-specific, it's local-only
 
 Three independent version numbers:
 
-- **Codex version** (currently 2.2): bumped when `gamebook_codex_v2.md` changes meaningfully. Tracked in the doc's title, header, and version history block.
-- **GBF format version** (currently 1.0.0): bumped when the schema changes in a way that affects output structure. Bump only for breaking changes; additive changes don't bump it. Tracked in the schema's `title` field.
-- **Emulator versions** (currently 2.1.0 for both CLI and HTML): bumped when the emulator gains a feature or fixes a meaningful bug. Tracked in `CODEX_EMULATOR_VERSION` constants.
+- **Codex version** (currently 2.7): bumped when `gamebook_codex_v2.md` changes meaningfully. Tracked in the doc's title, header, and version history block.
+- **GBF format version** (currently 1.4.0): bumped when the schema changes in a way that affects output structure. Additive changes bump the minor version; breaking changes bump the major. Tracked in the schema's `title` field.
+- **Emulator versions** (currently 2.5.0 for both CLI and HTML): bumped when the emulator gains a feature or fixes a meaningful bug. Tracked in `CODEX_EMULATOR_VERSION` constants.
 
 These are intentionally independent. A codex doc change that doesn't affect the schema or emulators bumps only the codex version. A schema addition that requires emulator support bumps the schema (if breaking), the emulators, and the codex doc together.
 
+## Resolved architectural questions
+
+These were previously listed as open questions waiting for design decisions. Both have been resolved as of this session.
+
+1. **~~Combat `special_rules` mechanical enforcement.~~** ✅ Resolved in codex v2.7 / schema v1.4.0 / emulators v2.5.0. The structured `combat_modifiers` sub-object on combat events + `intrinsic_modifiers` on enemies_catalog entries was the chosen approach (Option A from the original discussion). Modifiers use generic dot-path targets (`player.attack`, `player.hit_threshold`, `enemy.armor`, etc.) so they work on any combat system including threshold-based systems with `attack_stat: null`. Conditions are evaluated once at combat start and frozen for the fight's duration. See codex doc Rule 17 for the full specification. Per-book data passes to populate the structured modifiers on existing books are tracked as follow-up iterations (LW iter 9, Warlock iter 7, GrailQuest iter 2).
+
+2. **~~Event-level conditions on the schema.~~** ✅ Resolved in codex v2.4 / schema v1.2.0 / emulators v2.3.0. Every event type now supports an optional `condition` field with the same union as choice conditions. The canonical first use was Lone Wolf's Hunting-exempts-Meals rule (condition on `eat_meal` events). See codex doc Rule 15 for the full specification. Applied to the LW book in iter 8.
+
 ## Open architectural questions
 
-These are the things waiting for a deliberate design decision rather than incremental work:
+1. **Lua runtime migration.** Currently using Fengari (unmaintained but stable, pinned at 0.1.5). [wasmoon](https://github.com/ceifa/wasmoon) is the maintained alternative. Documented in the codex doc as a back-burner option. Not blocking any current work.
 
-1. **Combat `special_rules` mechanical enforcement.** The schema field is currently a free-form string that the emulators render but don't apply. Multiple bugs depend on this gap. Two proposed solutions: structured `combat_modifiers` sub-object that the round_script reads, or pre/post-combat `modify_stat` events with `modify_initial: false`. Discuss before picking.
-2. **Event-level conditions on the schema.** Currently `condition` is only allowed on choices. Several bug classes (e.g. LW Hunting exemption on `eat_meal`) would benefit from allowing it on events too. Small schema and emulator change, but worth doing as a deliberate decision rather than a drive-by.
-3. **Lua runtime migration.** Currently using Fengari (unmaintained but stable). [wasmoon](https://github.com/ceifa/wasmoon) is the maintained alternative. Documented in the codex doc as a back-burner option.
+2. **Ability immunity as a structured field.** Currently, an enemy being immune to an ability (e.g. Mindblast) is handled inside the round_script, not structurally. A future schema version could add an `immune_abilities: ["Mindblast"]` field on enemies_catalog entries. This would require updating each book's round_script to read the field and skip the corresponding ability bonus. Deferred because it requires coordinated book-data + round_script changes, and the special_rules text + combat_modifiers together cover the numeric modifier portion without needing this.
 
 When attacking any of these, the fix is a multi-part change spanning the doc, schema, and both emulators. Plan a dedicated session, not a drive-by.
