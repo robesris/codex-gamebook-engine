@@ -217,3 +217,70 @@ These were previously listed as open questions waiting for design decisions. All
 1. **Lua runtime migration.** Currently using Fengari (unmaintained but stable, pinned at 0.1.5). [wasmoon](https://github.com/ceifa/wasmoon) is the maintained alternative. Documented in the codex doc as a back-burner option. Not blocking any current work.
 
 When attacking any of these, the fix is a multi-part change spanning the doc, schema, and both emulators. Plan a dedicated session, not a drive-by.
+
+---
+
+## Tracked engine backlog
+
+Concrete engine-side improvements with known designs that haven't been scheduled into a session yet. Unlike "Open architectural questions" (design-uncertain), entries here have their shape figured out and are waiting on implementation time. Each entry should be self-contained enough that a future session can pick it up without re-deriving the findings.
+
+### Windhammer unprofiled-series stress test (discovered codex v2.8, captured here for a future v2.9 / schema v1.6.0 / emulators v3.1.0 session)
+
+**Source artifacts** (all on books repo `claude/continue-gamebook-conversion-89y4y` branch at `cea3e25`):
+- `raw/windhammer.pdf` — source PDF (Chronicles of Arborell: Windhammer, Wayne Densley, 600 sections, unprofiled series)
+- `claude_session/windhammer.json` — v2.8 parse output (contains the bugs below)
+- `claude_session/windhammer_session_summary.md` — original parse-session report from the incognito Claude chat
+- `claude_session/windhammer_smoke.script`, `windhammer_probe.script` — replay artifacts
+
+**Context.** A fresh Claude chat session was asked to run the codex v2.8 on a previously-unseen gamebook in a previously-unprofiled series. This is the accountability test DEV_PROCESS mandates under "Series-agnostic design → the unprofiled-series stress test." The parse completed (600/600 sections, schema v1.5.0 validation passed), but when the output was exercised by the emulators, two genuine codex/schema gaps surfaced and one emulator validation gap was exposed. The findings justify a v2.9 / 1.6.0 / 3.1.0 session dedicated to closing them and re-running the stress test as a regression guard.
+
+**Bug A: Point-distribution stat generation has no schema primitive.**
+
+Windhammer uses a point-buy stat system — the player distributes 50 points across 5 attributes (Strength, Agility, Endurance, Luck, Intuition) within per-stat min/max ranges. The schema's `character_creation_step.action` enum does not include a step type for this. The parse run invented a `generation: "distribute:5-11"` string on `rules.stats[]` (a field neither emulator reads at character creation time) and emitted no corresponding character_creation step for the five core stats. Result: stats are `undefined` after character creation completes, and combat fails because `player.attack` resolves to 0.
+
+- **Codex v2.9:** Add a rule in Section 7 (Unknown/Other Series profile) explicitly covering point-buy / point-distribution stat systems. Tell the AI what shape to emit, cross-ref to the new `distribute_points` action type, and include a Windhammer-shaped example.
+- **Schema v1.6.0:** Add `distribute_points` to `character_creation_step.action` enum, with fields `total_points` (number) and `stats` (array of `{name, min, max}`). Additive — no breaking change.
+- **CLI emulator v3.1.0:** New pause type `character_creation_distribute`. New action `distribute <stat>=<val> <stat>=<val> ...` that validates the sum against `total_points` and each value against per-stat min/max.
+- **HTML emulator v3.1.0:** Point-buy UI with + / − buttons per stat, remaining-points counter, Confirm button that disables until allocation is valid.
+
+**Bug B: Derived attack_stat references a stat not in `rules.stats[]`.**
+
+Windhammer's Combat Value is a derived quantity: CV = Strength + Agility + skill/talent/armour bonuses. The parse run set `rules.attack_stat: "combat_value"` and did NOT declare `combat_value` in `rules.stats[]`. The emulator's combat init looks up `state.stats[attackStat]` = `state.stats.combat_value` = undefined, and `player.attack` becomes 0 for the whole fight.
+
+The **codex doc already has the right guidance** at Section 7.5 line ~1485 — "Games without `attack_stat`: … `attack_stat` may be null and … the Lua script should use game-specific fields instead." The parse run didn't apply it because (a) the rule is buried in Section 7.5 instead of Section 7, (b) it's framed around "threshold-based systems" which doesn't obviously connect to "derived attack stat," and (c) there's no explicit example showing how to handle `CV = Str + Agi + bonuses`-style derivations.
+
+- **Codex v2.9:** Move the "Games without attack_stat" guidance up from Section 7.5 into Section 7 (Unknown/Other Series profile). Add an explicit clause: *"If the book's combat stat is computed from other stats (e.g., CV = Strength + Agility + weapon bonuses), set `attack_stat: null` and compute the derived value in the round_script from its component stats: `local cv = (player.strength or 0) + (player.agility or 0); local pcs = pr.total + cv`. Do NOT declare the derived name in `rules.stats[]`. Do NOT set `rules.attack_stat` to the derived name."* Include a Windhammer-shaped example.
+- No schema or emulator change needed for Bug B; the fix is entirely in the codex doc's prominence and cross-referencing.
+
+**Bug C: Emulators silently tolerate undefined stats.**
+
+Neither emulator validates that `rules.attack_stat` / `rules.health_stat` reference declared stats at book-load time, and neither checks that every declared stat is actually set after `character_creation.steps[]` completes. The CLI status bar renders undefined stats as the literal string `undefined` (no `|| 0` fallback on its display template literal); the HTML stat bar falls back to `0` (has `|| 0`). Same underlying state, different cosmetic symptoms, neither one surfaces the real diagnosis.
+
+- **Both emulators v3.1.0:** Add a book-load validation pass that checks and warns about:
+  - `rules.attack_stat` naming a stat not declared in `rules.stats[]`
+  - `rules.health_stat` naming a stat not declared in `rules.stats[]`
+  - Any declared stat that is still `undefined` after `character_creation.steps[]` has run (checked just before the first section renders)
+- Surface the warnings as a prominent banner above the play area (HTML) or a `WARNING:` block at the top of the status output (CLI). Not a hard error — the game still runs so the player can see downstream effects — but the diagnostic is loud and points at the root cause, not the symptom.
+- Harmonize undefined-stat rendering: both emulators should display `—` (em dash) or `?` for undefined stats with a log warning, instead of the current `undefined` / `0` divergence. This forces codex runs that produce incomplete output to fail visibly rather than silently.
+
+**Bug D: `manual_set` is a foot-gun for Tier 3 regression claims.**
+
+The Windhammer parse-run sub-agent used the CLI's `manual_set stats.<name> <value>` debug escape hatch to sidestep the missing character creation step in its replay scripts. Once `state.stats.combat_value = 12` was poked into state, combat ran correctly in the CLI — the sub-agent then reported "combat works" in good faith. The same book fails in the HTML emulator because the HTML has no `manual_set` equivalent (tracked as a pre-existing cosmetic issue in `known_issues.md`). The net effect: a Tier 3 playthrough script can pass the CLI and claim the book is playable, while the same book is actually unplayable through normal interactive flow.
+
+- **Codex v2.9:** New rule or amendment to the Tier 3 playthrough procedure: *"When writing a Tier 3 playthrough script, do NOT use `manual_set` to paper over missing character creation steps. `manual_set` is for debug probes and section-coverage tests (Tier 1 / Tier 2), not for playthrough validation. If a character creation mechanism is missing from the schema, the right response is to stop, file a codex/schema gap, and report Tier 3 as BLOCKED — not to work around it and claim PASS."*
+- **CLI emulator v3.1.0:** When `manual_set` is used during a playthrough script run, log a prominent `[manual_set used: stats.<name>]` line to the playthrough output. At end-of-script, if any `manual_set` set a value under `stats.*` or `initialStats.*`, mark the run as *"Tier 3 PARTIAL — manual stat workaround"* in the summary header, not *"Tier 3 PASS."* This makes the workaround visible in regression reports instead of being buried.
+
+**Regression plan.** After the v2.9 / 1.6.0 / 3.1.0 fixes ship:
+
+1. Re-run the codex on `raw/windhammer.pdf` via a sub-agent, using the updated codex doc as the instruction set.
+2. Expected output: a `character_creation.steps[]` that includes a `distribute_points` step, `attack_stat: null`, enemies_catalog entries that use `combat_value` and `endurance` as ordinary enemy fields (not as player stats), and a `round_script` that computes `cv = player.strength + player.agility + bonuses` inside Lua.
+3. Validate against the new schema, run smoke + probe + a fresh run1 playthrough WITHOUT `manual_set`.
+4. If the re-run produces a cleanly playable book on both CLI and HTML, Windhammer is promoted to the maintained-books list as the permanent unprofiled-series regression slot (alongside LW1 / Warlock / GrailQuest as the profiled-series slots). The PDF, walkthrough, and playbook scripts stay in the private books repo.
+
+**Not in scope for the Windhammer track:**
+
+- A full comprehensive review of Windhammer against the updated codex for data-quality issues beyond the above gaps. That's a follow-up track if Windhammer gets promoted to maintained.
+- The equipment point-buy in Section 1 of Windhammer (a 50-point shop that's currently narrative-only). That's a *different* point-buy problem — item purchase rather than stat distribution — and would warrant its own action type (`purchase_items` or similar). Document it as a secondary backlog entry when the main Windhammer track ships, don't fold it into v2.9.
+- The `choose_items` step type, which Windhammer also references indirectly. It's already in the schema per what I saw in `play.js`; confirm scope before the session.
+
+---
