@@ -230,7 +230,7 @@
             },
             "currency_display_name": {
               "type": "string",
-              "description": "Display name for the game's currency used in the stat bar, inventory panel, and any 'you have X currency' UI strings. Defaults to 'Gold' if omitted. Examples: 'Gold Crowns' (Lone Wolf), 'Gold Pieces' (Fighting Fantasy), 'Credits' (Star Challenge). The internal stat name is still 'gold' for event/condition references regardless of display name."
+              "description": "Display name for the game's currency used in the stat bar, inventory panel, and any 'you have X currency' UI strings. Defaults to 'Gold' if omitted. Use whatever term the book's rules section uses for its currency — examples across gamebooks include 'Gold Pieces', 'Gold Crowns', 'Silver Pennies', 'Doubloons', 'Credits', 'Bits', etc. The internal stat name used in event and condition references is still `gold` regardless of display name; this field only affects what the UI renders."
             }
           }
         },
@@ -264,7 +264,7 @@
                   "mechanical_effect": { "type": "string" },
                   "requires_roll": {
                     "type": "object",
-                    "description": "If this ability requires a random roll when selected (e.g., Weaponskill in Lone Wolf requires R10 to determine weapon type).",
+                    "description": "If this ability requires a random roll when selected. For example, a weapon-specialization discipline might require a die roll to determine which weapon the character is specialized in, or a spell-selection ability might require a roll on a spell table.",
                     "properties": {
                       "formula": { "type": "string", "description": "Dice/random formula (e.g., 'R10')." },
                       "prompt": { "type": "string", "description": "Text shown to the player when rolling." },
@@ -409,7 +409,7 @@
         },
         "display_name": {
           "type": "string",
-          "description": "Display name for the provisions resource used in the stat bar and UI strings. Defaults to 'Provisions' if omitted. Examples: 'Meals' (Lone Wolf), 'Provisions' (Fighting Fantasy default), 'Rations' (some AD&D gamebooks). The internal resource name is still 'provisions' for event/condition references regardless of display name."
+          "description": "Display name for the provisions resource used in the stat bar and UI strings. Defaults to 'Provisions' if omitted. Use whatever term the book's rules section uses for its edible supplies — examples across gamebooks include 'Meals', 'Provisions', 'Rations', 'Food', 'Supplies', etc. The internal resource name used in event and condition references is still `provisions` regardless of display name; this field only affects what the UI renders."
         }
       }
     },
@@ -587,7 +587,7 @@
             { "$ref": "#/definitions/condition" },
             { "type": "null" }
           ],
-          "description": "Optional gate that must evaluate to true for this event to fire. If the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI — and the next event in the queue runs. Use this for discipline- or item-driven exemptions from rule-mandated mechanics: for example, Lone Wolf's Hunting discipline exempts the player from `eat_meal` requirements, which is encoded as `condition: {type: 'not', condition: {type: 'has_ability', ability: 'Hunting'}}` on the eat_meal event. Other examples: conditional narrative stat penalties ('if you have the lantern, continue safely; otherwise lose 2 STAMINA' -> conditional modify_stat), conditional pickups ('if your Backpack has room, take the extra meal' -> conditional add_item), or flag-gated events ('if you have already visited the shrine, gain LUCK' -> conditional modify_stat with `has_flag`). Null or absent means the event always fires."
+          "description": "Optional gate that must evaluate to true for this event to fire. If the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI — and the next event in the queue runs. Use this for discipline-, class-, item-, or flag-driven exemptions from rule-mandated mechanics, wherever the book's rules section describes them. The general shape is `{type: 'not', condition: {type: 'has_ability', ability: '<name>'}}` (or `has_item`, `has_flag`, `stat_gte`, etc.). Examples: a discipline or class exempting the player from a per-event requirement (for instance, a Ranger class being exempt from food/meal requirements → conditional `eat_meal`); a conditional narrative stat penalty ('if you have the lantern, continue safely; otherwise lose 2 STAMINA' → conditional `modify_stat` gated on `not has_item lantern`); a conditional pickup ('if your backpack has room, take the extra meal' → conditional `add_item`); a flag-gated event ('if you have already visited the shrine, gain LUCK' → conditional `modify_stat` gated on `has_flag visited_shrine`). The schema and emulators are series-neutral — the specific ability, item, or flag names live in the data, not in the mechanism. Null or absent means the event always fires. See codex doc Rule 15 for the full encoding rule and required usage."
         },
 
         "stat": { "type": "string", "description": "modify_stat, stat_test: which stat." },
@@ -752,22 +752,18 @@
     "enemy": {
       "type": "object",
       "required": ["name"],
-      "description": "An enemy encountered in combat. Stats are defined as direct properties matching the game's stat names.",
+      "description": "An enemy encountered in combat. Stats are carried as top-level properties whose keys match the stat names declared in `rules.stats[].name` (and specifically whatever `rules.attack_stat` and `rules.health_stat` point at). The schema does not enumerate specific stat names because gamebook series use different ones: Fighting Fantasy enemies have SKILL / STAMINA, Lone Wolf enemies have COMBAT SKILL / ENDURANCE, Advanced Dungeons & Dragons Adventure Gamebooks have AC / HP / THAC0, other series use STRENGTH / LIFE POINTS, and so on. Use whatever names the book's rules section declares; the emulators normalize stat-name lookups so spacing and case variants all resolve.",
       "properties": {
         "name": { "type": "string" },
-        "skill": { "type": "integer", "description": "Fighting Fantasy: SKILL stat." },
-        "stamina": { "type": "integer", "description": "Fighting Fantasy: STAMINA stat." },
-        "combat_skill": { "type": "integer", "description": "Lone Wolf: COMBAT SKILL." },
-        "endurance": { "type": "integer", "description": "Lone Wolf: ENDURANCE." },
-        "section": { "type": "integer", "description": "Section number where this enemy is encountered." },
+        "section": { "type": "integer", "description": "Section number where this enemy first appears, for cross-referencing and debugging. Optional." },
         "special": {
           "type": ["string", "null"],
-          "description": "Special combat rules for this enemy in plain English."
+          "description": "Free-form text describing any per-enemy special combat rules as the book's narrative presents them (e.g. 'Deduct 1 from your COMBAT SKILL for this fight due to the enemy's poisonous breath'). For mechanical enforcement of these rules the combat event should also carry a structured `combat_modifiers` block — see Rule 14/17 in the codex doc. Leaving this as plain text is acceptable for enemies whose special rules are purely flavor, but for books with many mechanical modifiers the structured form is preferred."
         }
       },
       "additionalProperties": {
-        "type": ["integer", "string"],
-        "description": "Additional game-specific stats."
+        "type": ["integer", "string", "boolean", "number"],
+        "description": "Any stat or flag the book's rules define. Numeric stats use the stat names from `rules.stats[].name`; string-valued fields like alignment, creature type, or narrative tags are also allowed. Boolean flags like `incorporeal` or `immune_to_mundane_weapons` may be used where the round_script reads them."
       }
     }
   }

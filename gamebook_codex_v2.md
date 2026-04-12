@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.4
+# THE GAMEBOOK CODEX v2.5
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.4
+**Codex version:** 2.5
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -420,44 +420,47 @@ Real example: LW section 55 ("Just as the Giak makes his leap, you race forward 
 
 Note that as of codex v2.2, capturing the modifier into the `special_rules` text is a *display* fix only — the emulators render `special_rules` as flavor text but do not mechanically apply it. Mechanical enforcement of combat modifiers is a separate open issue tracked under the special_rules enforcement gap. The Rule 14 work is still required because (a) it makes the modifier visible to the player so they can apply it themselves and (b) it gives the eventual mechanical-enforcement implementation a clean source of truth to work from.
 
-### Rule 15: Discipline- and Item-Driven Event Conditions
+### Rule 15: Event Conditions for Rule-Mandated Exemptions and Gates
 
-Books often describe discipline- or item-driven exemptions from rule-mandated mechanics in their rules section. The canonical example is Lone Wolf's Hunting discipline, whose rules text says: *"If you have chosen the Kai Discipline of Hunting as one of your five skills, you will not need to tick off a Meal when instructed to eat."* This rule means every `eat_meal` event in a Lone Wolf book should be conditional on the player NOT having the Hunting discipline.
+**The rule (stated generally, no series required):** When a book's rules section describes any discipline-, class-, item-, stat-, or flag-driven **exemption from a per-event mechanic** — or conversely a gate that prevents an event from firing for certain players — every event that triggers that mechanic MUST encode the exemption as an event `condition`. Do not rely on narrative text alone, do not flag the section for later, and do not restructure into sub-sections to work around the gate: the `condition` field is the canonical encoding for this pattern.
 
-As of schema v1.2.0 (codex v2.4), events support an optional `condition` field that gates execution. When the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI. Encode discipline- and item-driven exemptions as event conditions:
+As of schema v1.2.0 (codex v2.4), every event type supports an optional `condition` field that gates execution. When the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI, no log line visible to the player. The next event in the queue runs as if the gated event wasn't there. The field accepts the same condition union as `choice.condition` (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`, `and`, `or`, `test_failed`, `test_succeeded`), so anything you can gate a choice on, you can gate an event on.
+
+**General shape:**
 
 ```json
 {
   "type": "eat_meal",
   "required": true,
   "penalty_amount": -3,
-  "condition": {"type": "not", "condition": {"type": "has_ability", "ability": "Hunting"}}
+  "condition": {"type": "not", "condition": {"type": "has_ability", "ability": "<exempt_ability_name>"}}
 }
 ```
 
-A player with Hunting never sees the eat_meal pause. A player without Hunting is prompted to tick a meal or take the penalty. No restructuring of the section is required; the event simply short-circuits for the exempt cohort.
+Replace `<exempt_ability_name>` with whatever the book's rules section actually names. The schema and emulators are series-neutral — the specific ability, class, or item name lives in the book's data, not in the mechanism.
 
-**Required encoding rule**: when the book's rules section describes any discipline-, item-, or flag-driven exemption from a per-event mechanic, every event that triggers that mechanic MUST encode the exemption as an event `condition`. Do not rely on narrative text alone, do not flag the section for later, and do not restructure into sub-sections to work around the gate — the condition field is the canonical encoding.
+**Examples drawn from real series** (illustrative, not exhaustive — the rule applies to any series, profiled or not, where the book's rules section describes an analogous exemption):
 
-**Other series-specific exemption patterns to look for:**
+- **Lone Wolf (profiled in Section 5)**: the Hunting discipline exempts the player from Meal requirements. Every `eat_meal` event in a Lone Wolf book is encoded as `condition: not has_ability "Hunting"`. The Healing discipline is NOT an event condition — it's a passive between-section effect enforced separately.
+- **Fighting Fantasy (profiled in Section 4)**: some FF books give one class or loadout an exemption from specific stat-test encounters. A Shapechanger class whose rules text says "you may choose to turn into an animal and avoid the wolf combat entirely" encodes the avoidance as conditional events on the wolf-encounter section.
+- **AD&D Adventure Gamebooks (profiled in Section 6)**: class-based exemptions are common — a thief class auto-detecting traps (conditional `stat_test` gated on `not has_ability "Thief"`), a cleric's undead turn (conditional `combat` on encounters involving undead enemies, gated on the cleric's turn power), a paladin's immunity to disease (conditional `modify_stat` on disease events).
+- **An unprofiled series you've never seen before**: if the book's rules section says "A Ranger doesn't need to eat during this adventure" or "The Amulet of Truth protects its bearer from deception checks" or "Once you have visited the Oracle, you cannot visit it again," encode the gate as an event condition the same way. The mechanism is the same regardless of which series the book belongs to.
 
-- **Lone Wolf**: Hunting exempts Meals (above). Healing restores 1 ENDURANCE per non-combat section, which is a passive between-section effect and is enforced separately — do not try to encode Healing as an event condition.
-- **Fighting Fantasy**: some books exempt certain classes from stat tests (e.g. a Shapechanger's "you may choose to turn into an animal" mechanics). Encode as conditional events where the book's rules support it.
-- **Advanced Dungeons & Dragons Adventure Gamebooks**: class-based exemptions (thief avoiding trap stat tests, cleric's undead turn, paladin immunity to disease) should be encoded as conditional events wherever the mechanic lives on an event rather than a choice.
+**What to use event conditions for (beyond rule-mandated exemptions):**
 
-**What to use event conditions for (beyond discipline exemptions):**
-
-- **Conditional narrative stat penalties**: "if you have the lantern, continue safely; otherwise lose 2 STAMINA" → conditional `modify_stat` with `has_item: lantern` negated.
-- **Conditional pickups**: "if your Backpack has room, you may also take the extra meal" → conditional `add_item`.
-- **Flag-gated events**: "if you have already visited the shrine, gain 1 LUCK" → conditional `modify_stat` with `has_flag: visited_shrine`.
-- **Roll branches that fire conditional side effects**: already supported via `roll_dice.results[].events`, but event conditions are cleaner when the condition is a single state check rather than a roll outcome.
+- **Conditional narrative stat penalties**: "if you have the lantern, continue safely; otherwise lose 2 STAMINA" → conditional `modify_stat` gated on `not has_item "lantern"`.
+- **Conditional pickups**: "if your backpack has room, you may also take the extra meal" → conditional `add_item` gated on a `stat_lte` of backpack-used vs. capacity, or on a `has_flag` that tracks room.
+- **Flag-gated one-time bonuses**: "if you have already visited the shrine, gain 1 LUCK" → conditional `modify_stat` gated on `has_flag "visited_shrine"` (and presumably the shrine section sets the flag).
+- **Stat-gated events**: "if your MAGIC is 5 or higher, the spell succeeds automatically" → conditional `set_flag` or `modify_stat` gated on `stat_gte "MAGIC" 5`.
 
 **What NOT to use event conditions for:**
 
-- Choice gating — that's what choice-level conditions are for. If the player's decision point is "do you search the chest," that's a choice condition, not an event condition.
-- Combat outcome routing (win/flee/death) — those are `win_to`/`flee_to` targets, not event conditions.
-- Per-round combat modifiers — those go on the combat event's `combat_modifiers` sub-object (see Rule 14 and Rule 17).
-- Mechanics the book's rules section doesn't describe — the codex must not invent conditions that aren't in the source.
+- **Choice gating.** That's what choice-level `condition` is for. If the player's decision point is "do you search the chest," that's a choice condition on the "search" choice, not an event condition on an event inside a universally-entered section.
+- **Combat outcome routing** (win/flee/death). Those are `win_to` / `flee_to` targets on the combat event, not event conditions.
+- **Per-round combat modifiers.** Those go on the combat event's `combat_modifiers` sub-object (see Rule 14 and Rule 17). Event conditions fire once at event dispatch — they can't represent "apply this modifier every round while the fight lasts."
+- **Mechanics the book's rules section doesn't describe.** The codex must not invent conditions that aren't in the source. Rule 1 (source fidelity) still applies.
+
+**How to find these rules in a book's source text**: during Step 5 (Parse Rules and Character Creation) of the processing flow, read the discipline/class/item descriptions for phrases like "you will not need to," "you are exempt from," "this does not apply to," "cannot be used unless you have," "the bearer is immune to," "you automatically succeed at," "you may bypass," "you may ignore," and similar. Every such phrase points at an event-condition opportunity. Flag the rule in your parser-driven pass notes and apply it mechanically to every affected event downstream.
 
 **Backward compatibility**: events without a `condition` field (the vast majority) continue to fire unconditionally. Pre-v1.2 books remain valid without modification. The field is strictly additive.
 
@@ -598,6 +601,10 @@ The output is a single JSON file with the following top-level structure:
 }
 ```
 
+**A note on the examples in this section.** Many schema fields in the tables below are illustrated with concrete values drawn from well-known series (Lone Wolf's "Gold Crowns" and "Meals", Fighting Fantasy's "SKILL" and "STAMINA", AD&D's "AC" and "HP", and so on). **These examples are illustrative, not prescriptive.** The schema itself is series-agnostic: every stat name, currency label, ability name, item name, and class name is carried as data in the book's own JSON, using whatever the book's rules section calls those things. The examples exist to help a reader understand the *shape* and *range* of a field, not to enumerate the only acceptable values. When you're parsing a book from a series we don't have a profile for, use whatever the book's rules text names; don't force it into "SKILL" or "COMBAT SKILL" just because those are what our examples show.
+
+See Section 7 ("Unknown/Other Series") for the workflow when you encounter a series whose rules you must derive from scratch.
+
 ### 2.0 frontmatter
 
 The frontmatter object contains all introductory and supplementary material that appears before the numbered sections AND any reference material the player may need to consult during play: story background, rules explanations, world-building, maps, character sheets, rumors, glossaries, errata, appendices, and any other content the reader is expected to see before or during the adventure. This material is often essential context — many gamebooks include background story that's required reading, plus maps and rules summaries that the player consults repeatedly during play.
@@ -711,7 +718,7 @@ The rules object describes the game system as parsed from the book. Do not assum
     "capacity": "number or null — max items, or null if unlimited",
     "categories": ["array of item category names, e.g., weapons, backpack, special_items"],
     "category_limits": "object mapping category names to max counts, or null",
-    "currency_display_name": "string (optional) — how the game's currency is displayed in the UI. Defaults to 'Gold' if omitted. Use the book's canonical currency label: 'Gold Crowns' for Lone Wolf, 'Gold Pieces' for Fighting Fantasy, 'Credits' for a sci-fi gamebook, etc. The internal stat name is still `gold` for event and condition references — this field only affects display."
+    "currency_display_name": "string (optional) — how the book's currency is labeled in the stat bar and inventory panel. Defaults to 'Gold' if omitted. Use whatever term the book's rules section uses for its currency — this varies freely across gamebooks (fantasy titles typically call it 'Gold Pieces', 'Gold Crowns', 'Silver Pennies', or 'Doubloons'; sci-fi titles might use 'Credits' or 'Bits'; post-apocalyptic might use 'Caps' or 'Scrip'). The internal stat name used in event and condition references is still `gold` regardless of display name; this field only affects what the UI renders."
   },
   "provisions": {
     "enabled": "boolean",
@@ -719,7 +726,7 @@ The rules object describes the game system as parsed from the book. Do not assum
     "heal_amount": "number — stamina/HP restored per meal",
     "heal_stat": "string — which stat is restored",
     "when_usable": "string — when_instructed, anytime_outside_combat, etc.",
-    "display_name": "string (optional) — how the provisions resource is displayed in the UI. Defaults to 'Provisions' if omitted. Use the book's canonical term: 'Meals' for Lone Wolf, 'Provisions' for most Fighting Fantasy, 'Rations' for some AD&D adventure gamebooks. The internal resource name is still `provisions` for event/condition references."
+    "display_name": "string (optional) — how the book's edible-supplies resource is labeled in the UI. Defaults to 'Provisions' if omitted. Use whatever term the book's rules section uses — examples across gamebooks include 'Meals', 'Provisions', 'Rations', 'Food', 'Supplies'. The internal resource name used in event and condition references is still `provisions` regardless of display name."
   },
   "abilities": {
     "enabled": "boolean",
@@ -1042,16 +1049,67 @@ Because these books vary significantly, do NOT rely on series-level assumptions.
 
 ## 7. SERIES PROFILE: UNKNOWN/OTHER SERIES
 
-If the book does not belong to any of the series listed above, or if you cannot identify the series:
+This chapter is the canonical fallback when the book you are parsing does not match any of the profiled series (CYOA, Fighting Fantasy, Lone Wolf, AD&D Adventure Gamebooks). It is the most important chapter in this document, because the schema, the general rules (6–16), and both reference emulators are all designed to work on *any* gamebook through this fallback — the profiled series are convenience pre-loads, not preconditions. A codex run on an unprofiled series should still produce a correct, playable GBF JSON file using only the book's own rules text as the authoritative source. See `DEV_PROCESS.md` in this repo for the "series-agnostic design" principle behind the schema.
 
-1. Parse the rules section completely
-2. Identify all stats, their generation methods, and their uses
-3. Identify the combat system (if any) and describe it in plain English
-4. Identify any special mechanics
-5. Build the rules object from scratch based on what the book describes
-6. Use series_profile `"unknown"` and note the actual series name in metadata if identifiable
+### 7.1 The goal
 
-The output schema is flexible enough to represent any gamebook system. Use the `custom` event type for any mechanics that don't fit the standard event types. Provide enough detail in custom events that a developer could implement the mechanic from your description alone.
+Same as any other parse: **produce a complete, correct, playable GBF JSON file** with every mechanic the book's text describes encoded as structured events and conditions. The only difference from a profiled parse is that you cannot short-circuit the rules section by assuming a known combat system, known stat names, known currency, or known discipline list. You must read the book's rules text and derive the `rules` block from scratch.
+
+### 7.2 Workflow
+
+1. **Identify the series** (if possible). Search the book's front matter and copyright page for the series title, author, and publisher. Even if we don't have a profile for the series, naming it in `metadata.series` helps future passes and future readers. If you truly can't identify it, set `series: null` or `series: "Unknown"` and move on.
+
+2. **Parse the rules section completely and verbatim.** Read every page of the book that describes mechanics before the numbered sections begin. Extract:
+   - **Stats**: every named stat the book mentions, with its generation formula (`"R10+10"`, `"1d6+6"`, `"3d6"`, `"10+1d6"`, etc.), min, max, and whether it can be restored above its initial value (`initial_is_max`). **Use the book's own names for these stats** — do not translate "Strength" into "STAMINA" or "Might" into "SKILL" because that's what other series use. Whatever the book says, the data says.
+   - **Attack and health stats**: set `rules.attack_stat` and `rules.health_stat` to the exact stat names the book declares. The emulators look these up in the `rules.stats` array so they must match.
+   - **Currency**: if the book has a currency, set `rules.inventory.currency_display_name` to whatever the book calls it (which could be anything — "Gold Pieces," "Silver Pennies," "Doubloons," "Credits," "Caps," "Bits," etc.). The internal stat name remains `gold` for event/condition references.
+   - **Provisions/meals**: if the book has a food/supplies resource, set `rules.provisions.display_name` to whatever the book calls it ("Meals," "Rations," "Provisions," "Supplies," etc.) and fill in the `provisions_rules` block with `enabled`, `starting_amount`, `heal_amount`, `heal_stat`, and `when_usable` based on the book's rules text.
+   - **Abilities / disciplines / classes / skills / spells**: if the book has a character-creation ability or class selection, parse all the options into `rules.abilities.available[]` with their full descriptions (Rule 1 — full book text, do not summarize). Set `choose_count` to the number the player picks.
+   - **Combat system**: this is usually the hardest part. See the next workflow step.
+   - **Special mechanics**: anything the rules section describes that isn't stats, currency, provisions, abilities, or combat. Inventory limits, weight rules, encumbrance, movement points, hunger clocks, sanity scores, time-of-day systems, spell-slot systems, map/region tracking — everything the book describes. Each goes into `rules.special_mechanics[]` (or, where a schema field exists, into the structured field).
+
+3. **Encode the combat system as a Lua round_script.** The reference emulators execute combat via a per-book Lua script stored in `rules.combat_system.round_script` (or `rules.combat_rules_detail.round_script` for some legacy books). Neither emulator hardcodes any combat math — they just run whatever script the book provides, passing in `player`, `enemy`, `combat`, and the rest of the context. For an unprofiled series this means you MUST write the round_script from scratch based on the book's combat rules. See Section 7.5 (Combat Scripting with Lua) for the script ABI and Section 7.6 for recognised patterns. Concretely:
+   - If the book says "roll 2d6 + your Might, compare to 2d6 + the enemy's Might, higher wins and inflicts 2 damage to the loser," write a round_script that does exactly that using the book's stat names.
+   - If the book has a lookup table (like a "Combat Results Chart" or a "Damage Matrix"), embed the table as a Lua constant in `rules.combat_system.details` and have the round_script look up the result.
+   - If the book has multi-phase combat (e.g., ranged then melee, or initiative rolls followed by attack rolls), write the round_script to handle all phases in one invocation — or use `post_round_script` for anything that runs after the main round (like Lone Wolf's hit-location check or Fighting Fantasy's Test Your Luck step).
+   - If the book's combat uses unusual inputs (e.g., a deck of cards, dice dropped onto a diagram, spinner-based rolls), approximate them with standard dice or R10 calls in the Lua script, documenting the approximation in the script comments.
+
+4. **Apply all the general rules (6–16) uniformly.** The rules are intentionally series-agnostic:
+   - **Rule 6**: never echo book narrative into model output (same as profiled parses — arguably MORE important on unknown series because you'll be tempted to "read aloud" while deriving the mechanics)
+   - **Rule 7**: parser-driven workflow (still the recommended approach; the fact that you don't know the combat system up front doesn't change the parsing strategy)
+   - **Rule 8**: extract enemy special rules verbatim from the section text (works the same regardless of series)
+   - **Rule 9**: multi-event sections (universal — "you lose 2 STRENGTH and gain 1 MADNESS" is two events)
+   - **Rule 10**: enemy ID naming convention (`<enemy>_s<section>` is series-agnostic)
+   - **Rule 11**: starting resources that require rolls are character creation steps (works for any series)
+   - **Rule 12**: no duplicate penalty events (universal)
+   - **Rule 13**: conditional-choice text/condition consistency (universal — "If you have the Amulet of Truth" needs a condition whether or not we know what the Amulet of Truth is)
+   - **Rule 14**: combat modifier whole-section scan (universal)
+   - **Rule 15**: event conditions for rule-mandated exemptions and gates (universal — if the book's rules say a class is exempt from a mechanic, encode it as an event condition; see Rule 15's worked examples for the shape)
+   - **Rule 16**: codex maintainer discipline (applies to maintainers, not users of the codex)
+
+5. **Use the series_profile metadata field.** Set `metadata.series_profile` to `"unknown"` or to a descriptive identifier if you think this series might be reprocessed later (e.g., `"way_of_the_tiger"` or `"cretan_chronicles"`). This is only a hint for future codex passes; it does not affect the emulator.
+
+6. **Fall back to `custom` events only as a last resort.** If a mechanic truly doesn't fit any standard event type AND can't be expressed as a `script` event with a Lua implementation, use `type: custom` and include a `description` detailed enough that a developer could implement the mechanic from your description alone. Always prefer `script` over `custom` when the mechanic is executable, because `script` events actually run and `custom` events don't.
+
+### 7.3 What NOT to do on an unprofiled series
+
+- **Don't force the book into a known series' shape.** If the book has a stat called "Might," do not rename it to "SKILL" because that's what Fighting Fantasy uses. If the book generates stats with `4d6 drop lowest`, do not simplify to `2d6+12` because that's what you're used to. The data must match the source.
+- **Don't hallucinate a combat system you haven't read.** Some unprofiled series use very unusual combat (card-based, diagram-based, spinner-based, real-time timed rolls) that require creative Lua encoding. If you can't derive the combat mechanics from the book's own text, flag the section for review and set `combat_system: { type: "unknown", notes: "..." }` — don't invent a round_script that looks like a series you know.
+- **Don't default to FF/LW terminology in the frontmatter.** If the book calls its currency "Doubloons," the frontmatter page about money should say "Doubloons," and `currency_display_name` should be "Doubloons." Do not replace the book's terms with familiar ones.
+- **Don't skip Rule 15's event-condition pass.** Discipline- and class-driven exemptions are just as common on unprofiled series as on profiled ones, and they're invisible if you don't look for them. During the rules-parse pass, scan for phrases like "you will not need to," "you are exempt from," "the bearer is immune to," "only if you have," and similar — every one is an event-condition opportunity downstream.
+- **Don't assume a 1-based integer section-number scheme.** Some series use Roman numerals, letter+number codes (e.g., "A12"), or other schemes. The GBF format supports string section ids; use whatever the book uses. See Section 8 for how to handle non-integer section ids.
+
+### 7.4 Expected quality bar
+
+A comprehensive parse of a clean-text unprofiled book should produce a file that:
+- Has every numbered section encoded with text, events, choices, and is_ending flags as appropriate
+- Has a complete `rules` block with stats, combat system, inventory rules, provisions rules, abilities, and any special mechanics the book describes
+- Has a complete `frontmatter` block with story background, rules narrative, reference pages, and any maps or appendices the book ships with
+- Passes a coverage probe playbook (navigate into every section, verify no errors)
+- Passes a short happy-path playbook from character creation through a couple of sections
+- Has no `flagged_for_review` entries for things the general rules should have caught
+
+The expected quality gap vs. a profiled parse is 2–5% (measured in number of rule-catches the codex might miss due to unusual phrasing), not 50%. If a codex run on an unprofiled series produces a file with dozens of flagged-for-review entries, malformed catalogs, or a round_script that doesn't match the book's text, those are bugs in the general machinery that need fixing in the doc / schema / emulators — not "this is what you get for not having a profile." See `DEV_PROCESS.md` for the unprofiled-series stress test that verifies this claim periodically.
 
 ---
 
@@ -1912,6 +1970,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.5 — Series-agnostic cleanup pass. This version introduces no new features, no new schema fields, and no new emulator behavior. It exists to retire series-centric framing accumulated in earlier versions and to bring the doc into alignment with the series-agnostic design principle codified in DEV_PROCESS.md. Schema changes: the `enemy` object no longer declares named `skill`/`stamina`/`combat_skill`/`endurance` properties — all enemy stats are carried via `additionalProperties` using whatever stat names the book's rules section declares (which the emulators already normalize case/spacing variants of). Codex doc changes: Rule 15 rewritten to lead with the general rule and treat Lone Wolf Hunting, FF class exemptions, AD&D class abilities, and hypothetical unprofiled-series cases as parallel illustrations rather than one canonical example. Section 2 gains a framing note that all schema-sample examples are illustrative, not prescriptive. Section 7 (Unknown/Other Series) rewritten from an 11-line stub to a full chapter describing the workflow, what NOT to do, and the expected quality bar, so unprofiled parses have a proper canonical reference. Schema field descriptions for `currency_display_name`, `provisions.display_name`, `abilities.requires_roll`, and `event.condition` rebalanced to avoid naming specific series in the enumeration while keeping them as illustrative examples. No book files are touched by this commit. GBF format version unchanged (still 1.2.0) — no breaking changes, no new fields, the schema is just more generic in its descriptions and the enemy object's named-property enumeration is gone.
 - v2.4 — Event-level conditions. Schema bumped to GBF 1.2.0 with a new optional `condition` field on the event object, typed as the existing condition union (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`/`and`/`or`, `test_failed`, `test_succeeded`). When present and false at dispatch time, the event is skipped entirely — no state change, no pause, no UI. Both reference emulators (CLI `play.js` 2.3.0 and browser `index.html` 2.3.0) gained a pre-dispatch condition check at the top of their event processors. Rule 15 (previously a tracked gap) is fully closed: discipline-driven exemptions like Lone Wolf's Hunting-exempts-eat_meal now have a canonical structural encoding, and the codex is required to emit the exemption as an event condition when the book's rules section describes it. Section 2.4 (sections and events) documents the new field with concrete examples. The change is strictly additive — pre-v1.2 books with no event conditions continue to behave exactly as before. First use: a parser pass over every `eat_meal` site in LW that adds the Hunting exemption condition.
 - v2.3 — In-game reference panel feature. Schema bumped to GBF 1.1.0 with two new optional fields on `frontmatter.pages[]`: `show_at_start` (default true) and `accessible_during_play` (default true). Pages can opt out of either flow individually so books can mark intro-only material vs. reference-only material vs. dual-purpose material. Type enum on frontmatter pages expanded with `map`, `appendix`, `errata`, and `glossary` for finer categorization. HTML emulator gains a Reference button in the game-screen save bar (visible only when the book has any in-game-accessible frontmatter pages) that opens the existing frontmatter screen with a Close button instead of Continue→Begin Character Creation, plus a page-jump nav row with one button per page so the player can jump straight to maps, glossaries, or appendices without paging through the whole intro. Browser emulator bumped to 2.2.0; CLI emulator constants bumped to 2.2.0 for parity (no behavioural change in CLI — frontmatter is a player-facing feature). Section 2.0 (frontmatter) of the codex doc fully rewritten to describe both pre-play and in-game uses, with the new fields documented and concrete examples for Lone Wolf and Fighting Fantasy. The triggering observation: both LW and Warlock had no frontmatter block at all in their iter-N JSONs, so the player couldn't see the story intro or any reference material. The schema and emulator changes ship now; the data updates (populating frontmatter for LW especially, with Map of Sommerlund, Kai Disciplines reference, and the Game Rules narrative) come in the next comprehensive review.
 - v2.2 — Rule expansion pass informed by triaging the Lone Wolf 1 backlog. Added Rule 12 (no duplicate penalty events that double-count `eat_meal`/`combat`/`roll_dice`/`stat_test` outcomes), Rule 13 (conditional-choice text/condition consistency verification — every "If you have…" choice must have a non-null condition), Rule 14 (combat modifier extraction must scan the whole section, not just the stat-block paragraph), Rule 15 (discipline-driven default conditions, currently a tracked gap pending event-level conditions on the schema), and Rule 16 (codex maintainer discipline — when finding a bug in a first-party book, prefer improving the rule over hand-patching the output). Expanded Section 9.5's loot-detection vocabulary to catch pickup phrasing beyond the canonical "Action Chart" trigger. Added Rule 13/14/12 verification checks to Section 10's verification checklist. Added a maintainer note inside Step 3a-2 (Targeted Fix) warning codex maintainers against using targeted fix as a crutch on first-party books. No schema or emulator changes; all v2.2 rules are doc-only and apply to the existing GBF format. The discipline-exemption gap (Rule 15) and the special_rules mechanical enforcement gap (logged in known_issues) are the two open architectural decisions the next iteration should address.
