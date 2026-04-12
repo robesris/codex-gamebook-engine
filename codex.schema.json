@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.2.0",
+  "title": "Gamebook Format (GBF) v1.3.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -170,12 +170,12 @@
           }
         },
         "attack_stat": {
-          "type": "string",
-          "description": "The stat name used for attack/combat skill (e.g., 'skill', 'COMBAT SKILL'). Must match a name in the stats array."
+          "type": ["string", "null"],
+          "description": "The stat name used for player attack/combat skill, if the book's combat system uses one (e.g., whatever stat appears in `rules.stats[].name` that the round_script adds to compute the player's attack strength or combat skill). Must match a name in the stats array when set. May be null for threshold-based combat systems that use fixed hit thresholds and damage bonuses rather than a player-attack-vs-enemy-attack comparison (for example, books where each enemy has a `hit_threshold` the player must roll at-or-above on 2d6 plus a fixed modifier, with no per-combatant attack stat). When null, the round_script must read whatever per-combatant fields it needs directly from `player` and `enemy` without relying on a pre-computed attack stat."
         },
         "health_stat": {
           "type": "string",
-          "description": "The stat name used for health/hit points (e.g., 'stamina', 'ENDURANCE'). When this reaches 0, the character is dead. Must match a name in the stats array."
+          "description": "The stat name used for player health/hit points. When this reaches 0, the character is dead. Must match a name in the stats array. Unlike `attack_stat`, this is required because the emulator's death check depends on it."
         },
         "combat_system": {
           "description": "Combat system identifier or detailed rules object. May be a string shorthand (e.g., 'fighting_fantasy_standard') or a full object.",
@@ -364,12 +364,12 @@
           "description": "Lua script executed each combat round. The emulator provides these globals: player (table with .attack, .health, .name), enemy (same), combat (table with .round, .standard_damage, .last_result, .last_damage), roll(formula) function, log(msg) function, lookup(table, col, row) function. The script modifies player.health and enemy.health to apply damage, and sets combat.last_result ('player_wounds_enemy', 'enemy_wounds_player', 'tie', 'simultaneous') and combat.last_damage. Any tables from combat_system.details are available as globals (e.g., combat_results_table)."
         },
         "post_round_script": {
-          "type": "string",
-          "description": "Optional Lua script executed when the player chooses the post-round action (e.g., Testing Luck in FF). Same sandbox as round_script, plus player_stats and initial_stats globals containing all player stat values. Can set player.stats_changed = {stat_name = new_value} to modify stats."
+          "type": ["string", "null"],
+          "description": "Optional Lua script executed when the player chooses the post-round action (e.g., an optional post-round Luck test, a wound-shock roll, or a regeneration check). Same sandbox as round_script, plus player_stats and initial_stats globals containing all player stat values. Can set player.stats_changed = {stat_name = new_value} to modify stats. Set to null (or omit) when the book has no post-round phase."
         },
         "post_round_label": {
-          "type": "string",
-          "description": "Button label for the optional post-round action (e.g., 'Test Your Luck?'). Only shown if post_round_script is defined."
+          "type": ["string", "null"],
+          "description": "Button label for the optional post-round action (e.g., 'Test Your Luck?', 'Rally', 'Regenerate?'). Only shown if post_round_script is defined. Set to null when there is no post-round script."
         },
         "player_attack_strength": { "type": "string", "description": "Informational: formula for player attack. e.g., '2d6 + current_skill'." },
         "enemy_attack_strength": { "type": "string", "description": "Informational: formula for enemy attack." },
@@ -403,9 +403,9 @@
         "heal_amount": { "type": "integer" },
         "heal_stat": { "type": "string" },
         "when_usable": {
-          "type": "string",
-          "description": "When provisions can be consumed.",
-          "enum": ["when_instructed", "anytime_outside_combat", "any_time"]
+          "type": ["string", "null"],
+          "description": "When provisions can be consumed. Set to null (or omit) when provisions are disabled for this book (`enabled: false`). When enabled, pick the value that matches the book's rules text: 'when_instructed' (the book prompts eat_meal events at specific sections), 'anytime_outside_combat' (the player can choose to eat at any non-combat pause), or 'any_time' (the player can eat mid-combat too).",
+          "enum": ["when_instructed", "anytime_outside_combat", "any_time", null]
         },
         "display_name": {
           "type": "string",
@@ -439,13 +439,22 @@
     "character_creation_step": {
       "type": "object",
       "required": ["action"],
+      "description": "A single step in the character creation flow. Actions run in order during the pre-play setup; each action either prompts the player for input, deterministically sets state, or does both.",
       "properties": {
         "action": {
           "type": "string",
-          "enum": ["roll_stat", "choose_one", "choose_abilities", "add_item", "set_resource"]
+          "enum": [
+            "roll_stat",
+            "choose_one",
+            "choose_abilities",
+            "add_item",
+            "set_resource",
+            "set_ability_uses"
+          ],
+          "description": "The step's action. `roll_stat` prompts a die roll for a stat. `choose_one` prompts a single-option pick from a list. `choose_abilities` prompts the player to pick N items from the abilities list. `add_item` deterministically adds a starting item to inventory. `set_resource` deterministically sets a named resource (provisions, gold, or any declared stat whose name matches a `rules.stats[].name`) to a fixed amount — if the name matches a declared stat, the emulator routes the value into `state.stats[name]` so books that carry currency or experience as a named stat get the right behavior. `set_ability_uses` deterministically initializes the remaining-uses counter for a per-use ability (spells, limited talents, potions-as-ability, etc.) when the book has abilities whose use count is tracked separately from a d6 count or a discrete inventory item — for example, a spell-casting ability with a fixed number of castings per adventure, or a limited-use healing power."
         },
-        "stat": { "type": "string" },
-        "formula": { "type": "string" },
+        "stat": { "type": "string", "description": "roll_stat, set_resource (when resource matches a stat name): which stat to target." },
+        "formula": { "type": "string", "description": "roll_stat: the dice formula to evaluate (e.g., '2d6*4', 'R10+10')." },
         "category": { "type": "string" },
         "options": {
           "type": "array",
@@ -453,9 +462,11 @@
         },
         "count": { "type": "integer" },
         "from": { "type": "string" },
-        "item": { "type": "string" },
-        "resource": { "type": "string" },
+        "item": { "type": "string", "description": "add_item: item id from items_catalog." },
+        "resource": { "type": "string", "description": "set_resource: resource name. Canonical lowercase names are `gold`, `provisions`, and `meals`. Book-specific stat names (uppercased like 'GOLD', 'EXPERIENCE', or whatever the book declares) are also accepted; if the name matches a `rules.stats[].name`, the value is written to `state.stats[name]` instead of to the canonical resource slot, so books that treat their currency as a first-class stat get consistent display and condition behavior." },
         "amount": { "type": "number" },
+        "ability": { "type": "string", "description": "set_ability_uses: the ability name (must match one of the names in `rules.abilities.available[].name` or be added as a character creation selection)." },
+        "uses": { "type": "integer", "description": "set_ability_uses: the initial number of remaining uses for this ability. The emulator stores this in `state.abilityUses[ability]` and decrements on use." },
         "source": { "type": "string", "description": "Parser note: where in the source this was confirmed." }
       }
     },
@@ -648,11 +659,14 @@
         "dice": { "type": "string", "description": "roll_dice: dice expression (e.g., '1d6', '2d6')." },
         "results": {
           "type": "object",
-          "description": "roll_dice: mapping of result ranges to outcomes.",
+          "description": "roll_dice: mapping of result ranges to outcomes. Keys are either a single face value ('1', '6') or an inclusive range ('1-5', '10-12').",
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "target": { "type": ["integer", "string"], "description": "Section id to navigate to for this roll result. Integer or string." },
+              "target": {
+                "type": ["integer", "string", "null"],
+                "description": "Section id to navigate to for this roll result. Integer or string. May be null to indicate 'fall through' semantics: when the range hits and target is null, the emulator does not navigate — it continues to the next event in the section, or presents the section's choices if there are no more events. Use this for roll branches that produce a side effect (via an accompanying text or a per-range events array) but leave the player on the current section, e.g., 'roll 1d6: 1-3 the lock holds, you may try again; 4-6 the lock breaks, turn to 42'."
+              },
               "text": { "type": "string" }
             }
           }

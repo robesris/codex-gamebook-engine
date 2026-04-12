@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Codex Gamebook Engine — Browser Emulator
-  Version: 2.3.0
-  Compatible with codex doc >= 2.4 and GBF schema >= 1.2.0
+  Version: 2.4.0
+  Compatible with codex doc >= 2.6 and GBF schema >= 1.3.0
 -->
 <html lang="en">
 <head>
@@ -566,7 +566,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '2.3.0';
+const CODEX_EMULATOR_VERSION = '2.4.0';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -582,6 +582,11 @@ let state = {
   initialStats: {},
   inventory: [],
   flags: new Set(),
+  abilities: [],
+  // Per-ability remaining-uses counters, populated by set_ability_uses
+  // character creation steps and by book scripts. Keyed by ability name.
+  // Empty by default; absent when no ability needs use tracking.
+  abilityUses: {},
   provisions: 0,
   gold: 0,
   potion: null,
@@ -1173,9 +1178,36 @@ function startCharacterCreation() {
     } else if (step.action === 'add_item') {
       items.push(step.item);
     } else if (step.action === 'set_resource') {
-      if (step.resource === 'provisions') state.provisions = step.amount;
-      else if (step.resource === 'gold') state.gold = step.amount;
-      else if (step.resource === 'meals') state.meals = step.amount;
+      // Canonical resource slots first. If the name doesn't match any of
+      // them, fall through to check whether it matches a declared stat —
+      // this handles books that carry their currency or experience as a
+      // first-class stat rather than using the canonical `gold` /
+      // `provisions` / `meals` slots (e.g., GrailQuest declares GOLD
+      // and EXPERIENCE as stats in rules.stats). Without the fallthrough
+      // the value is silently dropped.
+      if (step.resource === 'provisions') {
+        state.provisions = step.amount;
+      } else if (step.resource === 'gold') {
+        state.gold = step.amount;
+      } else if (step.resource === 'meals') {
+        state.meals = step.amount;
+      } else {
+        const statDefs = gameData.rules?.stats || [];
+        const matchingStat = statDefs.find(s => s.name === step.resource);
+        if (matchingStat) {
+          state.stats[step.resource] = step.amount;
+          if (matchingStat.initial_is_max) {
+            state.initialStats[step.resource] = step.amount;
+          }
+        }
+      }
+    } else if (step.action === 'set_ability_uses') {
+      // Initialize per-ability remaining-use counters (e.g., limited-use
+      // spell castings, rationed potions, per-adventure talents). Stored
+      // in state.abilityUses so later events and conditions can read the
+      // remaining count. Schema v1.3.
+      if (!state.abilityUses) state.abilityUses = {};
+      state.abilityUses[step.ability] = step.uses;
     }
   }
 
@@ -1405,6 +1437,10 @@ function updateStatBar() {
   const statDefs = gameData.rules.stats || [];
 
   let html = '';
+  // Render every declared stat. This covers both profiled series (LW
+  // COMBAT SKILL / ENDURANCE, FF SKILL / STAMINA / LUCK) and unprofiled
+  // series that may declare additional stats like EXPERIENCE, HONOUR,
+  // MAGIC, LIFE POINTS, or their own currency-as-a-stat.
   for (const sd of statDefs) {
     const val = state.stats[sd.name] || 0;
     const initial = state.initialStats[sd.name] || val;
@@ -1414,16 +1450,37 @@ function updateStatBar() {
     </div>`;
   }
 
-  const provLabel = gameData.rules?.provisions?.display_name || 'Provisions';
-  const goldLabel = gameData.rules?.inventory?.currency_display_name || 'Gold';
-  html += `<div class="stat-item provisions">
-    <span class="stat-label">${provLabel}</span>
-    <span class="stat-val">${state.provisions}</span>
-  </div>`;
-  html += `<div class="stat-item gold">
-    <span class="stat-label">${goldLabel}</span>
-    <span class="stat-val">${state.gold}</span>
-  </div>`;
+  // Render the canonical provisions row if provisions are enabled for
+  // this book. Books that set provisions.enabled: false (GrailQuest,
+  // some other series) don't get this row — avoiding a perpetually
+  // zero-valued Provisions label in the stat bar.
+  const provRules = gameData.rules?.provisions;
+  if (provRules?.enabled) {
+    const provLabel = provRules.display_name || 'Provisions';
+    html += `<div class="stat-item provisions">
+      <span class="stat-label">${provLabel}</span>
+      <span class="stat-val">${state.provisions}</span>
+    </div>`;
+  }
+
+  // Render the canonical gold row only when there is no declared stat
+  // that's already carrying the book's currency. Books that treat
+  // currency as a first-class stat (GrailQuest declares GOLD in
+  // rules.stats[]) have it shown by the loop above and should not get
+  // a duplicate canonical row. Books that use the canonical state.gold
+  // slot (LW, Warlock) will match neither of the currency-name regex
+  // checks in their rules.stats[] and get the canonical row as before.
+  const currencyRegex = /^(gold|coin|crown|piece|credit|cap|doubloon|money|silver|bit)s?$/i;
+  const hasCurrencyStat = statDefs.some(sd =>
+    typeof sd.name === 'string' && currencyRegex.test(sd.name.trim())
+  );
+  if (!hasCurrencyStat) {
+    const goldLabel = gameData.rules?.inventory?.currency_display_name || 'Gold';
+    html += `<div class="stat-item gold">
+      <span class="stat-label">${goldLabel}</span>
+      <span class="stat-val">${state.gold}</span>
+    </div>`;
+  }
 
   if (state.potion && state.potionDoses > 0) {
     html += `<div class="stat-bar-actions">

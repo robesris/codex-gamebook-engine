@@ -2,8 +2,8 @@
 /**
  * Codex Gamebook Engine — CLI Emulator
  *
- * Version: 2.3.0
- * Compatible with codex doc >= 2.4 and GBF schema >= 1.2.0
+ * Version: 2.4.0
+ * Compatible with codex doc >= 2.6 and GBF schema >= 1.3.0
  *
  * Stateless command-line emulator for GBF game data files.
  * Each invocation takes a state JSON + an action and outputs a new state.
@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '2.3.0';
+const CODEX_EMULATOR_VERSION = '2.4.0';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -308,6 +308,10 @@ function initialState(bookPath) {
     gold: 0,
     meals: 0,
     abilities: [],
+    // Per-ability remaining-uses counters, populated by set_ability_uses
+    // character creation steps and by book scripts. Keyed by ability name.
+    // Empty by default; absent when no ability needs use tracking.
+    abilityUses: {},
     potion: null,
     currentSection: null,
     previousSection: null,
@@ -453,12 +457,49 @@ function processCreationSteps(state, book) {
       if (!state.inventory.includes(step.item)) state.inventory.push(step.item);
       state.creationStep++;
     } else if (step.action === 'set_resource') {
-      if (step.resource === 'provisions') state.provisions = step.amount;
-      else if (step.resource === 'gold') state.gold = step.amount;
-      else if (step.resource === 'meals') state.meals = step.amount;
+      // Canonical resource slots first.
+      if (step.resource === 'provisions') {
+        state.provisions = step.amount;
+      } else if (step.resource === 'gold') {
+        state.gold = step.amount;
+      } else if (step.resource === 'meals') {
+        state.meals = step.amount;
+      } else {
+        // Fall through: if the resource name matches a declared stat in
+        // rules.stats[].name, route the value into state.stats[name]
+        // rather than silently dropping it. This handles books whose
+        // currency or experience is carried as a first-class stat (e.g.,
+        // GrailQuest declares GOLD and EXPERIENCE as stats and uses
+        // set_resource: "GOLD" / "EXPERIENCE" to initialize them at 0).
+        // Schema v1.3 documents this behavior on character_creation_step.resource.
+        const statDefs = book.rules?.stats || [];
+        const matchingStat = statDefs.find(s => s.name === step.resource);
+        if (matchingStat) {
+          state.stats[step.resource] = step.amount;
+          if (matchingStat.initial_is_max) {
+            state.initialStats[step.resource] = step.amount;
+          }
+        } else {
+          state.log.push(`Unknown resource in set_resource: ${step.resource} (not a canonical slot and not a declared stat name; value discarded)`);
+        }
+      }
+      state.creationStep++;
+    } else if (step.action === 'set_ability_uses') {
+      // Initializes the per-use counter for a named ability. Used by books
+      // that track limited-use spells or powers separately from a simple
+      // inventory of scrolls or potions. Stored in state.abilityUses so
+      // conditions like `stat_gte` (via a future `ability_uses` condition)
+      // or bespoke script events can read the remaining count. The ability
+      // itself should be in rules.abilities.available OR a character creation
+      // choose_abilities result, but we don't enforce that here — the book
+      // may ship hard-coded starting abilities outside the discipline system.
+      if (!state.abilityUses) state.abilityUses = {};
+      state.abilityUses[step.ability] = step.uses;
+      state.log.push(`Set ${step.ability} uses = ${step.uses}`);
       state.creationStep++;
     } else {
       // Unknown action — skip
+      state.log.push(`Unknown character_creation action: ${step.action} (skipped)`);
       state.creationStep++;
     }
   }
@@ -1397,6 +1438,7 @@ function compactState(state) {
     gold: state.gold,
     meals: state.meals,
     abilities: state.abilities,
+    abilityUses: state.abilityUses || {},
     potion: state.potion,
     currentSection: state.currentSection,
     previousSection: state.previousSection,
@@ -1442,7 +1484,44 @@ function summarize(state, book) {
     const provLabel = book.rules?.provisions?.display_name || 'Provisions';
     const goldLabel = book.rules?.inventory?.currency_display_name || 'Gold';
     if (state.provisions > 0) stats.push(`${provLabel} ${state.provisions}`);
-    if (state.gold > 0) stats.push(`${goldLabel} ${state.gold}`);
+    // Show currency: prefer `state.gold` (the canonical lowercase slot used
+    // by LW/FF), and fall back to a stat-declared currency if the book
+    // carries its currency as a first-class stat (GrailQuest uses `GOLD`
+    // as a stat name, with no use of the canonical `state.gold` slot).
+    // Detection is structural: if any stat in rules.stats has a name that
+    // looks currency-ish AND its state value is non-zero, show it.
+    if (state.gold > 0) {
+      stats.push(`${goldLabel} ${state.gold}`);
+    } else {
+      const statDefs = book.rules?.stats || [];
+      for (const sd of statDefs) {
+        const name = sd.name;
+        if (typeof name !== 'string') continue;
+        if (!/gold|coin|crown|piece|credit|cap|doubloon|money|silver/i.test(name)) continue;
+        const v = state.stats[name];
+        if (typeof v === 'number' && v > 0) {
+          // Use the declared display name if present, else the stat name itself.
+          stats.push(`${goldLabel !== 'Gold' ? goldLabel : name} ${v}`);
+          break;
+        }
+      }
+    }
+    // Also surface any non-attack non-health non-currency stats the book
+    // declares, so unprofiled books with stats like EXPERIENCE or HONOUR
+    // show up in the summary instead of silently tracking in the
+    // background. Skip the health and attack stats (already shown), skip
+    // currency-ish stats (handled above), and skip zero-valued stats.
+    const statDefs = book.rules?.stats || [];
+    for (const sd of statDefs) {
+      const name = sd.name;
+      if (typeof name !== 'string') continue;
+      if (name === healthStat || name === attackStat) continue;
+      if (/gold|coin|crown|piece|credit|cap|doubloon|money|silver/i.test(name)) continue;
+      const v = state.stats[name];
+      if (typeof v === 'number' && v !== 0) {
+        stats.push(`${name} ${v}`);
+      }
+    }
     lines.push(`  ${stats.join(' | ')}`);
   } else if (state.pause?.type === 'combat') {
     const enemy = state.combat.enemies[state.combat.currentEnemyIdx];
