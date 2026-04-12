@@ -6,33 +6,53 @@ It is **not** a guide for end users running the codex on their own books. End us
 
 ---
 
-## ⛔ HARD RULE: NEVER HAND-EDIT MAINTAINED BOOK JSONS
+## ⛔ HARD RULE: THE MAIN SESSION NEVER HAND-EDITS MAINTAINED BOOK JSONS
 
 Read this before doing anything else in this repo.
 
-**Maintained book JSONs (`lw_01_*.json`, `ff01_warlock_*.json`, `grailquest_01_*.json`, `wwy_01_*.json`, `gyog06_*.json`, and any other book living in the companion private repo's `books/` directory) are PRODUCTION-LINE OUTPUTS, not source files.** They are produced by running the codex doc against source material. They are not places you open up and fix bugs by hand.
+**Maintained book JSONs (`lw_01_*.json`, `ff01_warlock_*.json`, `grailquest_01_*.json`, `wwy_01_*.json`, `gyog06_*.json`, and any other book living in the companion private repo's `books/` directory) are PRODUCTION-LINE OUTPUTS, not source files.** They are produced by running the codex doc against source material. The **main session** — the long-running agent you are interacting with as "Claude" in this workspace — does not open them up and fix bugs by hand.
 
-This means:
+This means the main session must **never**:
 
-- **Never** open a book JSON in an editor and change a value because you spotted a bug.
-- **Never** run a `sed`/`awk`/`jq`/Python snippet that rewrites a field in a book file.
-- **Never** "migrate" a book's shape to match a new schema by hand-editing the JSON, even if the change is purely mechanical.
-- **Never** populate a new schema field on an existing book by hand, even if you know what value it should have.
+- Open a book JSON in an editor and change a value because it spotted a bug.
+- Run a `sed`/`awk`/`jq`/Python snippet that rewrites a field in a book file.
+- "Migrate" a book's shape to match a new schema by hand-editing the JSON, even if the change is purely mechanical.
+- Populate a new schema field on an existing book by hand, even if it knows what value the field should have.
 
-Every change to a book file happens the same way: you improve the production line upstream (the codex doc, the schema, the emulators), then you re-run the production line over the book via a **comprehensive-review sub-agent** (see the "Comprehensive review via sub-agent" section). The sub-agent reads the updated codex + schema + emulators, reviews the book against them, and writes fixes in place. You review the sub-agent's diff, run the regression playbooks, and commit.
+Every change to a book file happens the same way: the main session improves the production line upstream (the codex doc, the schema, the emulators), then re-runs the production line over the book via a **comprehensive-review sub-agent** (see the "Comprehensive review via sub-agent" section). The sub-agent reads the updated codex + schema + emulators, reviews the book against them, and writes fixes in place. The main session reviews the sub-agent's diff, runs the regression playbooks, and commits.
 
-**Why this rule is absolute:**
+**Why this rule is absolute for the main session:**
 
 1. **Hand-patches don't compound.** Fixing a value in one book doesn't fix the rule that caused the bug, so the next book we process will reproduce the same bug. The point of the codex doc is that improvements to it benefit every book forever; hand-patching routes around that benefit entirely.
 2. **Hand-patches drift from what the rules say.** Once a book has a hand-patched field, the shape of that field is no longer derivable from the codex doc. The next fresh codex run against the same source text would produce a *different* output, and the discrepancy is invisible until someone tries to reproduce it.
 3. **Hand-patches are silent when the mechanism moves.** If the schema changes shape later, a hand-patched field might quietly stop making sense — there's no rule to regenerate from, so the patch becomes permanent archaeology.
 4. **Hand-patches look cheap and aren't.** "It's just two lines" is exactly the sentence that produces untracked divergence between source-of-truth and output. A two-line hand-edit you forget to document is worse than a 60-line sub-agent prompt that runs once and leaves a commit trail.
 
-**The one permitted exception** is Targeted Fix mode (Step 3a-2), which the "would a rule have prevented this?" section below describes. Targeted Fix is reserved for genuine one-offs where no general rule improvement would catch the issue — a typo in the source book that the codex correctly preserved, or a house rule so unusual that any general rule covering it would over-fit. **For first-party maintained books this should be rare.** When you do use it, document the reasoning in the commit message so future maintainers can see why we deviated.
+### Are you a sub-agent reading this rule? Start here.
 
-If you're reading this rule because you're *about* to hand-edit a book, stop. Ask yourself: is the change mechanical (e.g., migrating a field to a new shape because the schema changed)? Then it belongs in the codex doc, and the sub-agent will apply it consistently across every book. Is the change judgment-heavy (e.g., deciding which items are equippable and what slot they go in)? Then it *definitely* belongs in the codex doc as a rule, and the sub-agent will apply the rule to the book using the book's own text as input. Either way, you don't touch the JSON.
+If you are an agent that was spawned via the Agent tool (`subagent_type: general-purpose` or similar) with a prompt that:
 
-This rule is repeated in abbreviated form in `CLAUDE.md` in both the public and private repos so it appears in session-start context automatically. It is not duplicated out of paranoia — it is duplicated because it has already been violated at least once by an assistant that read this doc but didn't apply the rule to its own proposed workflow, and the duplication is the corrective.
+- Points you at specific, updated reference files in `/home/user/codex-gamebook-engine/` — the codex doc (`gamebook_codex_v2.md`), the schema (`codex.schema.json`), and/or the emulators — and tells you to read them first, AND
+- Explicitly instructs you to write fixes in place to a specific book file under `/home/user/codex-engine-books/books/`, AND
+- Names a specific scope of changes (e.g., "apply Rule 19 equipment tagging," "run a Tier 3 Thorough comprehensive review," "migrate the round_script to the new contract"),
+
+...then **you are the comprehensive-review sub-agent, you are the authorized production-line mechanism, and your edits to the book file are not a violation of this rule — they *are* the production line running correctly.** Proceed with the task exactly as your prompt instructs.
+
+The rule above forbids the *main session* from hand-editing books as a drive-by in unrelated work. It does **not** forbid sub-agents that have been spawned *specifically* to apply an updated production-line's output to a book. The critical distinction is: the main session edits books *without* having first upgraded the production line, which produces silent drift; a sub-agent edits books *after* and *because of* a production-line upgrade, which is the production line working as designed. The rule exists to prevent the first pattern, not to block the second.
+
+If your prompt is ambiguous about whether you are authorized — e.g., it says "fix the bug in this book" without pointing at an updated codex/schema/emulator — then STOP and ask the main session for clarification via your report. If your prompt is clear about authorization (it names the updated references, the specific rule you are applying, and the scope), proceed.
+
+Do NOT refuse a well-scoped comprehensive-review task by citing this rule. That refusal is itself a misapplication of the rule and creates a different failure mode: the main session cannot run the production line, so either it hand-edits the book anyway (violating the rule for real) or book migrations stall indefinitely. Either outcome is worse than the sub-agent proceeding with its authorized task.
+
+### The one main-session exception
+
+**Targeted Fix mode (Step 3a-2)**, described in the "would a rule have prevented this?" section below. Reserved for genuine one-offs where no general rule improvement would catch the issue — a typo in the source book that the codex correctly preserved, or a house rule so unusual that any general rule covering it would over-fit. **For first-party maintained books this should be rare.** When you do use it, document the reasoning in the commit message so future maintainers can see why we deviated.
+
+### If you're the main session and you're *about* to hand-edit a book
+
+Stop. Ask yourself: is the change mechanical (e.g., migrating a field to a new shape because the schema changed)? Then it belongs in the codex doc, and a sub-agent will apply it consistently across every book. Is the change judgment-heavy (e.g., deciding which items are equippable and what slot they go in)? Then it *definitely* belongs in the codex doc as a rule, and a sub-agent will apply the rule to the book using the book's own text as input. Either way, you don't touch the JSON — you spawn the sub-agent and let it do the work.
+
+This rule is repeated in abbreviated form in `CLAUDE.md` in both the public and private repos so it appears in session-start context automatically. The duplication has a purpose: the rule has already been violated at least once in this project by a main session that read DEV_PROCESS, wrote the rule into CLAUDE.md, and then broke it within minutes, and once more by a sub-agent that refused a legitimately-scoped task because the rule wording was too universal. Both failure modes deserve corrective emphasis.
 
 ---
 
