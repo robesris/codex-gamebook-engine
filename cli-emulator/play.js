@@ -24,7 +24,16 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.0.2';
+const CODEX_EMULATOR_VERSION = '3.0.3';
+// Short SHA of the git commit this emulator binary was built on top of.
+// Updated via `scripts/stamp-emulator-commit.sh` before making a
+// commit that touches the emulator. Displayed in the HTML emulator's
+// header (index.html) and available as a constant here for CLI-side
+// introspection. Semantically: "this emulator binary was built on top
+// of commit X" — the stamp is the parent of the commit that sets it,
+// so a downstream user can see exactly which known-good release their
+// binary was built on top of.
+const CODEX_EMULATOR_COMMIT = '04c1363';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional

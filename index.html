@@ -64,6 +64,22 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 #load-screen { text-align: center; padding-top: 15vh; }
 #load-screen h1 { font-size: 2.5em; color: var(--accent); margin-bottom: 0.2em; }
 #load-screen .subtitle { color: var(--text-dim); margin-bottom: 2em; font-style: italic; }
+/* Bright yellow version + commit-hash badge that sits inline after the
+   "Codex Emulator" title on the load screen. Smaller than the h1 so it
+   doesn't compete with the title visually, and a distinct bright
+   colour so it stands out as build-identification metadata rather than
+   decoration. Populated from JS at page load so the machine-readable
+   CODEX_EMULATOR_VERSION / CODEX_EMULATOR_COMMIT constants stay the
+   single source of truth. */
+.emulator-version-badge {
+  font-size: 0.38em;
+  color: #ffeb3b;
+  font-weight: normal;
+  font-family: 'Courier New', Courier, monospace;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 
 .file-picker-area {
   border: 2px dashed var(--border-light);
@@ -533,7 +549,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
   <!-- LOAD SCREEN -->
   <div id="load-screen" class="screen active">
-    <h1>Codex Emulator</h1>
+    <h1>Codex Emulator <span id="emulator-version-badge" class="emulator-version-badge"></span></h1>
     <p class="subtitle">A universal gamebook engine &mdash; <a href="https://github.com/robesris/codex-gamebook-engine" style="color:var(--accent);">GitHub</a></p>
     <div class="file-picker-area" id="file-picker">
       <p>Click to load a game data file (.json)</p>
@@ -621,7 +637,33 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.0.2';
+const CODEX_EMULATOR_VERSION = '3.0.3';
+// Short SHA of the git commit this emulator binary was built on top of.
+// Updated via `scripts/stamp-emulator-commit.sh` immediately before
+// making a commit that touches the emulator — the script reads
+// `git rev-parse --short HEAD` and stamps the result here, so the
+// resulting commit's CODEX_EMULATOR_COMMIT value is the short SHA of
+// the commit's PARENT (semantically: "this emulator binary was built
+// on top of commit X"). The stamp is one-off from the emitting
+// commit's own hash, but that's unavoidable without a post-commit
+// amend — and this way a downstream user opening the running
+// emulator in a browser can see exactly which known-good release
+// their binary was built on top of. Displayed in the Codex Emulator
+// header on the load screen next to the version string.
+const CODEX_EMULATOR_COMMIT = '04c1363';
+
+// Populate the load-screen version badge from the two constants above
+// so the machine-readable constants stay the single source of truth.
+// Runs synchronously because this script tag lives at the bottom of
+// <body> — by the time it executes, #emulator-version-badge has
+// already been parsed into the DOM.
+(function initEmulatorVersionBadge() {
+  const el = document.getElementById('emulator-version-badge');
+  if (el) {
+    el.textContent = 'v' + CODEX_EMULATOR_VERSION + ' @' + CODEX_EMULATOR_COMMIT;
+    el.title = 'Codex Emulator v' + CODEX_EMULATOR_VERSION + ', built on top of commit ' + CODEX_EMULATOR_COMMIT;
+  }
+})();
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
