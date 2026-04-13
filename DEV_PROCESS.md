@@ -142,6 +142,22 @@ When working through a backlog of bugs, prioritize in this order:
 
 A good dev session typically lands 1–3 bullet points from this list. Don't try to do all six in one session — they're separate kinds of work and conflict with each other.
 
+## Codex doc evolution discipline
+
+When you ship a new rule, a new schema field, or a new behavior to the codex doc — anything that introduces a constraint the AI parsing a future book is expected to apply — the rule body itself is **not** the only thing you write. Every shipped rule comes with two pieces of meta-documentation that ship in the **same commit**:
+
+1. **One new entry in the codex doc's pre-output verification checklist.** The entry is a positive-form yes/no statement the AI parsing a new book can confirm against the book it's processing. Frame the check in the language of the source text the AI is reading, not in the language of the schema. Counter-example: don't write *"verify rules.attack_stat is null when appropriate"* — write *"if the book's source text describes a derived combat stat (e.g., `CV = Strength + Agility + bonuses`), confirm `rules.attack_stat` is null and the round_script computes the derived value from component stats."* The checklist line should be specific enough that an AI can give a definitive yes/no and revise its output if the answer is no.
+
+2. **One new entry in the codex doc's topical decision table.** The decision table sits near the top of the doc and is keyed on book-feature trigger words an AI can identify in the source text, with each row pointing at the rule that handles that feature. The new row uses the same source-text framing as the checklist line above.
+
+These two pieces are not optional. They exist because the codex doc is read by an AI parsing an unprofiled book, and **the AI does not search the doc the way a human reader does** — the doc is in its context window all at once, and rules surface based on attention weight, not lookup. A rule that exists but has no checklist entry and no decision-table entry is a rule the AI can fail to apply silently. The Windhammer parse failure on derived attack stats (where the rule existed in Section 7.5 but wasn't found by the parse run) is the canonical example of why this discipline exists; see the "Tracked engine backlog → Windhammer" section for the failure mode and the recovery plan.
+
+**The fail-loud rule:** if you ship a doc commit that adds a new rule WITHOUT also adding the corresponding checklist line and decision-table entry, your commit is incomplete. Revise it before pushing. A future maintainer (or a future Claude session) opening the codex doc and finding a rule that has no meta-doc backing should treat that as a bug, not as an oversight to ignore.
+
+This rule is a workflow extension of codex doc Rule 16 ("Codex Maintainer Discipline (When You Are Editing This Document)"). Rule 16 covers what to do with the rule body itself — what makes a good rule, when to add one, when to escalate to a schema change. This section covers what ships **alongside** the rule body. The two are complementary.
+
+**Activation note.** As of the writing of this section, the codex doc does not yet have either the topical decision table or the pre-output verification checklist — both are tracked engine backlog items (see `NEXT_SESSION.md` in the books repo for the work track that introduces them). When that work lands, this rule activates retroactively for the existing 19 rules: each one needs to be backfilled with its checklist line and decision-table entry as part of the same commit (or commit series) that introduces the table and checklist. After that, every new rule shipped in any future session carries the discipline forward. Until then, the rule is captured here so the requirement is not forgotten when the prominence-improvement session is scheduled.
+
 ## Comprehensive review via sub-agent
 
 The Step 3a-1 workflow on a 350–400-section book is roughly a 20–30 minute, 1M+ token job. Doing it inline in a normal session would consume the whole budget on one task, so we delegate it to a sub-agent.
