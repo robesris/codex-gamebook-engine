@@ -621,7 +621,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.0.1';
+const CODEX_EMULATOR_VERSION = '3.0.2';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -3489,6 +3489,25 @@ function autoEquipOnAdd(itemId) {
   if (!item || !item.equippable) return;
   const autoEquip = item.auto_equip !== false;
   if (!autoEquip) return;
+  // Non-displacing auto-equip (codex v2.8.3+, emulator v3.0.2+). Fill
+  // the slot only if it is currently empty. If the slot is already
+  // occupied by a different item, leave the existing occupant equipped
+  // and leave the new item unequipped in plain inventory. The player
+  // must explicitly click equip in the sidebar if they want to swap.
+  // This prevents picking up a new weapon or armor from silently
+  // switching the player's active equipment underneath them — a
+  // real-playthrough complaint from the Chat #3 Phase 3 browser pass
+  // (LW1 section 62, where a "you may take a sword" loot event
+  // silently unequipped the player's axe). See Rule 19's
+  // "Auto-equip is non-displacing" paragraph for the full rationale.
+  //
+  // Note: player-driven equip (playerEquipItem → equipItem) still
+  // displaces the current occupant, because the player clicking equip
+  // is an explicit opt-in to swap. Only the automatic code path here
+  // changed.
+  if (!state.equipment) state.equipment = {};
+  const existingOccupant = state.equipment[item.slot];
+  if (existingOccupant && existingOccupant !== itemId) return;
   const check = canEquipItem(itemId, true);
   if (!check.ok) return;
   equipItem(itemId);
@@ -3609,12 +3628,27 @@ function applyDamageInteractions(components, interactions, direction, combatLogR
 function showEnding(section) {
   showScreen('ending-screen');
   const screen = document.getElementById('ending-screen');
-  const isVictory = section.ending_type === 'victory';
-  const isDeath = section.ending_type === 'death';
+  // Route ending styling on `ending_type`. Only explicit death endings
+  // get the ominous red frame — everything else (victory, continuation,
+  // neutral, or undefined) gets the gold success frame. The old default
+  // (fall through to ending-death when neither flag was set) routed
+  // LW1's continuation ending to red, which is wrong: successfully
+  // completing LW1 is a continuation outcome (the player goes on to
+  // Lone Wolf 2), not a death. The codex's four standard ending_type
+  // values are: death, victory, neutral, continuation — only death is
+  // "bad."
+  const endingType = section.ending_type;
+  const isDeath = endingType === 'death';
+  const cssClass = isDeath ? 'ending-death' : 'ending-victory';
+  let heading;
+  if (endingType === 'victory') heading = 'VICTORY!';
+  else if (endingType === 'continuation') heading = 'TO BE CONTINUED…';
+  else if (endingType === 'death') heading = 'YOUR ADVENTURE ENDS';
+  else heading = 'THE END';
 
   screen.innerHTML = `
-    <div class="${isDeath ? 'ending-death' : isVictory ? 'ending-victory' : 'ending-death'} mt-3">
-      <h2>${isVictory ? 'VICTORY!' : 'YOUR ADVENTURE ENDS'}</h2>
+    <div class="${cssClass} mt-3">
+      <h2>${heading}</h2>
       <div class="section-text mt-2">${formatText(section.text)}</div>
       <div class="mt-3">
         <button class="btn btn-large" onclick="playAgain()">Play Again</button>

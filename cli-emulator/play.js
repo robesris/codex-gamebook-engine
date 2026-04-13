@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.0.1';
+const CODEX_EMULATOR_VERSION = '3.0.2';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -536,14 +536,31 @@ function autoUnequipOnRemove(state, itemId) {
 }
 
 // Handle the auto-equip side of an add_item. If the item is equippable
-// with auto_equip: true (default), move it into its slot, displacing
-// any previous occupant. No-op for non-equippable items or items with
-// auto_equip: false.
+// with auto_equip: true (default), AND the item's slot is currently
+// empty, move it into its slot. If the slot is already occupied by a
+// different item, leave the existing occupant equipped and leave the
+// new item unequipped in plain inventory. The player can later issue
+// an explicit equip command to swap.
+//
+// Non-displacing semantic (codex v2.8.3+, emulator v3.0.2+). Prior
+// versions (pre-3.0.2) displaced the previous occupant on every
+// auto_equip fire, which meant a section granting a new weapon
+// silently swapped the player's active weapon underneath them. The
+// codex v2.8.3 Rule 19 update moves to "auto_equip fills empty slots
+// only" so the player's active equipment is never changed without an
+// explicit opt-in. The player-driven equip command still displaces,
+// because that's the player's explicit choice.
 function autoEquipOnAdd(state, book, itemId) {
   const item = getItemDef(book, itemId);
   if (!item || !item.equippable) return;
   const autoEquip = item.auto_equip !== false; // default true
   if (!autoEquip) return;
+  if (!state.equipment) state.equipment = {};
+  const existingOccupant = state.equipment[item.slot];
+  if (existingOccupant && existingOccupant !== itemId) {
+    state.log.push(`Auto-equip skipped for ${itemId}: slot ${item.slot} already holds ${existingOccupant} (player may equip manually to swap)`);
+    return;
+  }
   const check = canEquipItem(state, book, itemId, true);
   if (!check.ok) {
     state.log.push(`Auto-equip skipped for ${itemId}: ${check.reason}`);
