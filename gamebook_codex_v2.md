@@ -1,11 +1,11 @@
-# THE GAMEBOOK CODEX v2.8
+# THE GAMEBOOK CODEX v2.8.1
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
 
-**Codex version:** 2.8
+**Codex version:** 2.8.1
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -254,6 +254,60 @@ Run verification checks on the complete output. Deliver the JSON file to the use
 ---
 
 ## CRITICAL RULES — READ BEFORE PROCESSING
+
+### Topical Decision Table (read this first, then return to it whenever you spot a matching trigger)
+
+This table is the **lookup index** for the rules below. The left column is keyed on the *source-text language* you will encounter while reading a gamebook (the words and phrasings the book itself uses). The right column tells you which rule and which schema field handle that feature. Scan this table early in every parse; whenever you encounter a row whose trigger phrase matches what the book is saying, jump to the named rule and apply it. The table is exhaustive across the 19 rules in this section plus the most heavily-used patterns from Sections 7.5–7.6 and Section 8.
+
+The table exists because the codex doc is read by an AI that does not search it the way a human does — the doc is in your context window all at once, and rules surface based on attention weight rather than lookup. A rule that exists but whose trigger phrasing does not match the table row is a rule you can fail to apply silently. Treat unmatched triggers as alarm bells: if the book describes a mechanic and no row in this table fits, the mechanism is either missing from the codex (a maintainer issue — flag it) or it is here under a phrasing you did not recognise (re-scan).
+
+| If the book's source text says or implies … | Apply | Where to encode it |
+|---|---|---|
+| "Roll dice / pick a number / choose / distribute points" to determine a starting stat or resource at character creation | Rule 11 | A `character_creation.steps[]` entry whose `action` actually rolls or prompts (`roll_stat`, `set_resource`, `choose_ability`, etc.) — never a `set_resource` with `amount: 0` and a descriptive `source` |
+| "Combat stat is computed from other stats" — e.g. `CV = Strength + Agility + bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dex + Class + Level` | Section 7.5 → "Games without `attack_stat`" | `rules.attack_stat: null`; do NOT declare the derived name in `rules.stats[]`; round_script computes the derived value from component stats inside Lua |
+| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | New `distribute_points` action on a `character_creation_step` once schema v1.6.0 ships; until then, flag the gap and stop — do NOT paper over with `manual_set` (Bug D) |
+| "You may only use one weapon at a time" / "wear one helmet" / "the chainmail you are wearing" / any "worn / wielded / equipped" language | Rule 19 | `equippable: true`, `slot: "<name>"`, `equip_timing`, `auto_equip` on the items_catalog entry; `stat_modifier.when: "equipped"` for slot-gated bonuses |
+| "Once worn, cannot be removed" / "the curse cannot be lifted" / cursed permanent items | Rule 19 | `equip_timing: "once"` on the item; only `remove_item` events can clear the slot |
+| "Immune to non-silver weapons" / "only silvered or blessed weapons can harm them" / "takes half damage from blunt attacks" / "double damage from fire" | Rule 18 | `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) with `kind`, `multiplier`, `source_has_any` / `source_lacks_all`, optional `condition` |
+| "Compound damage" — a single attack that deals physical + elemental, or two damage types interacting differently with the enemy | Rule 18 | Round_script emits `combat.damage_to_enemy` as a list of `{amount, sources}` components; each flows through the interaction filter independently |
+| "Add N to your COMBAT SKILL for the duration of this fight" / "deduct N from Attack Strength" / "for this combat only" / surprise attacks / torch penalties | Rules 14 + 17 | BOTH the narrative `special_rules` text (Rule 14, for display) AND the structured `combat_modifiers` entry on the combat event (Rule 17, for enforcement) — coexist, never one alone |
+| "Vordak / Helghast / Wraith trait that always applies to this enemy type" | Rule 17 | `intrinsic_modifiers` on the enemies_catalog entry (NOT per-section `combat_modifiers`) so the trait travels across every section the enemy appears in |
+| "If you have the Hunting Discipline, you do not need to eat" / "the Ranger is exempt from" / "the bearer is immune to" / "you automatically succeed at" / "you may bypass" / "you may ignore" | Rule 15 | Event-level `condition` field gating the affected event (`eat_meal`, `stat_test`, `modify_stat`, etc.) using `not has_ability "Hunting"` or analogous |
+| "If you have the lantern, continue safely; otherwise lose 2 STAMINA" / "if your backpack has room, take the extra meal" / one-time flag-gated bonuses | Rule 15 | Event-level `condition` on the conditional event |
+| Choice text begins with "If you have …" / "If you possess …" / "If you carry …" / "If you are wearing …" / "If you have the X Discipline" / "If your X is greater than N" / "If you have already …" | Rule 13 | Non-null `choice.condition` matching the text — verification pass required, the failure mode is silent |
+| Section text describes multiple state changes in one incident: "lose 6 ENDURANCE, COMBAT SKILL permanently reduced by 1, the Vordak Gem shatters" | Rule 9 | One event per independent effect (here: `modify_stat -6`, `modify_stat -1`, `remove_item`) — never a single event with a free-text description covering all of them |
+| "You must eat a Meal here or lose N ENDURANCE" / required meal with penalty | Rule 12 | One `eat_meal` with `penalty_amount: -N` — never accompany with a parallel `modify_stat` for the same loss |
+| "Combat → win to N, flee to M (lose K)" with damage on flee | Rule 12 | `combat` event's `flee_to`/`lose_to`/flee damage — never accompany with a parallel `modify_stat` for the same flee damage |
+| Per-enemy combat-modifier text in narrative paragraphs *outside* the stat-block paragraph (setup paragraphs, post-stat paragraphs) | Rule 14 | Scan the entire section, not just the stat-block paragraph; populate `special_rules` and `combat_modifiers` accordingly |
+| Compressed stat-block phrases like "first strike," "+N dmg," "need 8+ to hit," "double damage," "cannot be befriended" | Rule 14 | These count as combat-modifier phrasing too — match them inside or immediately after the stat block |
+| Enemy stat block in the section: "Giak: COMBAT SKILL 14 ENDURANCE 12" or "Troll: SKILL 9 STAMINA 10" | Rule 8 | `combat` event with `enemy_ref`; the `special_rules` text comes ONLY from the section that introduces this specific enemy — never templated from other Vordaks/Trolls |
+| The same enemy name appears in multiple sections with different stats (Giak, Kraan, Goblin, Skeleton) | Rule 10 | `<enemy>_s<N>` id where N is the section that introduces the variant; the suffix is required for recurring generic names |
+| One-of-a-kind named antagonist (final boss, unique wizard, the Warlock himself) | Rule 10 (exception) | Bare snake-case id (`warlock_of_firetop_mountain`, `vampire_lord_markos`) is acceptable when the name is genuinely unique across the whole book |
+| "Roll a die, lose/gain that many points" — die is the *quantity*, not the routing | Section 7.6 → Pattern 7.6.5 | `roll_dice` event with the die's outcome funneled into `apply_to_stat` — NOT a `script` event |
+| "Sequential N Luck tests" / "test Luck three times in a row" | Section 7.6 → Pattern 7.6.3 | `script` event using a Lua loop over `roll('1d6')` calls and the `luck_in_combat` global |
+| "Restore [stat] to its Initial value" | Section 7.6 → Pattern 7.6.1 | `script` event reading `initial_stats` and writing `player_stats` |
+| "If your X + Y is less than or equal to BOTH N and M" / dual-stat gates | Section 7.6 → Pattern 7.6.2 | `script` event computing the dual condition; do NOT emit two separate `stat_test`s |
+| "Test your Luck repeatedly until you succeed, losing K each failure" | Section 7.6 → Pattern 7.6.4 | `script` event implementing the loop with cost-per-failure |
+| "Roll for the time of day" / "if it is morning … / if it is night …" wall-clock checks | Section 7.6 → Pattern 7.6.7 | `script` event reading and writing a `state.time_of_day` flag |
+| "If you have visited this section before, …" / one-time visit flags | Rule 15 + Section 7.6 | `set_flag` on first visit, conditional events gated on `has_flag` thereafter |
+| "Subroutine section that returns to where you came from" | Section 7.6 → Pattern 7.6.8 | `script` event using `state.return_to_section` set by the caller before navigating |
+| Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects | Section 7.6 → Pattern 7.6.9 | `roll_dice` with per-range `effects` and `target` |
+| Computed navigation: "add up your gold and turn to that section" / cipher-style page jumps | Section 8.1 | `input_number` event with `target: "computed"` and a documented formula |
+| Hidden-information puzzle solved from an illustration (counting objects, decoding a glyph) | Section 8.2 | `input_number` event referencing the illustration; the answer is the section to turn to |
+| Password / text entry ("speak the word of opening") | Section 8.3 | `input_text` event with the expected string |
+| Multi-enemy combat ("you face three Giaks, fight them one at a time") | Section 8.5 | A sequence of `combat` events sharing a `win_to` chain |
+| Section that just says "turn to N" with no choice and no rolls | Section 8.6 | A single `continue` event with `target: N` and no `choices[]` |
+| Mid-adventure inventory selection ("you may take any 3 items from this room") | Section 8.7 | `choose_items` event with the catalog filter |
+| Currency the book treats as a first-class character-sheet stat (GrailQuest GOLD) vs. an auxiliary resource (LW Gold Crowns) | Section 7.2 → currency-encoding section | Stat encoding (declare in `rules.stats[]`, use `set_resource` matching the stat name) vs. canonical-slot encoding (canonical lowercase `gold` slot) — pick one, never both |
+| A schema field exists but the codex didn't know to use it for this specific book's mechanic and it's a true one-off | Step 3a-2 (Targeted Fix) | Targeted Fix mode — but if you are a maintainer of a first-party book, prefer Rule 16 first |
+| You (a maintainer) found a data bug in a maintained book | Rule 16 | Improve the rule first, re-run the comprehensive review; never hand-patch outputs as the primary fix |
+| You (a maintainer) added a new rule to this document | "Codex doc evolution discipline" (DEV_PROCESS.md) | Same commit must add one row to this table AND one yes/no entry to the pre-output verification checklist in Section 10. Non-negotiable. |
+
+**How to use this table during a parse.** During Step 5 (Parse Rules and Character Creation), read the book's rules section once with this table open in your context. For every paragraph in the rules section, scan the left column for a matching trigger and note which rules apply to this book. Then during Step 6 (Parse Sections), as you encounter each section, scan the left column again — section-level triggers (combat modifiers, conditional choices, multi-event paragraphs) often only become apparent when you're looking at a specific section's text. The table is meant to be re-scanned, not memorised on a single read.
+
+**When a row matches but the rule says "do nothing" or "use a custom event":** that's still a rule applying. Note it in your parser-pass notes so you can verify in Section 10's checklist that the section was handled deliberately rather than missed.
+
+---
 
 ### Rule 1: Source Fidelity
 You MUST parse ONLY from the provided source material. Every piece of text, every section number, every stat block, every choice target must come from what you can see in the document. If you cannot read something, flag it as unreadable. Do NOT fill gaps from your training data. Do NOT reconstruct text from memory. An empty section marked "[UNREADABLE]" is infinitely preferable to a plausible-looking section that doesn't match the source.
@@ -1374,8 +1428,8 @@ Same as any other parse: **produce a complete, correct, playable GBF JSON file**
 1. **Identify the series** (if possible). Search the book's front matter and copyright page for the series title, author, and publisher. Even if we don't have a profile for the series, naming it in `metadata.series` helps future passes and future readers. If you truly can't identify it, set `series: null` or `series: "Unknown"` and move on.
 
 2. **Parse the rules section completely and verbatim.** Read every page of the book that describes mechanics before the numbered sections begin. Extract:
-   - **Stats**: every named stat the book mentions, with its generation formula (`"R10+10"`, `"1d6+6"`, `"3d6"`, `"10+1d6"`, etc.), min, max, and whether it can be restored above its initial value (`initial_is_max`). **Use the book's own names for these stats** — do not translate "Strength" into "STAMINA" or "Might" into "SKILL" because that's what other series use. Whatever the book says, the data says.
-   - **Attack and health stats**: set `rules.attack_stat` and `rules.health_stat` to the exact stat names the book declares. The emulators look these up in the `rules.stats` array so they must match.
+   - **Stats**: every named stat the book mentions, with its generation formula (`"R10+10"`, `"1d6+6"`, `"3d6"`, `"10+1d6"`, etc.), min, max, and whether it can be restored above its initial value (`initial_is_max`). **Use the book's own names for these stats** — do not translate "Strength" into "STAMINA" or "Might" into "SKILL" because that's what other series use. Whatever the book says, the data says. Every stat declared in `rules.stats[]` MUST also be initialised by a corresponding `character_creation.steps[]` entry; if the book uses point-distribution to set stats and the schema does not yet have a `distribute_points` action type, stop and report the gap rather than leaving stats uninitialised (do NOT use `manual_set` to paper over the gap — see "Tier 3 playthrough discipline" in Section 10's per-rule checklist).
+   - **Attack and health stats**: set `rules.attack_stat` and `rules.health_stat` to the exact stat names the book declares. The emulators look these up in the `rules.stats` array so they must match. **Critical: derived combat stats.** If the book's combat stat is *computed from other stats* — anything of the form `Combat Value = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dexterity + Class + Level`, or any similar formula — then `rules.attack_stat` MUST be `null` and the derived name MUST NOT be declared in `rules.stats[]`. Instead, the round_script computes the derived value inside Lua from the component stats (`local cv = (player.strength or 0) + (player.agility or 0)`). Setting `rules.attack_stat` to the derived name and not declaring it in `rules.stats[]` produces a silently-broken book where `state.stats[attack_stat]` is undefined and `player.attack` is 0 for the entire fight. See Section 7.5 → "Games without `attack_stat`" → "Derived combat stats: worked example" for the canonical encoding pattern with a Windhammer-shaped Lua snippet.
    - **Currency**: if the book has a currency, set `rules.inventory.currency_display_name` to whatever the book calls it (which could be anything — "Gold Pieces," "Silver Pennies," "Doubloons," "Credits," "Caps," "Bits," etc.). There are two supported encodings for currency, and which one to pick depends on how the book's rules section treats it:
      - **Canonical-slot encoding (recommended for most books).** The book uses currency as an auxiliary resource rather than a first-class stat — the player starts with some amount, gains and spends it in sections, but it doesn't appear on a character-sheet stats table and isn't tested against. Use `set_resource: gold` in character creation to initialize it (the canonical lowercase slot `gold`) and use `modify_stat` with `stat: gold` in sections for changes. The UI renders it as `state.gold` under the `currency_display_name` label. This is what Lone Wolf and most Fighting Fantasy books do.
      - **Stat encoding (for books that treat currency as a first-class stat).** The book's rules section lists currency alongside other stats in the character sheet (for example, GrailQuest declares GOLD as a stat on the Character Sheet page, alongside LIFE POINTS and EXPERIENCE, and defines rules for earning and spending gold that parallel the other stats). In that case, add the currency to `rules.stats[]` under the book's own name (e.g. "GOLD", "Crowns"), use `set_resource` with the matching stat name in character creation (the emulator routes the value into `state.stats[name]` via the schema-v1.3 fallthrough), and use `modify_stat` with `stat: <the book's currency name>` in sections. The UI shows the value via the stat-bar loop over `rules.stats[]`. The canonical lowercase `state.gold` slot stays unused; `currency_display_name` still applies as a decorative label.
@@ -1482,7 +1536,98 @@ end
 
 This means the `round_script` has full control over weapon selection logic — it can pick the best weapon, the first weapon, or let the combat system's conventions determine which applies.
 
-**Games without `attack_stat`:** Some combat systems (e.g., threshold-based systems) don't use a traditional attack stat. In these cases, `attack_stat` may be null and `player.attack`/`enemy.attack` will be 0. The Lua script should use game-specific fields instead (e.g., `player.hit_threshold`). The emulator will omit the attack stat from the combat display when `attack_stat` is null.
+**Games without `attack_stat`:** Some combat systems don't use a traditional single attack stat. The two cases the codex must handle are:
+
+1. **Threshold-based systems** (no attacker-vs-defender comparison at all — the player rolls dice and tries to beat a per-enemy hit threshold). Common in GrailQuest, many AD&D Adventure Gamebooks, and dungeon-crawl CYOA series.
+2. **Derived combat stats** (the player's combat strength is computed from two or more component stats plus equipment bonuses, e.g. `Combat Value = Strength + Agility + weapon bonus + skill bonus`). Common in Windhammer / Chronicles of Arborell, some modern indie gamebooks, and other systems that try to give weight to multiple character attributes.
+
+In both cases, `rules.attack_stat` SHOULD be `null` and `player.attack` will resolve to 0. The Lua script reads the appropriate game-specific fields directly from `player` and `enemy` and computes the combat math itself. The emulator omits the attack stat from the combat display when `attack_stat` is null.
+
+**Critical:** if the book's combat is the *derived-stat* variety, do NOT declare the derived name (e.g. `"combat_value"`, `"attack_strength"`, `"hit_value"`) in `rules.stats[]` and do NOT set `rules.attack_stat` to it. The derived name is not a stat the player has — it is a *function* of the stats the player has, recomputed every round (and potentially affected by combat-modifier deltas on the input stats). Declaring it as a stat creates a phantom field that nothing initialises, so `state.stats.combat_value` is `undefined`, the emulator's combat init reads `player.attack = state.stats[attack_stat] = undefined`, and combat fails silently with `player.attack = 0` for the whole fight. This is the Windhammer Bug B failure mode (see DEV_PROCESS.md → Tracked engine backlog → Windhammer for the original observation that drove this rule's prominence improvements).
+
+#### Derived combat stats: worked example
+
+Suppose a book's rules section says:
+
+> **Combat Value (CV).** Your CV is your *Strength* plus your *Agility* plus any *weapon bonus* and *skill bonus* you have earned. Each round, both you and your opponent roll 2d6 and add your CV. The higher total wins and inflicts damage equal to the difference, scaled by 1d6 if the difference is large.
+
+This is a derived attack stat. The correct encoding is:
+
+```json
+{
+  "rules": {
+    "stats": [
+      { "name": "strength",  "generation": "1d6+6", "min": 1, "max": 18 },
+      { "name": "agility",   "generation": "1d6+6", "min": 1, "max": 18 },
+      { "name": "endurance", "generation": "2d6+8", "min": 1, "max": 30 },
+      { "name": "luck",      "generation": "1d6+6", "min": 1, "max": 12 }
+    ],
+    "attack_stat": null,
+    "health_stat": "endurance",
+    "combat_system": {
+      "description": "Each round both sides roll 2d6 + Combat Value. CV = Strength + Agility + bonuses. Higher total inflicts the difference as damage.",
+      "type": "derived_stat_2d6_comparison",
+      "round_script": "<see below>"
+    }
+  }
+}
+```
+
+Note: `combat_value` does NOT appear in `rules.stats[]`, and `attack_stat` is null. The component stats (`strength`, `agility`) are declared and initialised by character creation in the normal way.
+
+The round_script computes CV from the components:
+
+```lua
+-- Derived Combat Value: Strength + Agility + accumulated bonuses.
+-- Read components from player; default to 0 if a component stat is missing
+-- so the script does not crash on partially-built characters.
+local p_str = player.strength or player.STRENGTH or 0
+local p_agi = player.agility  or player.AGILITY  or 0
+local p_wpn = player.weapon_bonus or 0
+local p_skl = player.skill_bonus  or 0
+local p_cv  = p_str + p_agi + p_wpn + p_skl
+
+-- Enemy CV is stored on the enemy catalog entry as a flat field.
+-- Enemies do not have component stats; the book's stat block lists their CV directly.
+local e_cv  = enemy.combat_value or 0
+
+local p_roll = roll('2d6')
+local e_roll = roll('2d6')
+local p_total = p_roll.total + p_cv
+local e_total = e_roll.total + e_cv
+local diff = math.abs(p_total - e_total)
+
+if p_total > e_total then
+  local dmg = diff
+  if diff >= 6 then dmg = diff + roll('1d6').total end
+  combat.damage_to_enemy = dmg
+  combat.last_result = 'player_wounds_enemy'
+  combat.last_damage = dmg
+  log('Round '..combat.round..': You '..p_total..' vs '..enemy.name..' '..e_total..' — wound for '..dmg)
+elseif e_total > p_total then
+  local dmg = diff
+  if diff >= 6 then dmg = diff + roll('1d6').total end
+  combat.damage_to_player = dmg
+  combat.last_result = 'enemy_wounds_player'
+  combat.last_damage = dmg
+  log('Round '..combat.round..': You '..p_total..' vs '..enemy.name..' '..e_total..' — wounded for '..dmg)
+else
+  combat.last_result = 'tie'
+  combat.last_damage = 0
+  log('Round '..combat.round..': Clash! No damage.')
+end
+```
+
+Key points:
+
+- `player.strength`, `player.agility`, etc. come from `state.stats.strength` etc. via the emulator's player-table population (every player stat is exposed on the `player` table by name). The component names match the names declared in `rules.stats[]`.
+- `player.weapon_bonus` and `player.skill_bonus` are accumulated by other mechanisms — character-creation choices, equipped items with `stat_modifier.target: "weapon_bonus"`, combat_modifier deltas applied at fight start. The script reads them defensively (`or 0`) so the math still works on a freshly-created character with no weapons yet.
+- `enemy.combat_value` is a *flat field on the enemies_catalog entry*, not a derived computation, because enemies in most books are statted as a single block ("Troll: CV 14, Endurance 22") rather than via separate Strength/Agility components. This is fine — enemies and players don't have to use the same combat-stat shape, only the round_script needs to know how to compute both sides' totals.
+- `combat.damage_to_enemy` / `combat.damage_to_player` follow the v3.0+ contract (Rule 18). The script does not mutate `enemy.health` / `player.health` directly.
+
+The same pattern generalises to any derived-stat combat system: the component stats live in `rules.stats[]` and are initialised in character creation, the derived value is computed inside Lua at the start of each round, and `rules.attack_stat` stays null. If the book also has equipment bonuses to the derived value (a weapon that adds +2 to CV, a skill that adds +1), encode them via `combat_modifiers` with `target: "player.weapon_bonus"` or similar — the round_script reads `player.weapon_bonus` and the modifier is applied at combat start as usual. Do not encode them as `target: "player.combat_value"`, because `combat_value` does not exist on the player table — the round_script computes it on the fly each round.
+
+**Combat-modifier targets on derived-stat systems.** Because the round_script is responsible for combining components, `combat_modifiers` should target the *component fields* the script reads, not the derived field. Common target names for derived-stat books include `player.strength`, `player.agility`, `player.weapon_bonus`, `player.skill_bonus`, `player.damage_bonus`, `enemy.combat_value`, `enemy.armor`. The emulator does not enforce a vocabulary — pick names that match what your round_script reads.
 
 ### Round Script Contract
 
@@ -2269,6 +2414,62 @@ After generating the complete output, confirm:
 - [ ] The confidence report accurately lists any issues
 - [ ] NO section text was reconstructed from training data
 
+### Pre-output verification checklist (per-rule)
+
+The list above is general. The list below is **the per-rule yes/no walk** — every shipped codex rule contributes one positive-form check that an AI parsing a new book can confirm against the book it just processed. The checks are framed in *source-text language* (the words and phrasings the AI just read in the book), not in schema language, because the failure mode is "the rule existed but the AI didn't surface it during parsing." A check phrased as "verify `rules.attack_stat` is null when appropriate" is too easy to skim past; a check phrased as "if the book described a derived combat stat, did you set `attack_stat: null`?" forces the AI to walk back to what the book actually said.
+
+Walk this list in order before emitting the final JSON. Any "no" answer means revise the output before shipping.
+
+**Rule 1 (Source fidelity).** Every section's text and every stat block I emitted came from a passage I actually read in the source document, not from training-data memory of similar gamebooks. I did not normalize British/American spelling or terminology.
+
+**Rule 2 (No hallucination).** No section, stat, item, enemy, or rule in my output was filled in from what I "know" about this gamebook from training. Where the source was unreadable, I marked the section unreadable rather than reconstructing.
+
+**Rule 3 (Flag uncertainty).** Every ambiguous text, unclear section reference, or low-confidence parse is in `metadata.confidence.flagged_for_review`. I did not silently guess.
+
+**Rule 4 (Verify from source / page boundaries).** Every section's `text` ends on a natural narrative close (a "turn to N" sentence, a posed question, an ending banner). No section's text ends mid-paragraph or mid-sentence on a clause that does not naturally conclude the passage. My emitted section count matches the book's stated total. I did not treat any running header (e.g., `110-114`) as a section marker.
+
+**Rule 5 (Schema is authoritative).** Every field in my output is a field the schema declares, with the type the schema declares. Where my output uses a structured event for a mechanic, the schema actually defines that event type — I did not invent event types or fields.
+
+**Rule 6 (Never echo book narrative into model output).** I described mechanics in my prose, not narrative. I wrote narrative-bearing sections via file-to-file transformation, not via long single Write calls containing many sections of book text. I did not read large ranges of book text into context just to "think about" them.
+
+**Rule 7 (Parser-driven workflow on text sources).** For text-source books, I built a parser script and ran it on disk for the mechanical cases, reserving model context for the subtle cases. (For vision-only sources this check is informational — fall back to systematic per-section reading.)
+
+**Rule 8 (Enemy special_rules verbatim).** For every `combat` event with a non-null `special_rules`, the text came from the specific enemy's introducing section in this book — not templated from a similar enemy elsewhere. No `special_rules` string appears verbatim on multiple unrelated enemies unless the book actually says it for each.
+
+**Rule 9 (Multi-event sections).** Every section whose narrative describes more than one independent state change (look for "and you also," "as well as," "in addition," "permanently," "also lose," conjunctions of two losses, etc.) emits one event per change, not a single event with a free-text catch-all.
+
+**Rule 10 (Enemy ID naming).** Every recurring generic enemy name (Giak, Goblin, Kraan, Skeleton, Guard, Rat) uses the `<enemy>_s<N>` suffix where N is the section that introduces that variant. Bare snake-case ids only appear on genuinely unique antagonists with one stat block in the entire book.
+
+**Rule 11 (Starting resources from rolls).** If the book's rules section uses the word "pick," "roll," "choose," or "distribute" to determine a starting stat or resource, the matching `character_creation.steps[]` entry is a step that *actually rolls or prompts* — not a `set_resource` with `amount: 0` and a descriptive `source` field. Specifically: every stat declared in `rules.stats[]` has a corresponding `character_creation.steps[]` entry that initializes it to a real value, and after the steps run there are no stats left undefined.
+
+**Rule 12 (No duplicate penalty events).** For every `eat_meal` with a `penalty_amount`, I did NOT also emit a `modify_stat` for the same loss in the same section. The same check for `combat` flee damage, `roll_dice` per-branch effects, and `stat_test` outcomes — never a parallel `modify_stat` for a value already covered by a structured event.
+
+**Rule 13 (Conditional-choice consistency).** For every choice in the output whose `text` begins with "If you have …", "If you possess …", "If you carry …", "If you are wearing …", "If you have the X Discipline / skill", "If your X is greater/less/equal …", "If you have N or more …", or "If you have already …", the choice's `condition` is non-null and matches the text.
+
+**Rule 14 (Combat modifier whole-section scan).** For every section containing a `combat` event, I scanned the *entire* section text — not just the stat-block paragraph — for combat modifier phrasing (narrative bonuses/penalties, scope clauses, immunities, conditional setups, terse stat-block-style modifiers like "first strike" / "+N dmg" / "need 8+ to hit"). If such phrasing was present, the combat event's `special_rules` reflects it.
+
+**Rule 15 (Event conditions for exemptions and gates).** For every discipline / class / item / stat / flag exemption the book's rules section describes ("you do not need to," "you are exempt from," "the bearer is immune to," "you may bypass," "you may ignore," "if you have the X Discipline of Hunting"), I encoded it as an event-level `condition` on every event the exemption affects — not as narrative text alone, not as a section flag, not by restructuring sub-sections. The condition uses the appropriate `not has_ability` / `has_item` / `has_flag` / `stat_gte` shape.
+
+**Rule 16 (Codex maintainer discipline).** *(Only applies if I am editing the codex doc itself, not parsing a book.)* When I shipped a doc commit that changed a rule, the same commit added a row to the topical decision table at the top of the Critical Rules section AND added one entry to this checklist for the new rule. The codex's job is to produce correct output by default; output patches do not compound.
+
+**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. Per-enemy-type traits (Vordak Mindforce, Helghast presence) live on the enemy's `intrinsic_modifiers` instead, so they travel with the catalog entry.
+
+**Rule 18 (Damage interactions).** For every immunity, resistance, or weakness the book describes that scales damage rather than adding to a stat input ("immune to non-silver weapons," "takes half damage from blunt," "double damage from fire"), I encoded it as a `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) entry — not as a large negative `combat_modifier`. The round_script reports damage as `combat.damage_to_enemy` / `combat.damage_to_player` (not by mutating `*.health` directly), and uses the full `{amount, sources}` component-list form for any attack that deals more than one damage type in one swing.
+
+**Rule 19 (Equipment slots).** For every item the player can wear, wield, or otherwise have "equipped" by putting it on (the book uses words like "wearing," "wielding," "worn," "you may only use one weapon at a time," "the helmet you are wearing"), the items_catalog entry has `equippable: true`, a `slot` name, an `equip_timing`, and an `auto_equip` value. Cursed permanent items use `equip_timing: "once"`. `stat_modifier.when: "equipped"` is set on bonuses that should only apply when the item is in its slot. I did not encode equipment implicitly through narrative or ad-hoc flags.
+
+**Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised.
+
+**Section 7.2 (Stat completeness on unprofiled series).** Every stat declared in `rules.stats[]` has a generation formula AND an initialising `character_creation.steps[]` entry, so after character creation completes there are no `undefined` stats in `state.stats`. If the book uses point-distribution rather than rolling and the schema does not yet have a `distribute_points` step type, I stopped and reported the gap rather than leaving stats uninitialised.
+
+**Section 7.2 (Currency encoding choice).** Currency is encoded *either* canonical-slot (`set_resource: gold`, canonical lowercase slot) *or* stat (declared in `rules.stats[]`, `set_resource` matching the stat name) — never both. The choice matches how the book's own rules section treats it: stat-encoded if currency appears in the character-sheet stats table, slot-encoded otherwise.
+
+**Tier 3 playthroughs (no `manual_set` workarounds).** If I am running a Tier 3 playthrough script and encountered a missing character-creation step or a missing schema mechanism, I did NOT use `manual_set stats.<name> <value>` to paper over the gap. I stopped, filed the codex/schema/emulator gap, and reported the run as BLOCKED. `manual_set` is for debug probes and section-coverage tests (Tier 1 / Tier 2), not for playthrough validation.
+
+**Section 10 (general checklist above).** Every check in the bulleted list above this subsection has been walked.
+
+If any of the above answered "no," return to the relevant rule and revise the output. The checklist is a hard gate on shipping the JSON, not a soft suggestion. The cost of one re-pass during parse is much smaller than the cost of a downstream playability bug discovered in the emulator weeks later.
+
 ### Emulator compatibility
 The emulator is a strict reference implementation that only supports schema-defined structures. It does NOT guess, infer, or work around missing or inconsistent data. If the JSON file has ambiguities or inconsistencies that a human reader could resolve from context but a machine cannot, those are **must-fix issues that will break playability**. It is your job to identify and resolve these at parse time. Common examples:
 - Stat names that differ between the rules definition and enemy entries (e.g., `"COMBAT SKILL"` in rules but `"combat_skill"` on enemies)
@@ -2310,6 +2511,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## VERSION HISTORY
 
+- v2.8.1 — Codex-doc prominence improvements (additive only; no rule-body rewording, no schema change, no emulator change). Three additive interventions ship together to address the AI-rule-application failure mode observed during the Windhammer unprofiled-series stress test (DEV_PROCESS.md → Tracked engine backlog → Windhammer Bug B): a rule existed in the codex doc but the AI parsing the book did not surface it because the rule's framing did not match the source text's framing. **Intervention 1: Topical decision table at the top of the Critical Rules section.** A lookup index keyed on source-text trigger phrases (left column) that points at the rule, schema field, or section that handles each feature (right column). All 19 existing rules plus the heaviest-used Section 7.5 / 7.6 / 8 patterns are backfilled into the table. The table is meant to be re-scanned during every parse, not memorised. **Intervention 2: Per-rule pre-output verification checklist as a new subsection of Section 10.** A yes/no walk in source-text language (not schema language) — one positive-form check per shipped rule, plus systemic checks for stat completeness, currency-encoding choice, derived combat stats, and Tier 3 playthrough discipline (no `manual_set` workarounds). Walked before emitting the final JSON; any "no" answer is a hard gate on shipping. **Intervention 3: Cross-references between related rules and a worked example for derived combat stats.** Section 7.2's "Parse the rules section" step now contains an explicit derived-attack-stat callout (with cross-reference to Section 7.5) directly in the workflow text, where an AI parsing a book's rules block will read it as part of the parse loop. Section 7.5's "Games without `attack_stat`" paragraph is expanded into a full subsection with a JSON+Lua worked example showing the canonical derived-stat encoding (`rules.attack_stat: null`, derived name NOT in `rules.stats[]`, round_script computes from component stats). The worked example is Windhammer-shaped (CV = Strength + Agility + bonuses) so a future feasibility probe re-running the codex on Windhammer can be measured directly against it. The DEV_PROCESS.md "Codex doc evolution discipline" meta-rule activates retroactively in this commit: every existing rule is now backfilled with both a decision-table entry AND a checklist entry, and every new rule from this point forward must ship its decision-table row and checklist line in the same commit. No book files are touched — this is a pure doc-prominence pass. The empirical test for whether the prominence interventions are sufficient is the Windhammer feasibility probe described in NEXT_SESSION.md item 3, run in the same session as this commit.
 - v2.8 — Damage interactions and equipment framework. Two independent but complementary mechanisms ship together to unblock several adjacent gaps. Schema bumped to GBF 1.5.0; both reference emulators bumped to 3.0.0 (major — the round_script contract is breaking). **Mechanism A: damage_interactions (Rule 18).** A new structured field on combat events (`damage_interactions`) and on enemies_catalog entries (`intrinsic_damage_interactions`) lets books express immunities, resistances, and weaknesses as multiplicative damage scaling rather than forcing them into the additive `combat_modifiers` shape from Rule 17. Each entry has a `kind` (immunity = 0x, resistance = 0.5x, weakness = 2x), an optional `multiplier` override, an optional `direction` (incoming/outgoing), optional source-tag filters (`source_has_any` / `source_lacks_all`), an optional `condition` gating the interaction on player state, and an optional `reason` string. The round_script contract changes in lockstep: round_scripts now report damage by setting `combat.damage_to_enemy` and `combat.damage_to_player` (bare number or list of `{amount, sources}` components), and do NOT mutate `*.health` directly. The emulator reads the reported damage, applies source-filtered interaction multipliers to each component per round, then subtracts the scaled total from the appropriate health value. This is a breaking change to the round_script contract — v3.0+ emulators reject scripts that write to `enemy.health` / `player.health`. The driving use case is Lone Wolf 2's Helghast ("immune to non-silver weapons") and compound-damage cases like a poisoned silver spear vs. a poison-immune silver-weak enemy, where the damage components must flow through the interaction filters independently. **Mechanism B: equipment framework (Rule 19).** A new structured equipment system on items_catalog entries: `equippable`, `slot` (free-form string, common suggested vocabulary: head/body/weapon/main_hand/off_hand/feet/hands/neck/finger_1/finger_2/back), `equip_timing` (always/out_of_combat/once, default out_of_combat), and `auto_equip` (default true). A new `properties` array on items holds tag strings like `silver` / `blessed` / `magical` that feed damage_interaction source filters and equipment-aware conditions. State gains a `character.equipment` map from slot to item_id. `stat_modifier.when` values `"equipped"` and `"combat"` are now honored by both emulators (previously silently ignored). Three new condition types: `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`. Equipment slots hold exactly one item; auto-equip displaces the previous occupant, which stays in inventory but is no longer active. Removing an equipped item clears its slot automatically. Player-driven equip/unequip actions gate on `equip_timing` (out_of_combat items cannot be swapped during a combat event). The driving use case is LW's one-weapon-at-a-time rule (per the Mongoose Publishing reprint errata: *"You may only use one Weapon at a time in combat"*), which is canonical not an inference, and LW's implicit head/body slots for the Helmet and Chainmail Special Items. Rule 17 updated to cross-reference Rule 18 and remove the deferred "ability immunity" note. Both emulators gain new UI panels: a Damage Interactions panel next to the existing Combat Modifiers panel showing active immunities/resistances/weaknesses, and an Equipment panel in the player sidebar showing each declared slot and its occupant with click-to-unequip affordance. All three maintained first-party books (LW1, Warlock, GrailQuest) are re-run through the updated codex via comprehensive-review sub-agents in the same session to migrate their round_scripts to the new contract and to apply equipment tagging to their items_catalog entries per Rule 19. Regression story: none of the three books populates any damage_interactions this session, and none of the existing combats key on equipment, so combat outcomes are byte-identical to pre-v2.8 runs — the mechanism is in place but unexercised until future book data (LW2, etc.) populates it. Schema changes are strictly additive; the round_script contract change is the only breaking piece, and it's contained by the lockstep book migration.
 - v2.7 — Combat modifiers (Batch 2). Schema bumped to GBF 1.4.0 with two new optional fields: `combat_modifiers` on combat events (for per-section narrative modifiers) and `intrinsic_modifiers` on enemies_catalog entries (for per-enemy-type traits that travel with the enemy across every section it appears in). Both fields accept a list of generic `combat_modifier` objects with shape `{target: dot-path, delta: number, condition?, reason?, duration?}`. The target is a dot-path string identifying any numeric field on `player` or `enemy` (not an enum), so the mechanism works for any combat system: `player.attack` for attack-vs-attack systems (Lone Wolf, Fighting Fantasy), `player.hit_threshold` / `player.damage_bonus` / `enemy.armor` for threshold-based systems (GrailQuest, many AD&D gamebooks). The design is deliberately series-agnostic and does not assume `attack_stat` is non-null, so it works on the full range of combat systems the stress test validated. The emulator evaluates each modifier's optional condition once at combat start, freezes the resulting list, and applies the passing deltas to playerData / enemyData before each round_script invocation. Per-section modifiers and per-enemy intrinsics stack additively. Both reference emulators (CLI 2.4.0 → 2.5.0, HTML 2.4.0 → 2.5.0) implement the mechanism identically. The HTML emulator's combat panel now displays the active modifier list alongside the special_rules text box so the player sees what's in effect. New Rule 17 in the codex doc specifies the encoding with worked examples for narrative surprise attacks, torch-penalty conditionals, threshold-based damage modifiers, and per-enemy Mindshield-conditional intrinsic traits. Rule 14 (Combat Modifier Scope) updated to cross-reference Rule 17: both fields should be populated on any combat with a mechanical modifier — `special_rules` text is for display, `combat_modifiers` is for enforcement. The schema change is strictly additive; books with no modifier fields continue to work unchanged. First tested against a synthetic book verifying condition evaluation, stacking of event-level and intrinsic modifiers, both buff and debuff deltas, and modifier application to multiple target fields (player.attack, enemy.armor, player.damage_bonus). All existing playbooks (LW, Warlock, WWY, GrailQuest — 10 total) pass with 0 errors since none of them currently populate the new fields.
 - v2.6 — Schema nullability + emulator gap fixes from the GrailQuest stress test. The first real test of the series-agnostic claim (running a Step 3a-1 review on GrailQuest 01: The Castle of Darkness, an unprofiled series with `series_profile: unknown` that uses unusual stat names like `LIFE POINTS` / `EXPERIENCE` / `GOLD` and has `attack_stat: null`) surfaced several schema and emulator gaps that were silently affecting quality on unprofiled books. This version closes them. Schema bumped to GBF 1.3.0 with these additive relaxations: `rules.attack_stat` is now nullable (for threshold-based combat systems that don't use a player attack stat); `combat_system.post_round_script` and `post_round_label` are now nullable (most books don't have a post-round phase); `rules.provisions.when_usable` is now nullable (for books where provisions are disabled); `roll_dice.results[range].target` is now nullable with explicit fall-through semantics (for branches that produce a side effect but don't navigate, e.g. "1-3 the lock holds, try again; 4-6 the lock breaks, turn to 42"); and a new `set_ability_uses` action is added to the character_creation step enum for books that track per-ability remaining-uses counters (limited-use spells, rationed potions-as-abilities, talents with fixed castings). Both reference emulators (CLI and HTML bumped to 2.4.0) gained corresponding changes: `set_resource` now falls through to `state.stats[name]` when the resource name matches a declared stat (so books like GrailQuest that carry currency as a first-class stat get the value instead of silently dropping it); `set_ability_uses` is handled via a new `state.abilityUses` map; the stat bar on both emulators now avoids rendering duplicate currency rows when a book already declares currency as a stat. Codex doc updates: Rule 10 (Enemy ID Naming) now explicitly permits bare snake-case names for unique enemies (only the `_s<N>` suffix is required for recurring generic enemy names that collide across sections); Rule 14 (Combat Modifier Scope) vocabulary extended with terse stat-block-style modifier phrasing ("first strike," "+N dmg," "need N+ to hit," etc.) to catch books like GrailQuest that use compressed stat-line modifiers instead of narrative phrasing; Section 7.2 (unprofiled-series Workflow) now documents both currency-encoding strategies (canonical-slot vs. stat encoding) and when to use which. This version also validates the series-agnostic principle for real: codex v2.6 + Section 7 + Rules 6–16 produce a fully-playable unprofiled-series file (GrailQuest probe 166/0, smoke 20/0) with a quality gap of less than 5% from a profiled parse. Post-schema-validation the remaining GrailQuest issues are all documented as DATA gaps (needs source re-parse) rather than SCHEMA / EMULATOR / CODEX RULE gaps.
