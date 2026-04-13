@@ -2521,16 +2521,22 @@ function handleCombat(event) {
     // window._combat so the flag resets naturally for the next fight.
     if (c.continueClicked) return;
     c.continueClicked = true;
-    // Remove the combat area from the DOM so the upcoming navigation
-    // (or remaining mid-section events / showChoices) has a clean
-    // content area to render into. For combats with a win_to target,
-    // navigateTo below also clears content.innerHTML wholesale, so this
-    // removal is idempotent. For mid-section combats with no win_to,
-    // this prevents the now-dead combat panel — including its dead
-    // Continue button — from cluttering the screen above the next
-    // event pause or the section's choices list.
-    if (c.area && c.area.parentNode) {
-      c.area.parentNode.removeChild(c.area);
+    // Clear the combat-actions container (the Continue button) so the
+    // player doesn't see a dead clickable button after the transition
+    // has started. The rest of the combat area — header, stats line,
+    // combat log, modifier / damage-interaction panels — is left in
+    // place on purpose: for mid-section combats (no win_to), the
+    // upcoming events / choices render below the combat area and the
+    // combat record stays on screen as a visible history of what just
+    // happened, until the player eventually clicks a choice that
+    // navigates to a new section (at which point navigateTo clears
+    // content.innerHTML wholesale). For combats with win_to, that
+    // innerHTML clear happens immediately on this same click, so
+    // clearing only .combat-actions here is a no-op overhead that
+    // keeps the behaviour uniform across both paths.
+    if (c.area) {
+      const actions = c.area.querySelector('.combat-actions');
+      if (actions) actions.innerHTML = '';
     }
     const target = c.combatEndTarget;
     if (target != null) navigateTo(target);
