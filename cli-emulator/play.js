@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.0.0';
+const CODEX_EMULATOR_VERSION = '3.0.1';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -2091,9 +2091,29 @@ function summarize(state, book) {
     lines.push(`[Combat: ${enemy.name}]`);
     const eAtt = getEnemyAttack(enemy.data, book);
     const eMax = getEnemyHealth(enemy.data, book);
+    // Display effective attack stats accounting for the frozen
+    // combat_modifiers list (schema v1.4). The round_script sees the
+    // modifier-adjusted values at attack time; we reproduce the scalar
+    // sum here so the status bar shows what's actually in effect.
+    // Format: "COMBAT SKILL 14 (base 15)" when a modifier is active,
+    // plain "COMBAT SKILL 15" when no modifier is active. Plain text
+    // only — no ANSI colour — so the output stays friendly to log files
+    // and the playbook regression harness.
+    const applied = state.combat.appliedModifiers || [];
+    const playerAtkDelta = applied
+      .filter(m => m && m.target === 'player.attack' && typeof m.delta === 'number')
+      .reduce((s, m) => s + m.delta, 0);
+    const enemyAtkDelta = applied
+      .filter(m => m && m.target === 'enemy.attack' && typeof m.delta === 'number')
+      .reduce((s, m) => s + m.delta, 0);
+    const fmt = (base, delta) => {
+      if (!delta) return String(base);
+      return `${base + delta} (base ${base})`;
+    };
     if (attackStat) {
-      lines.push(`  You: ${attackStat} ${state.stats[attackStat]}, ${healthStat} ${state.stats[healthStat]}/${state.initialStats[healthStat]}`);
-      lines.push(`  ${enemy.name}: ${attackStat} ${eAtt}, ${healthStat} ${enemy.currentHealth}/${eMax}`);
+      const playerBase = state.stats[attackStat];
+      lines.push(`  You: ${attackStat} ${fmt(playerBase, playerAtkDelta)}, ${healthStat} ${state.stats[healthStat]}/${state.initialStats[healthStat]}`);
+      lines.push(`  ${enemy.name}: ${attackStat} ${fmt(eAtt, enemyAtkDelta)}, ${healthStat} ${enemy.currentHealth}/${eMax}`);
     } else {
       lines.push(`  You: ${healthStat} ${state.stats[healthStat]}/${state.initialStats[healthStat]}`);
       lines.push(`  ${enemy.name}: ${healthStat} ${enemy.currentHealth}/${eMax}`);

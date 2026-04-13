@@ -621,7 +621,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.0.0';
+const CODEX_EMULATOR_VERSION = '3.0.1';
 // Pinned Lua runtime. The fengari-web.js bundle in this repo is a
 // committed static file (not installed via npm) built by webpack from
 // the fengari-web@0.1.4 source tree with its `fengari` core dep
@@ -2263,6 +2263,41 @@ function handleCombat(event) {
   const fleeTo = event.flee_to || null;
   const specialRules = event.special_rules || null;
 
+  // Sum the deltas of every applied combat_modifier whose dot-path target
+  // matches the given string (e.g. "player.attack"). Used by renderCombat
+  // to compute effective stat values for display. The full modifier
+  // application pipeline lives in combatAttack(); this helper is display-
+  // only and does not mutate any state.
+  function sumAppliedModifiersForTarget(appliedModifiers, target) {
+    if (!Array.isArray(appliedModifiers) || appliedModifiers.length === 0) return 0;
+    let sum = 0;
+    for (const m of appliedModifiers) {
+      if (m && m.target === target && typeof m.delta === 'number') sum += m.delta;
+    }
+    return sum;
+  }
+
+  // Format a combat stat (attack stat for player or enemy) as an HTML
+  // string suitable for the combat box stats-line. If the delta is zero
+  // the output is a plain unchanged "<LABEL> <VALUE>". If the delta is
+  // non-zero the output is "<LABEL> <EFFECTIVE> (base <BASE>)" where the
+  // effective value is coloured red (net penalty) or green (net buff),
+  // and the base value is shown in a dimmed parenthetical so the player
+  // can always see both numbers at a glance. The tooltip on hover spells
+  // out the modifier direction and magnitude.
+  function formatEffectiveStat(label, baseVal, delta) {
+    const safeBase = typeof baseVal === 'number' ? baseVal : 0;
+    const safeDelta = typeof delta === 'number' ? delta : 0;
+    if (safeDelta === 0) {
+      return `${label} ${safeBase}`;
+    }
+    const effective = safeBase + safeDelta;
+    const color = safeDelta < 0 ? 'var(--danger)' : 'var(--success)';
+    const sign = safeDelta >= 0 ? '+' : '';
+    const title = `base ${safeBase}, modifier ${sign}${safeDelta}, effective ${effective}`;
+    return `${label} <span class="effective-stat" style="color:${color};font-weight:bold" title="${title}">${effective}</span> <span style="color:var(--text-dim);font-size:0.85em">(base ${safeBase})</span>`;
+  }
+
   function renderCombat() {
     const c = window._combat;
     const enemy = c.enemies[c.currentEnemyIdx];
@@ -2272,6 +2307,22 @@ function handleCombat(event) {
     const playerAttack = getPlayerAttack();
     const enemyMaxHealth = getEnemyHealth(getEnemy(enemy.ref) || enemy);
     const enemyAttack = getEnemyAttack(enemy);
+
+    // Compute effective attack values for display, accounting for the
+    // frozen combat_modifiers list (schema v1.4). The math that the
+    // round_script actually sees happens in combatAttack(); here we
+    // reproduce the scalar-delta side of it (we sum every modifier whose
+    // `target` is "player.attack" or "enemy.attack") so the stats-line can
+    // show what's currently in effect. This is display-only — the
+    // authoritative math is still done per-round in combatAttack.
+    //
+    // A modifier with delta 0 does not change the display.
+    // A modifier with negative delta colours the effective value red.
+    // A modifier with positive delta colours the effective value green.
+    // The base value is shown in a dimmed parenthetical so the player can
+    // always see both the base and the effective number at a glance.
+    const playerAttackDelta = sumAppliedModifiersForTarget(c.appliedModifiers, 'player.attack');
+    const enemyAttackDelta = sumAppliedModifiersForTarget(c.appliedModifiers, 'enemy.attack');
 
     let html = `<div class="combat-header"><h3>COMBAT</h3>`;
     if (c.enemies.length > 1) {
@@ -2317,8 +2368,8 @@ function handleCombat(event) {
       html += `<div class="damage-interactions-panel"><div class="di-header">Damage Interactions</div>${rows}</div>`;
     }
 
-    const playerStatLine = (attackStat ? `${attackStat} ${playerAttack} | ` : '') + `${healthStat} ${playerHealth}`;
-    const enemyStatLine = (attackStat ? `${attackStat} ${enemyAttack} | ` : '') + `${healthStat} ${enemy.currentHealth}`;
+    const playerStatLine = (attackStat ? `${formatEffectiveStat(attackStat, playerAttack, playerAttackDelta)} | ` : '') + `${healthStat} ${playerHealth}`;
+    const enemyStatLine = (attackStat ? `${formatEffectiveStat(attackStat, enemyAttack, enemyAttackDelta)} | ` : '') + `${healthStat} ${enemy.currentHealth}`;
 
     html += `<div class="combatants">
       <div class="combatant player">
@@ -2454,6 +2505,33 @@ function handleCombat(event) {
   // section before they can read the outcome.
   window.combatContinueAfterEnd = function() {
     const c = window._combat;
+    if (!c) return;
+    // Guard against double-click / repeated Continue presses. Without
+    // this guard, a player who clicks Continue more than once after
+    // combat ends would re-fire the transition every time: for combats
+    // with a win_to target, a second click re-runs navigateTo() (not
+    // harmful visually because navigateTo clears content.innerHTML, but
+    // it does re-process the destination section's events); for mid-
+    // section combats with no win_to, each extra click re-runs
+    // processNextEvent() and — if all pending events have already been
+    // drained — re-runs showChoices(), which APPENDS another copy of
+    // the section's choice buttons to #game-content each time. The flag
+    // is only ever set on this specific combat instance, and a fresh
+    // combat (the next handleCombat call) assigns a new object to
+    // window._combat so the flag resets naturally for the next fight.
+    if (c.continueClicked) return;
+    c.continueClicked = true;
+    // Remove the combat area from the DOM so the upcoming navigation
+    // (or remaining mid-section events / showChoices) has a clean
+    // content area to render into. For combats with a win_to target,
+    // navigateTo below also clears content.innerHTML wholesale, so this
+    // removal is idempotent. For mid-section combats with no win_to,
+    // this prevents the now-dead combat panel — including its dead
+    // Continue button — from cluttering the screen above the next
+    // event pause or the section's choices list.
+    if (c.area && c.area.parentNode) {
+      c.area.parentNode.removeChild(c.area);
+    }
     const target = c.combatEndTarget;
     if (target != null) navigateTo(target);
     else processNextEvent();
