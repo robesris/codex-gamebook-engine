@@ -283,6 +283,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | Enemy stat block in the section: "Giak: COMBAT SKILL 14 ENDURANCE 12" or "Troll: SKILL 9 STAMINA 10" | Rule 8 | `combat` event with `enemy_ref`; the `special_rules` text comes ONLY from the section that introduces this specific enemy — never templated from other Vordaks/Trolls |
 | The same enemy name appears in multiple sections with different stats (Giak, Kraan, Goblin, Skeleton) | Rule 10 | `<enemy>_s<N>` id where N is the section that introduces the variant; the suffix is required for recurring generic names |
 | One-of-a-kind named antagonist (final boss, unique wizard, the Warlock himself) | Rule 10 (exception) | Bare snake-case id (`warlock_of_firetop_mountain`, `vampire_lord_markos`) is acceptable when the name is genuinely unique across the whole book |
+| "You find X" / "You take X" / "You may keep X" / "Deeper in the bag is Y" / "X lies at your feet" / "note this on your Action Chart" / reward or gift phrasing / container+positional phrasing for any item — with OR without the canonical Action-Chart trigger | Rule 20 | One `add_item` event per item described (compound pickup paragraphs fire multiple events); `choose_items` when the text lists "one of the following" alternatives; items_catalog entry added if the item is new |
 | "Roll a die, lose/gain that many points" — die is the *quantity*, not the routing | Section 7.6 → Pattern 7.6.5 | `roll_dice` event with the die's outcome funneled into `apply_to_stat` — NOT a `script` event |
 | "Sequential N Luck tests" / "test Luck three times in a row" | Section 7.6 → Pattern 7.6.3 | `script` event using a Lua loop over `roll('1d6')` calls and the `luck_in_combat` global |
 | "Restore [stat] to its Initial value" | Section 7.6 → Pattern 7.6.1 | `script` event reading `initial_stats` and writing `player_stats` |
@@ -863,6 +864,50 @@ The `has_equipped_with_property` condition is particularly important for damage_
 **What Rule 19 does not do:** it does not add a full inventory UI (that's an emulator concern), it does not implement encumbrance beyond the existing `inventory.capacity` rule, it does not model durability, and it does not handle item enchantment beyond what `properties` can express. These are potential future extensions, but none are required to ship the equipment framework.
 
 **Round_script access.** Round_scripts that care about active equipment can read `player.equipment` — a table mapping slot name to item_id (or nil for empty slots). Example use: a book where the weapon's damage formula depends on the weapon's type (sword does 1d6, axe does 1d8) can look up `player.equipment.weapon`, fetch the corresponding items_catalog entry, and select the formula. Most current round_scripts do not need this — they work with the modifier-based system from Rule 17 — but it's available for books that do.
+
+### Rule 20: Loot-Detection Vocabulary (Scan Every Section for Pickup Phrasing)
+
+Every section whose narrative describes the player finding, receiving, or being offered an item MUST emit a corresponding `add_item` event — or a `choose_items` event when the text offers a selection from a list. This sounds obvious, but it is a high-frequency silent failure mode because the pickup phrasing in real gamebooks is surprisingly varied. The canonical "note this on your Action Chart" trigger appears in only a fraction of pickups; a parser (or reader) that gates on it alone misses most of the loot in a typical book. Rule 20 gives pickup detection its own dedicated rule, decision-table row, and pre-output checklist entry so it cannot be quietly missed the way it was in LW1 iters 5–12 (nine sections with loot text, no pickup events — see the LW iter 13 worked example below).
+
+**The vocabulary to scan for.** When reading a section, treat any sentence matching **any** of the patterns below as a probable pickup. A sentence containing an item name AND any of the verbs / phrases below is a probable pickup even if the canonical Action-Chart trigger is absent. The Action-Chart trigger is a **strong corroborating signal, not a required signal** — many sections describe pickups without ever invoking it.
+
+- **Action verbs.** find / discover / spot / notice / see / take / grab / pick up / take with you / take it / take these items / keep / may keep / decide to keep / carry / carry it with you / acquire / receive / are given.
+- **Permission phrasing.** "you may take …", "you may keep …", "you decide to take …", "you may pick up …", "you may pick up and use …", "you are allowed to take …", "in your possession …", "you may add … to your inventory".
+- **Canonical Action-Chart trigger.** "note this on your Action Chart", "mark this on your Action Chart", "note these on your Action Chart", "add this to your Action Chart".
+- **Container / bundle phrasing.** "wrapped in a bundle is …", "inside the box is …", "inside the chest is …", "deep within the chest is …", "deeper in the bag is …", "at the bottom of the pouch is …", "underneath the rags is …", "amid the contents of the pack is …", "tucked beneath … is …", "hidden within … is …".
+- **Postural / positional phrasing.** "X lies at your feet", "X rests against the wall", "X sits on the table", "X hangs from the belt", "X is clutched in the dead hand of …", "before you on the ground is …", "beside the body lies …", "on the floor / table / shelf is …".
+- **Enumerated lists.** "you find one of the following: …", "you may choose one of these: …", "pick one from the list: …", "among the items here are: …", "the following items are here: …" — these map to a `choose_items` event, not a single `add_item`.
+- **Gift / reward / payment phrasing.** "as a reward, you receive …", "the merchant offers you …", "you are given …", "he presses X into your hand", "the old man hands you …", "in payment, he gives you …", "in exchange, you may take …".
+
+**Compound pickup sentences.** A single sentence or paragraph can describe multiple pickups. Emit **one event per item**, not one event for the whole paragraph. Positional phrasing ("Deeper in the bag is …") describing a second or third item in the same container is still pickup phrasing and still earns its own `add_item` event. Real example from LW1 section 267:
+
+```
+Opening the bag, you find a Message written on an animal skin depicting
+the location of Ghal, the Giak hideout. Deeper in the bag is a Dagger.
+You may keep both the Message and the Dagger if you wish.
+```
+
+Correct encoding — two pickup events:
+
+```json
+"events": [
+  {"type": "add_item", "item": "message_ghal_location"},
+  {"type": "add_item", "item": "dagger"}
+]
+```
+
+Plus a new `message_ghal_location` entry in `items_catalog` for the Message if one does not already exist. A parser that gates on "note this on your Action Chart" alone misses this section entirely because the canonical trigger phrase is absent — yet the pickup is unambiguous from the combination of "you find a Message," "Deeper in the bag is a Dagger," and "You may keep both."
+
+**Cross-verification pass (required during comprehensive review).** After parsing all sections (or during a Step 3a-1 comprehensive review of an existing book), walk every section's text once more with this rule's vocabulary open in your context, looking specifically for item-name + pickup-phrase matches that do NOT have a corresponding `add_item` / `choose_items` event in the section's `events[]` array. Every miss is a silent failure: the player reads the narrative about finding the item, but the emulator never puts the item in the inventory, so any later section gated on `has_item` will fail incorrectly and the book has a stealth-impassable path.
+
+**What NOT to trigger on (false positives to avoid):**
+
+- **Narrative description of items the player does NOT take.** "The guard wears a golden ring on his finger" is not a pickup unless the section also describes the player taking the ring.
+- **Flavor description of equipment the player already has.** "Your sword gleams in the torchlight" is not a pickup — the player already acquired the sword earlier.
+- **Hypothetical / conditional phrasing the player declines.** "If you had a key, you could open this door" is not a pickup — no key is being offered.
+- **Items named only in a choice target, not in the current section's body.** A choice text reading "If you pick up the lantern, turn to 42" is a choice offering, not a current-section pickup — the actual `add_item` event belongs in section 42 (if the player takes the choice).
+
+**Relationship to Rule 7 (parser-driven workflow).** Rule 7 describes *how* to scan for pickup phrasing mechanically (regex / keyword search in a parser script). Rule 20 describes *what* vocabulary to scan for and establishes the cross-verification pass as a hard gate. Rule 7 is the method, Rule 20 is the specification. During comprehensive reviews of existing book JSONs that were parsed under an older codex version, Rule 20 is the rule to apply section-by-section, flagging and fixing silently-missing loot events. The vocabulary list in Section 9.5 Phase C is indicative and should be kept in sync with Rule 20; when they differ, Rule 20 is canonical.
 
 ---
 
@@ -2461,6 +2506,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 **Rule 18 (Damage interactions).** For every immunity, resistance, or weakness the book describes that scales damage rather than adding to a stat input ("immune to non-silver weapons," "takes half damage from blunt," "double damage from fire"), I encoded it as a `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) entry — not as a large negative `combat_modifier`. The round_script reports damage as `combat.damage_to_enemy` / `combat.damage_to_player` (not by mutating `*.health` directly), and uses the full `{amount, sources}` component-list form for any attack that deals more than one damage type in one swing.
 
 **Rule 19 (Equipment slots).** For every item the player can wear, wield, or otherwise have "equipped" by putting it on (the book uses words like "wearing," "wielding," "worn," "you may only use one weapon at a time," "the helmet you are wearing"), the items_catalog entry has `equippable: true`, a `slot` name, an `equip_timing`, and an `auto_equip` value. Cursed permanent items use `equip_timing: "once"`. `stat_modifier.when: "equipped"` is set on bonuses that should only apply when the item is in its slot. I did not encode equipment implicitly through narrative or ad-hoc flags. **Wielded items whose book allows mid-combat swapping use `equip_timing: "always"`** (e.g. Lone Wolf weapons, where the Mongoose clarification "you may only use one Weapon at a time in combat" constrains which weapon is *active* in a round, not when the player may toggle the active-weapon slot between the two they are allowed to carry). **Worn items whose physical-realism framing precludes mid-fight swapping use `equip_timing: "out_of_combat"`** (LW helmet, LW chainmail, Warlock leather armour, FF/AD&D armor generally). The distinguishing test is whether the book describes the item as something the player *actively selects each round* (→ `always`) versus something the player *puts on in a safe moment and takes off in a similar safe moment* (→ `out_of_combat`).
+
+**Rule 20 (Loot-detection vocabulary).** I walked every section's text once more looking specifically for pickup phrasing — not just "note this on your Action Chart," but also container/positional phrasing ("deeper in the bag is," "at the bottom of," "wrapped in a bundle is," "X lies at your feet"), permission phrasing ("you may take / keep / pick up"), gift/reward phrasing ("you are given," "hands you," "as a reward"), and enumerated lists ("one of the following," "pick from these"). Every sentence containing an item name AND any pickup-phrase trigger has a corresponding `add_item` event in the section's `events[]` (or a `choose_items` event when the text offers a list). Compound pickup paragraphs fire one event per item, not one event for the whole paragraph. No item-name + pickup-phrase sentence is left without a structured event — the cross-verification pass is a hard gate, not a soft suggestion.
 
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised.
 
