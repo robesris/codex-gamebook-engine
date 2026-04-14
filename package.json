@@ -2,6 +2,7 @@
   "name": "codex-gamebook-engine",
   "version": "2.1.0",
   "description": "CLI emulator and tooling for playing Gamebook Format (GBF) JSON game files",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "play": "node cli-emulator/play.js",

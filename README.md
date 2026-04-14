@@ -49,3 +49,9 @@ No build step required. Just open `index.html` directly in your browser — no s
 - Save/load via localStorage
 - Export/import game state as JSON files
 - Debug panel for inspecting game state
+
+## License
+
+Codex Gamebook Engine is released under the [MIT License](LICENSE). No copyrighted gamebook content is included in this repository — you bring your own books.
+
+This repository bundles `fengari-web.js`, a webpack build of [Fengari](https://fengari.io/) (a Lua 5.3 VM written in JavaScript), which is also distributed under the MIT License. Upstream copyrights for the bundled file are Benoit Giannangeli, Daurnimator, and Lua.org / PUC-Rio. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full notices.
