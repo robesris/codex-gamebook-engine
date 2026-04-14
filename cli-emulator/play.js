@@ -336,6 +336,17 @@ function initialState(bookPath) {
     // a `return_to_caller` event fires in the reference (auto-return)
     // implementation. Empty by default. See codex section 7.6.8.
     returnStack: [],
+    // Tier 3 partial-run tracking (Rule 16 / codex v2.9.0). Every
+    // `manual_set` debug-escape-hatch invocation appends a record here
+    // so the run summary can report `tier3_status: "PARTIAL"` to the
+    // playbook harness. If the array stays empty the run is
+    // `tier3_status: "CLEAN"`. Sub-agents running Tier 3 comprehensive
+    // reviews MUST NOT rely on `manual_set` to paper over missing
+    // character-creation steps or missing schema mechanisms; the
+    // reporting here is designed to make such workarounds loud, not to
+    // whitewash them. See DEV_PROCESS.md failure mode 4
+    // ("workaround-as-success reporting").
+    manualSets: [],
     pause: { type: 'frontmatter' },
     eventQueue: [],
     combat: null,
@@ -1319,6 +1330,20 @@ function applyAction(state, book, action, args) {
     // Try to parse as number/JSON
     let parsed;
     try { parsed = JSON.parse(val); } catch { parsed = val; }
+    // Record the invocation BEFORE applying it so the Tier 3 partial
+    // marker survives even if the apply path throws. The record is
+    // deliberately prominent in both the log and the structured
+    // `state.manualSets` array — these are the two channels the
+    // playbook harness consumes (log tail for humans, manualSets for
+    // the JSON envelope's `tier3_status` field).
+    if (!Array.isArray(state.manualSets)) state.manualSets = [];
+    state.manualSets.push({
+      key,
+      value: parsed,
+      section: state.currentSection,
+      creationStep: state.creationDone ? null : state.creationStep,
+    });
+    state.log.push(`!!! manual_set ${key}=${val} — run will be reported as TIER 3 PARTIAL !!!`);
     if (key.startsWith('stats.')) {
       state.stats[key.slice(6)] = parsed;
     } else if (key === 'currentSection') {
@@ -2043,6 +2068,10 @@ function compactState(state) {
     creationDone: state.creationDone,
     frontmatterPage: state.frontmatterPage,
     frontmatterDone: state.frontmatterDone,
+    // Tier 3 partial-run tracking survives across act calls and
+    // save/load. Empty array means the run is still a candidate for
+    // TIER 3 CLEAN; any entry downgrades it to TIER 3 PARTIAL.
+    manualSets: Array.isArray(state.manualSets) ? state.manualSets : [],
     log: state.log.slice(-20), // Keep recent log entries only
   };
   return out;
@@ -2053,6 +2082,22 @@ function compactState(state) {
 function summarize(state, book) {
   const lines = [];
   const { healthStat, attackStat } = getCombatStats(book);
+
+  // Tier 3 partial-run warning banner (Rule 16 / codex v2.9.0). When
+  // the playbook has invoked `manual_set` even once, the run is NOT a
+  // valid Tier 3 playthrough — it was papered over with a debug
+  // escape hatch and must be reported accordingly. The banner goes
+  // at the TOP of the summary so it cannot be skimmed past in a log
+  // dump. See DEV_PROCESS.md failure mode 4 ("workaround-as-success
+  // reporting") for the full rationale.
+  const manualSets = Array.isArray(state.manualSets) ? state.manualSets : [];
+  if (manualSets.length > 0) {
+    lines.push(`[!!! TIER 3 PARTIAL — ${manualSets.length} manual_set invocation(s) used this run !!!]`);
+    for (const ms of manualSets) {
+      const where = ms.section != null ? `section ${ms.section}` : (ms.creationStep != null ? `creation step ${ms.creationStep}` : 'pre-creation');
+      lines.push(`  manual_set ${ms.key}=${JSON.stringify(ms.value)} at ${where}`);
+    }
+  }
 
   if (state.pause?.type === 'frontmatter') {
     const page = (book.frontmatter?.pages || [])[state.frontmatterPage];
@@ -2241,11 +2286,22 @@ function output(state, book, isDry) {
   const compact = compactState(state);
   const summary = summarize(state, book);
   const actions = getAvailableActions(state, book);
+  // Tier 3 partial-run flag (Rule 16 / codex v2.9.0). A Tier 3
+  // comprehensive playthrough is CLEAN only if no `manual_set` debug
+  // escape hatch was invoked during the run. Any invocation flips
+  // the run to PARTIAL and the reason for each invocation is
+  // surfaced in `manualSets` on the compact state. The playbook
+  // harness (replay.js and the sub-agent prompts) must treat PARTIAL
+  // runs as non-regression — a papered-over gap, not a passing run.
+  const manualSets = Array.isArray(state.manualSets) ? state.manualSets : [];
+  const tier3Status = manualSets.length === 0 ? 'CLEAN' : 'PARTIAL';
   const envelope = {
     state: compact,
     summary,
     available_actions: actions,
     is_dry_run: !!isDry,
+    tier3_status: tier3Status,
+    tier3_manual_sets: manualSets,
   };
   console.log(JSON.stringify(envelope, null, 2));
 }
