@@ -938,9 +938,37 @@ function handleEvent(event, state, book) {
     case 'roll_dice':
       state.pause = { type: 'roll_dice', event };
       return 'pause';
-    case 'eat_meal':
+    case 'eat_meal': {
+      // Zero-food auto-penalty path (codex v2.9.0 / schema v1.6.0).
+      // Rule 15's event-level `condition` field handles the exemption
+      // case (e.g. LW Hunting discipline): if the condition evaluates
+      // false at event dispatch, the event is never reached here. If
+      // we ARE here and the event is `required: true`, the player has
+      // no exempting ability AND the event must resolve — but
+      // getAvailableActions exposes neither "eat" (no food) nor "skip"
+      // (required:true) if the player has zero provisions and zero
+      // meals. That's a deadlock. The book's intent in that situation
+      // is "the player could not eat, so they take the penalty," so
+      // we auto-apply the penalty at dispatch time and advance without
+      // pausing. Pre-v2.9 emulators silently swallowed this case (no
+      // pause, no penalty, no log) — see LW1 section 235 entry in
+      // known_issues.md.
+      const hasFood = state.provisions > 0 || state.meals > 0;
+      if (event.required && !hasFood) {
+        const penStat = event.penalty_stat || book.rules?.provisions?.heal_stat || 'endurance';
+        const penalty = (typeof event.penalty_amount === 'number') ? event.penalty_amount : 0;
+        if (penalty !== 0) {
+          const old = state.stats[penStat] || 0;
+          state.stats[penStat] = Math.max(0, old + penalty);
+          state.log.push(`No ${book.rules?.provisions?.display_name || 'provisions'} to eat: ${penStat} ${penalty >= 0 ? '+' : ''}${penalty}`);
+        } else {
+          state.log.push(`No ${book.rules?.provisions?.display_name || 'provisions'} to eat (required meal, no penalty defined)`);
+        }
+        return processNextEvent(state, book);
+      }
       state.pause = { type: 'eat_meal', event };
       return 'pause';
+    }
     case 'input_number':
       state.pause = { type: 'input_number', event };
       return 'pause';
@@ -1581,7 +1609,9 @@ function applyAction(state, book, action, args) {
 
     case 'eat_meal': {
       const event = state.pause.event;
-      if (action === 'eat') {
+      const hasFood = state.provisions > 0 || state.meals > 0;
+      if (action === 'eat' && hasFood) {
+        // Normal eat path: decrement food, apply heal.
         const heal = event.heal_amount || book.rules?.provisions?.heal_amount || 4;
         const stat = event.heal_stat || book.rules?.provisions?.heal_stat || 'stamina';
         if (state.provisions > 0) state.provisions--;
@@ -1594,8 +1624,34 @@ function applyAction(state, book, action, args) {
         }
         state.stats[stat] = newVal;
         state.log.push(`Ate a meal: +${heal} ${stat}`);
+      } else if (action === 'eat' && !hasFood) {
+        // Defense in depth: the dispatch path auto-applies the
+        // required-meal penalty when hasFood is false, so we should
+        // not normally land here. If we do (e.g. the eat action was
+        // somehow exposed without food), treat it as the no-food
+        // required-meal case.
+        if (event.required && typeof event.penalty_amount === 'number' && event.penalty_amount !== 0) {
+          const penStat = event.penalty_stat || book.rules?.provisions?.heal_stat || 'endurance';
+          const old = state.stats[penStat] || 0;
+          state.stats[penStat] = Math.max(0, old + event.penalty_amount);
+          state.log.push(`No ${book.rules?.provisions?.display_name || 'provisions'} to eat: ${penStat} ${event.penalty_amount >= 0 ? '+' : ''}${event.penalty_amount}`);
+        } else {
+          state.log.push('No food available to eat');
+        }
       } else {
-        state.log.push('Skipped meal');
+        // Skip path. If the event is required with a penalty, apply
+        // the penalty. getAvailableActions only exposes the skip
+        // action when !event.required, so this branch is primarily
+        // defensive — it catches the case where a harness or debug
+        // override drives `skip` on a required meal.
+        if (event.required && typeof event.penalty_amount === 'number' && event.penalty_amount !== 0) {
+          const penStat = event.penalty_stat || book.rules?.provisions?.heal_stat || 'endurance';
+          const old = state.stats[penStat] || 0;
+          state.stats[penStat] = Math.max(0, old + event.penalty_amount);
+          state.log.push(`Skipped required meal: ${penStat} ${event.penalty_amount >= 0 ? '+' : ''}${event.penalty_amount}`);
+        } else {
+          state.log.push('Skipped meal');
+        }
       }
       state.pause = null;
       return processNextEvent(state, book);
