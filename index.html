@@ -1226,14 +1226,23 @@ function nextFrontmatterPage() {
 
 // ==================== CHARACTER CREATION ====================
 function startCharacterCreation() {
-  // Reset state for a fresh character
+  // Reset state for a fresh character.
+  // Codex v2.9 / schema v1.6: provisions auto-init from
+  // rules.provisions.starting_amount when present. See Rule 21 for
+  // the full story and the CLI emulator's startCharacterCreation
+  // for the matching logic.
+  const startingProvisions =
+    (typeof gameData?.rules?.provisions?.starting_amount === 'number' &&
+     gameData.rules.provisions.starting_amount >= 0)
+      ? gameData.rules.provisions.starting_amount
+      : 0;
   state = {
     stats: {},
     initialStats: {},
     inventory: [],
     equipment: {},
     flags: new Set(),
-    provisions: 0,
+    provisions: startingProvisions,
     gold: 0,
     meals: 0,
     potion: null,
@@ -1577,14 +1586,17 @@ function showEquipmentAndBegin() {
     li.textContent = getItemName(item);
     list.appendChild(li);
   }
+  // Codex v2.9 / schema v1.6: provisions are the canonical slot, with
+  // rules.provisions.display_name providing the book-specific label
+  // ("Meals" for LW, "Rations" elsewhere). Read state.provisions only;
+  // legacy state.meals is intentionally not rendered here because
+  // every correct encoding routes to state.provisions. See Rule 21 in
+  // gamebook_codex_v2.md and the known_issues.md entry on LW1's three
+  // disjoint provisions slots for the motivation.
   if (state.provisions > 0) {
     const li = document.createElement('li');
-    li.textContent = `Provisions (${state.provisions})`;
-    list.appendChild(li);
-  }
-  if (state.meals > 0) {
-    const li = document.createElement('li');
-    li.textContent = `Meals (${state.meals})`;
+    const provLabel = gameData.rules?.provisions?.display_name || 'Provisions';
+    li.textContent = `${provLabel} (${state.provisions})`;
     list.appendChild(li);
   }
   if (state.gold > 0) {

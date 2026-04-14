@@ -730,6 +730,23 @@ function getEnemyAttack(enemy, book) {
 function startCharacterCreation(state, book) {
   state.pause = { type: 'character_creation' };
   state.creationStep = 0;
+  // Codex v2.9 / schema v1.6: provisions are a resource counter, not
+  // an inventory item. The canonical encoding for any book that uses
+  // meals/rations/provisions/food as a character-sheet counter is
+  // `state.provisions`, optionally labeled via
+  // `rules.provisions.display_name`. The authoritative starting value
+  // is `rules.provisions.starting_amount` — when present, auto-init
+  // state.provisions here so the emulator has the right count even
+  // when the book's character_creation.steps[] forgets to explicitly
+  // set_resource provisions, or (worse) sets the wrong slot name like
+  // `set_resource resource:"meals"` that doesn't route to the
+  // canonical slot. See Rule 21 in gamebook_codex_v2.md for the full
+  // encoding story and the known_issues.md "starting Meal not
+  // surfaced" entry for the LW1 instance that motivated this.
+  const startingProvisions = book?.rules?.provisions?.starting_amount;
+  if (typeof startingProvisions === 'number' && startingProvisions >= 0) {
+    state.provisions = startingProvisions;
+  }
   return processCreationSteps(state, book);
 }
 
