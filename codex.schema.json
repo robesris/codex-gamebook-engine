@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.5.0",
+  "title": "Gamebook Format (GBF) v1.6.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],

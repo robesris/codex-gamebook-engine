@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.0.3';
+const CODEX_EMULATOR_VERSION = '3.1.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
