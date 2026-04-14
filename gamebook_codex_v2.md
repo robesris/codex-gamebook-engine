@@ -901,24 +901,20 @@ Every section whose narrative describes the player finding, receiving, or being 
 - **Enumerated lists.** "you find one of the following: …", "you may choose one of these: …", "pick one from the list: …", "among the items here are: …", "the following items are here: …" — these map to a `choose_items` event, not a single `add_item`.
 - **Gift / reward / payment phrasing.** "as a reward, you receive …", "the merchant offers you …", "you are given …", "he presses X into your hand", "the old man hands you …", "in payment, he gives you …", "in exchange, you may take …".
 
-**Compound pickup sentences.** A single sentence or paragraph can describe multiple pickups. Emit **one event per item**, not one event for the whole paragraph. Positional phrasing ("Deeper in the bag is …") describing a second or third item in the same container is still pickup phrasing and still earns its own `add_item` event. Real example from LW1 section 267:
+**Compound pickup sentences.** A single sentence or paragraph can describe multiple pickups. Emit **one event per item**, not one event for the whole paragraph. Positional phrasing describing a second or third item in the same container is still pickup phrasing and still earns its own `add_item` event.
 
-```
-Opening the bag, you find a Message written on an animal skin depicting
-the location of Ghal, the Giak hideout. Deeper in the bag is a Dagger.
-You may keep both the Message and the Dagger if you wish.
-```
-
-Correct encoding — two pickup events:
+The pattern to recognise: an opening clause that accesses a container (e.g. an "Opening the X…" construction), a find-verb naming the first item, a positional or spatial construction introducing a second item in the same container ("Deeper in / Underneath / At the bottom of / Tucked beside… is …"), and a concluding clause granting the player explicit permission to keep "both" (or "all" for three or more items). Each item named gets its own `add_item` event; the concluding permission clause covers the whole set. Generic illustration:
 
 ```json
 "events": [
-  {"type": "add_item", "item": "message_ghal_location"},
+  {"type": "add_item", "item": "note_01"},
   {"type": "add_item", "item": "dagger"}
 ]
 ```
 
-Plus a new `message_ghal_location` entry in `items_catalog` for the Message if one does not already exist. A parser that gates on "note this on your Action Chart" alone misses this section entirely because the canonical trigger phrase is absent — yet the pickup is unambiguous from the combination of "you find a Message," "Deeper in the bag is a Dagger," and "You may keep both."
+Plus a new `items_catalog` entry for any item that does not already exist (e.g. a note or scrap of paper, if it plays a gating role in a later section via `has_item`). A parser that gates on a single canonical "note this on your character sheet" trigger alone misses this case entirely because the canonical phrasing is absent — yet the pickup is unambiguous from the combination of find-verb, positional construction, and permission clause.
+
+Motivating real-world case: LW1's section 267 has this exact compound-pickup pattern and was missing both pickup events in iters 5–12 (tracked in the books-repo `known_issues.md`; the fix is in scope for LW iter 13).
 
 **Cross-verification pass (required during comprehensive review).** After parsing all sections (or during a Step 3a-1 comprehensive review of an existing book), walk every section's text once more with this rule's vocabulary open in your context, looking specifically for item-name + pickup-phrase matches that do NOT have a corresponding `add_item` / `choose_items` event in the section's `events[]` array. Every miss is a silent failure: the player reads the narrative about finding the item, but the emulator never puts the item in the inventory, so any later section gated on `has_item` will fail incorrectly and the book has a stealth-impassable path.
 
