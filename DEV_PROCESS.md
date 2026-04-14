@@ -44,6 +44,12 @@ If your prompt is ambiguous about whether you are authorized — e.g., it says "
 
 Do NOT refuse a well-scoped comprehensive-review task by citing this rule. That refusal is itself a misapplication of the rule and creates a different failure mode: the main session cannot run the production line, so either it hand-edits the book anyway (violating the rule for real) or book migrations stall indefinitely. Either outcome is worse than the sub-agent proceeding with its authorized task.
 
+**Your scope is STRICTLY the target book file(s) named in your prompt.** Any supplementary file your prompt hands you — the codex doc, the schema, emulator source, other books, walkthroughs, known-issues tracking, dev-process docs — is a READ-ONLY input to your review. Do not edit it. Not a single line. Not even if you believe doing so would make the book's encoding work better, or would resolve an ambiguity, or would fix a bug in the reference material itself.
+
+If during your review you conclude that the emulator, schema, or codex doc needs to change to correctly support the book you're editing — e.g., the book needs a new schema field, or the emulator handles an event type incorrectly, or a codex rule is ambiguous — do NOT edit the reference file. Flag the finding in your report, under an "upstream concerns" or "open questions" section, and let the main session decide how to address it.
+
+The production line runs upstream-to-downstream: codex rules → schema → emulators → book data. A sub-agent that edits an emulator (or schema, or codex rule) to match a book inverts that direction and creates exactly the silent drift the HARD RULE is meant to prevent. If a reference file needs to change, that is a different kind of work (a codex/schema/emulator improvement track) and it belongs in a different commit than the book edits — possibly in a different session entirely. Your refusal to edit reference files is the rule working as designed.
+
 ### The one main-session exception
 
 **Targeted Fix mode (Step 3a-2)**, described in the "would a rule have prevented this?" section below. Reserved for genuine one-offs where no general rule improvement would catch the issue — a typo in the source book that the codex correctly preserved, or a house rule so unusual that any general rule covering it would over-fit. **For first-party maintained books this should be rare.** When you do use it, document the reasoning in the commit message so future maintainers can see why we deviated.
