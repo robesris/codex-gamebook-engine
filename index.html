@@ -1305,6 +1305,44 @@ function startCharacterCreation() {
         <span class="stat-value">${result.total}</span>
       `;
       rollContainer.appendChild(div);
+    } else if (step.action === 'roll_resource') {
+      // Schema v1.6+ / codex v2.9+. Roll into a canonical resource
+      // slot (gold/provisions/meals) or a declared-stat-currency.
+      // See Rule 11 in gamebook_codex_v2.md and the CLI emulator's
+      // character_creation_roll_resource pause handler for the full
+      // routing story.
+      const result = rollDice(step.formula);
+      const total = result.total;
+      const rname = step.resource;
+      let displayLabel = rname;
+      if (rname === 'gold') {
+        state.gold = total;
+        displayLabel = gameData.rules?.inventory?.currency_display_name || 'Gold';
+      } else if (rname === 'provisions') {
+        state.provisions = total;
+        displayLabel = gameData.rules?.provisions?.display_name || 'Provisions';
+      } else if (rname === 'meals') {
+        state.meals = total;
+        displayLabel = 'Meals';
+      } else {
+        const statDefs = gameData.rules?.stats || [];
+        const matchingStat = statDefs.find(s => s.name === rname);
+        if (matchingStat) {
+          state.stats[rname] = total;
+          if (matchingStat.initial_is_max) state.initialStats[rname] = total;
+        } else {
+          console.warn(`roll_resource: unknown resource "${rname}" (not canonical, not a declared stat); value ${total} discarded`);
+        }
+      }
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
+      div.innerHTML = `
+        <span class="stat-name">${displayLabel}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
+        <span class="stat-value">${total}</span>
+      `;
+      rollContainer.appendChild(div);
     } else if (step.action === 'choose_one') {
       interactiveSteps.push({ type: 'choose_one', step });
     } else if (step.action === 'choose_abilities') {
@@ -1396,6 +1434,33 @@ function processCreationSteps(steps, items) {
         <span class="stat-name">${step.stat}</span>
         <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
         <span class="stat-value">${result.total}</span>
+      `;
+      rollContainer.appendChild(div);
+    } else if (step.action === 'roll_resource') {
+      const result = rollDice(step.formula);
+      const total = result.total;
+      const rname = step.resource;
+      let displayLabel = rname;
+      if (rname === 'gold') { state.gold = total; displayLabel = gameData.rules?.inventory?.currency_display_name || 'Gold'; }
+      else if (rname === 'provisions') { state.provisions = total; displayLabel = gameData.rules?.provisions?.display_name || 'Provisions'; }
+      else if (rname === 'meals') { state.meals = total; displayLabel = 'Meals'; }
+      else {
+        const statDefs = gameData.rules?.stats || [];
+        const matchingStat = statDefs.find(s => s.name === rname);
+        if (matchingStat) {
+          state.stats[rname] = total;
+          if (matchingStat.initial_is_max) state.initialStats[rname] = total;
+        } else {
+          console.warn(`deferred roll_resource: unknown resource "${rname}" (value ${total} discarded)`);
+        }
+      }
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
+      div.innerHTML = `
+        <span class="stat-name">${displayLabel}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
+        <span class="stat-value">${total}</span>
       `;
       rollContainer.appendChild(div);
     } else if (step.action === 'add_item') {

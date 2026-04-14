@@ -263,9 +263,10 @@ The table exists because the codex doc is read by an AI that does not search it 
 
 | If the book's source text says or implies … | Apply | Where to encode it |
 |---|---|---|
-| "Roll dice / pick a number / choose / distribute points" to determine a starting stat or resource at character creation | Rule 11 | A `character_creation.steps[]` entry whose `action` actually rolls or prompts (`roll_stat`, `set_resource`, `choose_ability`, etc.) — never a `set_resource` with `amount: 0` and a descriptive `source` |
+| "Roll dice / pick a number" to determine a starting **stat** (COMBAT SKILL, STAMINA, SKILL, LUCK, HP — anything declared in `rules.stats[]`) at character creation | Rule 11 | `roll_stat` action with the declared stat name and the formula |
+| "Roll dice / pick a number" to determine a starting **resource** (Gold Crowns, Provisions, Meals, or any currency the book treats as a counter rather than a free-form stat) at character creation | Rule 11 (schema v1.6+ `roll_resource`) | `roll_resource` action writing to the canonical slot (`gold` / `provisions` / `meals`) or to a declared-stat-currency matching `rules.stats[].name`. NEVER `roll_stat` into a scratch stat name like `starting_gold_crowns` (the LW1 pre-iter-13 anti-pattern) — that rolls but the value doesn't flow to the slot the game reads from |
 | "Combat stat is computed from other stats" — e.g. `CV = Strength + Agility + bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dex + Class + Level` | Section 7.5 → "Games without `attack_stat`" | `rules.attack_stat: null`; do NOT declare the derived name in `rules.stats[]`; round_script computes the derived value from component stats inside Lua |
-| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | New `distribute_points` action on a `character_creation_step` once schema v1.6.0 ships; until then, flag the gap and stop — do NOT paper over with `manual_set` (Bug D) |
+| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | New `distribute_points` action on a `character_creation_step` pending schema v1.7 (not landed as of v1.6); until then, flag the gap and stop — do NOT paper over with `manual_set` (Bug D) |
 | "You may only use one weapon at a time" / "wear one helmet" / "the chainmail you are wearing" / any "worn / wielded / equipped" language | Rule 19 | `equippable: true`, `slot: "<name>"`, `equip_timing`, `auto_equip` on the items_catalog entry; `stat_modifier.when: "equipped"` for slot-gated bonuses |
 | "Once worn, cannot be removed" / "the curse cannot be lifted" / cursed permanent items | Rule 19 | `equip_timing: "once"` on the item; only `remove_item` events can clear the slot |
 | "Immune to non-silver weapons" / "only silvered or blessed weapons can harm them" / "takes half damage from blunt attacks" / "double damage from fire" | Rule 18 | `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) with `kind`, `multiplier`, `source_has_any` / `source_lacks_all`, optional `condition` |
@@ -398,31 +399,48 @@ When the same enemy ref is used by multiple sections (e.g., a named enemy that p
 
 ### Rule 11: Starting Resources That Require Rolls Are Character Creation Steps
 
-If the rules/equipment section of the book instructs the player to roll for starting gold, starting equipment, starting spells, or any other resource at character creation, the corresponding `character_creation.steps` entry MUST be a concrete step with an action that triggers the roll (typically `roll_stat` with a formula like `R10`, `1d6`, or `2d6`). Do not encode it as a `set_resource` with `amount: 0` and a descriptive `source` field — that leaves the player with zero of the resource because the step has no side effect the emulator can execute.
+If the rules/equipment section of the book instructs the player to roll for starting gold, starting equipment, starting spells, or any other resource at character creation, the corresponding `character_creation.steps` entry MUST be a concrete step with an action that triggers the roll AND routes the result into the slot the game actually reads from. Do not encode it as a `set_resource` with `amount: 0` and a descriptive `source` field — that leaves the player with zero of the resource because the step has no side effect. And do not encode it as a `roll_stat` into a *scratch stat* that isn't declared in `rules.stats[]` — that rolls successfully but the value never flows to `state.gold` / `state.provisions` / `state.meals` where the stat bar, conditions, and events actually look.
 
-Concrete example: Lone Wolf 1's equipment pages say "pick a number from the Random Number Table. This number equals the number of Gold Crowns you possess at the start of the adventure." The correct character_creation step is:
+**Canonical shape (schema v1.6+ / codex v2.9+).** Use the `roll_resource` action for any roll whose target is a canonical resource slot (`gold`, `provisions`, `meals`) or a declared-stat-currency. The rolled total goes directly into the slot the emulator displays and reads from:
 
 ```json
 {
-  "action": "roll_stat",
-  "stat": "starting_gold_crowns",
+  "action": "roll_resource",
+  "resource": "gold",
   "formula": "R10",
   "source": "Pick R10; the number equals Gold Crowns in the Belt Pouch at start."
 }
 ```
 
-Not:
+The emulator routes the total into `state.gold`, the stat bar shows "Gold Crowns 7" (via `rules.inventory.currency_display_name`), any later condition using `stat_gte: "gold"` sees the rolled value, and Rule 21's provisions canonical-slot story applies to meals/rations the same way. For a book whose currency is a first-class declared stat (GrailQuest's `GOLD`), set `resource` to the declared stat name and the total is routed to `state.stats["GOLD"]` instead of the canonical slot — one schema action, both encoding styles.
+
+**The anti-pattern this rule replaces (and why).** The pre-v1.6 workaround was `roll_stat` into a scratch stat name like `starting_gold_crowns` — which rolled successfully and assigned the value, but the assigned slot (`state.stats.starting_gold_crowns`) was not what the game read from (`state.gold`). The player saw no gold in the stat bar, every `has_item + modify_stat gold` event silently wrote to the wrong slot, and the bug was invisible in state inspection because the scratch slot existed with the rolled value — it just wasn't the right slot. This was the LW1 Gold Crowns data bug, present from iter 5 through iter 12 and only caught during the Chat #3 browser pass. The new `roll_resource` action closes the bug class at the codex rule level (Rule 11 now points at the right shape) AND at the schema level (the action is distinct from `roll_stat`, so a parser or sub-agent cannot silently choose the wrong one for currency).
+
+**Do NOT encode a starting-resource roll as any of the following:**
 
 ```json
-{
-  "action": "set_resource",
-  "resource": "gold_crowns",
-  "amount": 0,
-  "source": "Pick R10 for starting Gold Crowns..."
-}
+{"action": "set_resource", "resource": "gold_crowns", "amount": 0, "source": "Pick R10..."}
 ```
 
-The general rule: if the rules text uses the word "pick," "roll," or "choose" to determine an initial resource quantity, the character_creation step must be one that actually prompts the player (or script) to produce that quantity.
+(amount 0 is literal; the source is flavor text with no effect.)
+
+```json
+{"action": "roll_stat", "stat": "starting_gold_crowns", "formula": "R10", ...}
+```
+
+(scratch stat name not declared in rules.stats[]; rolls successfully but value never reaches state.gold.)
+
+```json
+{"action": "roll_stat", "stat": "gold_crowns", "formula": "R10", ...}
+```
+
+(still a stat write, not a resource slot write; `state.stats.gold_crowns` is not `state.gold`.)
+
+**Scope of `roll_resource`.** Use it whenever the rules text says "pick," "roll," or "choose" to determine a starting quantity of a canonical resource (gold/currency, provisions/meals/rations, or any declared-stat-currency). Use `roll_stat` (the original action) for rolls whose target is a regular character-sheet stat (`COMBAT SKILL`, `STAMINA`, `SKILL`, `LUCK`). The distinguishing test: does the rolled value land in `state.stats[...]` or in `state.gold` / `state.provisions` / `state.meals`? The former is `roll_stat`; the latter is `roll_resource`.
+
+**Starting-equipment tables** (LW1 step 8 style: "roll R10, consult the table, note the item that matches your roll") are a separate pattern that neither `roll_stat` nor `roll_resource` handles cleanly — the roll determines *which event fires*, not a scalar value. That's tracked in the engine backlog as a future `roll_table` character-creation action with per-result `effects` similar to `roll_dice.results[range].effects`. Until it lands, encode the table in a `script` step or flag the gap and stop (the v2.9.0 codex deliberately does not provide a workaround here; see DEV_PROCESS.md failure mode 4 for why).
+
+The general rule: if the rules text uses the word "pick," "roll," or "choose" to determine an initial resource quantity, the character_creation step must be one that actually prompts the player (or script) to produce that quantity AND writes it to the slot the game reads from. `roll_resource` is the schema action for the latter.
 
 ### Rule 12: Do Not Duplicate Penalty Events Already Modeled by `eat_meal`
 
@@ -2510,7 +2528,7 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 10 (Enemy ID naming).** Every recurring generic enemy name (Giak, Goblin, Kraan, Skeleton, Guard, Rat) uses the `<enemy>_s<N>` suffix where N is the section that introduces that variant. Bare snake-case ids only appear on genuinely unique antagonists with one stat block in the entire book.
 
-**Rule 11 (Starting resources from rolls).** If the book's rules section uses the word "pick," "roll," "choose," or "distribute" to determine a starting stat or resource, the matching `character_creation.steps[]` entry is a step that *actually rolls or prompts* — not a `set_resource` with `amount: 0` and a descriptive `source` field. Specifically: every stat declared in `rules.stats[]` has a corresponding `character_creation.steps[]` entry that initializes it to a real value, and after the steps run there are no stats left undefined.
+**Rule 11 (Starting resources from rolls).** If the book's rules section uses the word "pick," "roll," "choose," or "distribute" to determine a starting stat or resource, the matching `character_creation.steps[]` entry is a step that *actually rolls or prompts* AND writes the result to the slot the game reads from. Specifically: (a) for declared stats (`COMBAT SKILL`, `SKILL`, `STAMINA`, `LUCK`, etc.), the step is `roll_stat` with the declared stat name from `rules.stats[]`; (b) for canonical resources (gold/provisions/meals) or declared-stat-currencies, the step is `roll_resource` with `resource` set to the canonical slot name or the declared stat name — NEVER `roll_stat` into a scratch stat like `starting_gold_crowns` that doesn't flow to `state.gold`. After character creation completes, every stat declared in `rules.stats[]` holds a real value, every canonical resource slot the book's rules text mentions holds a real value, and there are no stats or resources left at 0 or undefined unless the book explicitly says so. No `set_resource` entry carries `amount: 0` with a "pick a number" source; that's the anti-pattern Rule 11 exists to catch.
 
 **Rule 12 (No duplicate penalty events).** For every `eat_meal` with a `penalty_amount`, I did NOT also emit a `modify_stat` for the same loss in the same section. The same check for `combat` flee damage, `roll_dice` per-branch effects, and `stat_test` outcomes — never a parallel `modify_stat` for a value already covered by a structured event.
 

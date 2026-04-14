@@ -773,6 +773,22 @@ function processCreationSteps(state, book) {
     if (step.action === 'roll_stat') {
       state.pause = { type: 'character_creation_roll', step_index: state.creationStep, stat: step.stat, formula: step.formula };
       return state;
+    } else if (step.action === 'roll_resource') {
+      // Schema v1.6+ / codex v2.9+. A roll for a canonical resource
+      // slot (state.gold / state.provisions / state.meals) or a
+      // declared-stat-currency. Pause on a dedicated pause type so
+      // the player or harness can provide the roll, then the 'act'
+      // handler routes the rolled total into the appropriate slot.
+      // See Rule 11 in gamebook_codex_v2.md for the full story and
+      // the LW1 Gold Crowns worked example; this closes the pre-v1.6
+      // anti-pattern of using roll_stat with a scratch stat name.
+      state.pause = {
+        type: 'character_creation_roll_resource',
+        step_index: state.creationStep,
+        resource: step.resource,
+        formula: step.formula,
+      };
+      return state;
     } else if (step.action === 'choose_one') {
       state.pause = {
         type: 'character_creation_choose_one',
@@ -1215,6 +1231,11 @@ function getAvailableActions(state, book) {
       actions.push({ name: 'provide_roll', description: 'Manually provide roll values: provide_roll <n1> <n2> ...' });
       break;
 
+    case 'character_creation_roll_resource':
+      actions.push({ name: 'roll', description: `Roll ${state.pause.formula} for ${state.pause.resource} (or provide_roll <values>)` });
+      actions.push({ name: 'provide_roll', description: 'Manually provide roll values: provide_roll <n1> <n2> ...' });
+      break;
+
     case 'character_creation_choose_one':
       for (const opt of state.pause.options) {
         actions.push({ name: 'choose', description: `choose ${JSON.stringify(opt)}` });
@@ -1447,6 +1468,48 @@ function applyAction(state, book, action, args) {
       state.stats[step.stat] = result.total;
       state.initialStats[step.stat] = result.total;
       state.log.push(`Rolled ${step.formula} = ${result.rolls.join(',')} => ${step.stat} ${result.total}`);
+      state.creationStep++;
+      return processCreationSteps(state, book);
+    }
+
+    case 'character_creation_roll_resource': {
+      // Schema v1.6+ / codex v2.9+ roll_resource action. Roll the
+      // formula, then route the total into the canonical slot named
+      // by step.resource. Canonical lowercase names (`gold`,
+      // `provisions`, `meals`) write directly to the corresponding
+      // state field; any other name falls through to a declared
+      // stat lookup in rules.stats[] (this supports books that
+      // carry currency as a first-class stat, e.g. GrailQuest's
+      // `GOLD`). Unknown resource names log a warning and the
+      // value is discarded — the codex rule forbids this shape,
+      // so reaching the warning means the book has a data bug.
+      const step = book.character_creation.steps[state.pause.step_index];
+      let result;
+      if (action === 'provide_roll') {
+        const vals = args.map(Number);
+        result = rollDice(step.formula, vals);
+      } else {
+        result = rollDice(step.formula);
+      }
+      const total = result.total;
+      const rname = step.resource;
+      if (rname === 'gold') {
+        state.gold = total;
+      } else if (rname === 'provisions') {
+        state.provisions = total;
+      } else if (rname === 'meals') {
+        state.meals = total;
+      } else {
+        const statDefs = book.rules?.stats || [];
+        const matchingStat = statDefs.find(s => s.name === rname);
+        if (matchingStat) {
+          state.stats[rname] = total;
+          if (matchingStat.initial_is_max) state.initialStats[rname] = total;
+        } else {
+          state.log.push(`roll_resource: unknown resource "${rname}" (not canonical, not a declared stat); value ${total} discarded`);
+        }
+      }
+      state.log.push(`Rolled ${step.formula} = ${result.rolls.join(',')} => ${rname} ${total}`);
       state.creationStep++;
       return processCreationSteps(state, book);
     }
@@ -2195,6 +2258,8 @@ function summarize(state, book) {
     }
   } else if (state.pause?.type === 'character_creation_roll') {
     lines.push(`[Character Creation] Roll ${state.pause.formula} for ${state.pause.stat}`);
+  } else if (state.pause?.type === 'character_creation_roll_resource') {
+    lines.push(`[Character Creation] Roll ${state.pause.formula} for ${state.pause.resource}`);
   } else if (state.pause?.type === 'character_creation_choose_one') {
     lines.push(`[Character Creation] Choose ${state.pause.category}: ${state.pause.options.join(' / ')}`);
   } else if (state.pause?.type === 'character_creation_choose_abilities') {
