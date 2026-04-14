@@ -737,6 +737,22 @@ function processCreationSteps(state, book) {
   const steps = book.character_creation?.steps || [];
   while (state.creationStep < steps.length) {
     const step = steps[state.creationStep];
+    // Schema v1.6+: character_creation_step.condition. If a condition
+    // is present and evaluates false against the current state, skip
+    // the step entirely (no pause, no state mutation, no UI). The
+    // condition evaluates against state as it exists at the moment
+    // this step is reached, so later steps can gate on earlier
+    // steps' outputs (ability picks from a preceding
+    // choose_abilities, rolled values from a preceding roll_stat,
+    // etc.). Introduced to support Rule 15-style discipline-gated
+    // creation rolls — e.g. LW1's Weaponskill weapon-type roll that
+    // should only fire when the player picked Weaponskill in the
+    // preceding choose_abilities step.
+    if (step.condition && !evalCondition(step.condition, state, book)) {
+      state.log.push(`Character creation step ${state.creationStep} (${step.action}) skipped — condition not met`);
+      state.creationStep++;
+      continue;
+    }
     if (step.action === 'roll_stat') {
       state.pause = { type: 'character_creation_roll', step_index: state.creationStep, stat: step.stat, formula: step.formula };
       return state;

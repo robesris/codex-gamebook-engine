@@ -467,6 +467,13 @@
         "amount": { "type": "number" },
         "ability": { "type": "string", "description": "set_ability_uses: the ability name (must match one of the names in `rules.abilities.available[].name` or be added as a character creation selection)." },
         "uses": { "type": "integer", "description": "set_ability_uses: the initial number of remaining uses for this ability. The emulator stores this in `state.abilityUses[ability]` and decrements on use." },
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Optional condition that must evaluate true for this step to execute. Null or absent = always runs (the common case). When present, the emulator evaluates the condition against the state *as it exists at the moment this step is reached in the creation flow* — so later steps can be gated on earlier steps' outputs (ability picks made in step 2, rolled stat values from step 1, etc.). Schema v1.6+. Introduced to support Rule 15-style discipline-gated character-creation rolls, e.g. LW1's Weaponskill weapon-type roll that should only fire if the player picked the Weaponskill discipline in the preceding choose_abilities step. When the condition evaluates false, the step is skipped entirely (no roll prompt, no state mutation, no UI display) and the flow advances to the next step."
+        },
         "source": { "type": "string", "description": "Parser note: where in the source this was confirmed." }
       }
     },

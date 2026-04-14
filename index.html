@@ -1257,6 +1257,31 @@ function startCharacterCreation() {
   const items = [];
 
   for (const step of steps) {
+    // Schema v1.6+: character_creation_step.condition. If the step
+    // carries a condition, we cannot safely evaluate it in this
+    // pre-pass because the pre-pass runs before the interactive
+    // choose_abilities / choose_one steps have produced their outputs.
+    // A condition like `has_ability "Weaponskill"` must be evaluated
+    // AFTER the player's discipline picks, not before. Defer the
+    // conditional step into interactiveSteps where phase 2's
+    // processCreationSteps loop will evaluate the condition at the
+    // moment the step is reached (by which point earlier interactive
+    // steps have run and their outputs are visible in state).
+    //
+    // Limitation of the current two-phase HTML flow: conditions that
+    // depend on rolls made LATER than their dependency in phase 1 are
+    // still not supported, because phase 1 runs all rolls before any
+    // interactive step. This is not a concern for existing books
+    // (LW1's only condition, post-v1.6, is `has_ability "Weaponskill"`
+    // on step 3 gated by step 2's choose_abilities — exactly the
+    // pattern this defer path handles). A full fix for
+    // condition-on-earlier-roll patterns would require restructuring
+    // the creation flow into a single sequential loop — tracked as a
+    // backlog item, non-blocking for LW iter 13.
+    if (step.condition) {
+      interactiveSteps.push({ type: 'deferred_conditional_step', step });
+      continue;
+    }
     if (step.action === 'roll_stat') {
       const result = rollDice(step.formula);
       state.stats[step.stat] = result.total;
@@ -1330,6 +1355,66 @@ function processCreationSteps(steps, items) {
 
   const current = steps.shift();
   const rollContainer = document.getElementById('stat-rolls');
+
+  // Schema v1.6+: deferred conditional step. These are character
+  // creation steps that carried a `condition` field in the book's
+  // data. The pre-pass deferred them here so we can evaluate the
+  // condition against state that now includes outputs from earlier
+  // interactive steps (ability picks, choose_one results). If the
+  // condition evaluates false, skip the step entirely and recurse.
+  // If true, execute the step's action inline — the supported
+  // actions for conditional deferral are the same as the pre-pass's
+  // immediate-action set (roll_stat, add_item, set_resource,
+  // set_ability_uses). Conditional choose_one / choose_abilities
+  // would be unusual and are not handled here; they fall through to
+  // a skip with a log line.
+  if (current.type === 'deferred_conditional_step') {
+    const step = current.step;
+    if (!evaluateCondition(step.condition)) {
+      // Condition false — skip entirely and advance to the next step.
+      processCreationSteps(steps, items);
+      return;
+    }
+    // Condition true — execute the step's action inline.
+    if (step.action === 'roll_stat') {
+      const result = rollDice(step.formula);
+      state.stats[step.stat] = result.total;
+      state.initialStats[step.stat] = result.total;
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
+      div.innerHTML = `
+        <span class="stat-name">${step.stat}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
+        <span class="stat-value">${result.total}</span>
+      `;
+      rollContainer.appendChild(div);
+    } else if (step.action === 'add_item') {
+      if (!state.inventory.includes(step.item)) state.inventory.push(step.item);
+      autoEquipOnAdd(step.item);
+      items.push(step.item);
+    } else if (step.action === 'set_resource') {
+      if (step.resource === 'provisions') state.provisions = step.amount;
+      else if (step.resource === 'gold') state.gold = step.amount;
+      else if (step.resource === 'meals') state.meals = step.amount;
+      else {
+        const statDefs = gameData.rules?.stats || [];
+        const matchingStat = statDefs.find(s => s.name === step.resource);
+        if (matchingStat) {
+          state.stats[step.resource] = step.amount;
+          if (matchingStat.initial_is_max) state.initialStats[step.resource] = step.amount;
+        }
+      }
+    } else if (step.action === 'set_ability_uses') {
+      if (!state.abilityUses) state.abilityUses = {};
+      state.abilityUses[step.ability] = step.uses;
+    } else {
+      // Unsupported action for conditional deferral — log and advance.
+      console.warn('Conditional char-creation step with unsupported action:', step.action);
+    }
+    processCreationSteps(steps, items);
+    return;
+  }
 
   if (current.type === 'choose_one') {
     const choiceStep = current.step;
