@@ -264,7 +264,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | If the book's source text says or implies … | Apply | Where to encode it |
 |---|---|---|
 | "Roll dice / pick a number" to determine a starting **stat** (COMBAT SKILL, STAMINA, SKILL, LUCK, HP — anything declared in `rules.stats[]`) at character creation | Rule 11 | `roll_stat` action with the declared stat name and the formula |
-| "Roll dice / pick a number" to determine a starting **resource** (Gold Crowns, Provisions, Meals, or any currency the book treats as a counter rather than a free-form stat) at character creation | Rule 11 (schema v1.6+ `roll_resource`) | `roll_resource` action writing to the canonical slot (`gold` / `provisions` / `meals`) or to a declared-stat-currency matching `rules.stats[].name`. NEVER `roll_stat` into a scratch stat name like `starting_gold_crowns` (the LW1 pre-iter-13 anti-pattern) — that rolls but the value doesn't flow to the slot the game reads from |
+| "Roll dice / pick a number" to determine a starting **resource** (Gold Crowns, Provisions, Meals, or any currency the book treats as a counter rather than a free-form stat) at character creation | Rule 11 (schema v1.6+ `roll_resource`) | `roll_resource` action writing to the canonical slot (`gold` / `provisions` / `meals`) or to a declared-stat-currency matching `rules.stats[].name`. NEVER `roll_stat` into a scratch stat name like `starting_gold_crowns` — that rolls but the value never reaches the slot the game reads from, so the player's currency display stays at zero |
 | "Combat stat is computed from other stats" — e.g. `CV = Strength + Agility + bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dex + Class + Level` | Section 7.5 → "Games without `attack_stat`" | `rules.attack_stat: null`; do NOT declare the derived name in `rules.stats[]`; round_script computes the derived value from component stats inside Lua |
 | "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | New `distribute_points` action on a `character_creation_step` pending schema v1.7 (not landed as of v1.6); until then, flag the gap and stop — do NOT paper over with `manual_set` (Bug D) |
 | "You may only use one weapon at a time" / "wear one helmet" / "the chainmail you are wearing" / any "worn / wielded / equipped" language | Rule 19 | `equippable: true`, `slot: "<name>"`, `equip_timing`, `auto_equip` on the items_catalog entry; `stat_modifier.when: "equipped"` for slot-gated bonuses |
@@ -414,7 +414,7 @@ If the rules/equipment section of the book instructs the player to roll for star
 
 The emulator routes the total into `state.gold`, the stat bar shows "Gold Crowns 7" (via `rules.inventory.currency_display_name`), any later condition using `stat_gte: "gold"` sees the rolled value, and Rule 21's provisions canonical-slot story applies to meals/rations the same way. For a book whose currency is a first-class declared stat (GrailQuest's `GOLD`), set `resource` to the declared stat name and the total is routed to `state.stats["GOLD"]` instead of the canonical slot — one schema action, both encoding styles.
 
-**The anti-pattern this rule replaces (and why).** The pre-v1.6 workaround was `roll_stat` into a scratch stat name like `starting_gold_crowns` — which rolled successfully and assigned the value, but the assigned slot (`state.stats.starting_gold_crowns`) was not what the game read from (`state.gold`). The player saw no gold in the stat bar, every `has_item + modify_stat gold` event silently wrote to the wrong slot, and the bug was invisible in state inspection because the scratch slot existed with the rolled value — it just wasn't the right slot. This was the LW1 Gold Crowns data bug, present from iter 5 through iter 12 and only caught during the Chat #3 browser pass. The new `roll_resource` action closes the bug class at the codex rule level (Rule 11 now points at the right shape) AND at the schema level (the action is distinct from `roll_stat`, so a parser or sub-agent cannot silently choose the wrong one for currency).
+**The anti-pattern this rule replaces (and why).** The pre-v1.6 workaround was `roll_stat` into a scratch stat name like `starting_gold_crowns` — which rolled successfully and assigned the value, but the assigned slot (`state.stats.starting_gold_crowns`) was not what the game read from (`state.gold`). The player saw no gold in the stat bar, every in-section `modify_stat gold_crowns` event silently wrote to the wrong slot, and the bug was invisible in state inspection because the scratch slot existed with the rolled value — it just wasn't the right slot. The `roll_resource` action closes the bug class at the codex rule level (Rule 11 now points at the right shape) AND at the schema level (the action is distinct from `roll_stat`, so a parser cannot silently choose the wrong one for currency).
 
 **Do NOT encode a starting-resource roll as any of the following:**
 
@@ -579,9 +579,9 @@ If the rule improvement turns out to be ambiguous or hard to specify in general 
 
 ### Rule 17: Encode Combat Modifiers Structurally, Not Just as Narrative Text
 
-**The rule:** When a combat has a mechanical modifier — a per-fight bonus or penalty that changes the math of the round — encode it as a structured `combat_modifiers` entry on the combat event (for per-section narrative modifiers) or as an `intrinsic_modifiers` entry on the enemy's catalog entry (for per-enemy-type traits that travel across every section the enemy appears in). Do not rely on `special_rules` text alone. The string field is for display and narrative fidelity; the structured modifier field is for enforcement. Both should be populated for any combat with a mechanical modifier — they coexist and carry complementary information.
+**The rule:** When a combat has a mechanical modifier — a per-fight bonus or penalty that changes the math of the round — encode it as a structured `combat_modifiers` entry on the combat event. Do not rely on `special_rules` text alone. The string field is for display and narrative fidelity; the structured modifier field is for enforcement. Both should be populated for any combat with a mechanical modifier — they coexist and carry complementary information.
 
-As of schema v1.4.0 (codex v2.7), both combat events and enemies_catalog entries support an optional modifier list with the shape:
+Both combat events and enemies_catalog entries support an optional modifier list with the shape:
 
 ```json
 {
@@ -601,13 +601,15 @@ As of schema v1.4.0 (codex v2.7), both combat events and enemies_catalog entries
 - **Modifiers are snapshotted at combat start.** Conditions are evaluated once, and the passing modifiers stay in effect for the entire combat. A mid-combat state change (losing an item, expending a discipline) does not re-evaluate. This matches the player expectation that modifiers announced at the fight's start stay in effect, and avoids re-evaluation complexity. If a book has truly dynamic per-round modifiers, encode them in the round_script directly.
 - **Duration is reserved for future extension.** The schema accepts `duration: "fight"` | `"first_round"` | `"round"`, but as of v1.4 all modifiers behave as `"fight"`. Document the intent anyway so future emulator versions can honor the field without re-parsing books.
 
-**Where to put which modifier:**
+**Where to put modifiers — the default is per-section, on the combat event:**
 
-- **On the combat event's `combat_modifiers`** — for per-section narrative modifiers that are specific to this particular encounter. Examples: "Due to your surprise attack, add 4 to your COMBAT SKILL for the duration of this fight" (a setup-paragraph modifier that only applies in this section); "You fight the guardian in the dark. If you do not have a torch, deduct 3 from your COMBAT SKILL" (a conditional per-section modifier); "The Warlord is weakened by his recent wound; deduct 2 from his Attack Strength for this fight" (a narrative per-section enemy debuff).
+- **On the combat event's `combat_modifiers`** — this is the normal case. Gamebook combat encounters are self-contained: each section that describes a fight also describes the full set of mechanical rules for that fight, right there in the section text. Even when the same enemy type appears in multiple sections with the same rule repeated each time, encode the modifier on each combat event independently. The source of truth for any combat modifier is the section text that describes it, not an inference about the enemy type.
 
-- **On the enemy's `intrinsic_modifiers`** — for traits that are properties of the enemy *type* rather than of a specific encounter. Examples: "Vordak / Helghast / Gourgaz: deduct 2 from your COMBAT SKILL unless you have the Mindshield Kai Discipline" (applies to every fight against this enemy type in any Lone Wolf book); "Undead: can only be hit on a roll of 10+" (applies to every skeleton/zombie encounter in this book and any future books that reuse the catalog entry); "Incorporeal: immune to physical weapons without the silver keyword" (applies wherever this creature type appears).
+  Examples: "Due to your surprise attack, add 4 to your COMBAT SKILL for the duration of this fight" (a setup-paragraph modifier); "You fight the guardian in the dark. If you do not have a torch, deduct 3 from your COMBAT SKILL" (a conditional per-section modifier); "Deduct 2 from your COMBAT SKILL unless you have Mindshield" on an encounter with an enemy whose mental attack is described in that section's text (encode on this combat event, not on the catalog entry — the next encounter with the same enemy type may or may not carry the same rule, and the source text will tell you).
 
-The emulator merges both lists at combat start, evaluates the conditions, and applies the passing deltas in order. Per-section and per-enemy modifiers stack additively — if a section says "surprise attack +4 to your COMBAT SKILL" and the enemy is a Vordak with "-2 unless Mindshield," a player without Mindshield gets 19 + 4 - 2 = 21 effective attack; a player with Mindshield gets 19 + 4 = 23.
+- **On the enemy's `intrinsic_modifiers`** — a narrow exception for books with an explicit monster-catalog meta-structure where section text says "consult the monster catalog for this creature's abilities" and the catalog is the canonical source for the rules. Most gamebooks do not have this structure. In the typical gamebook, combat rules are stated in full in each section and nothing "travels" with the enemy name. Do NOT infer `intrinsic_modifiers` from the enemy's name or type alone — if a creature has a mental attack in one section, that does not mean every encounter with that creature type has the same rule. Only add `intrinsic_modifiers` when the book's own structure explicitly delegates the rule to a catalog.
+
+When both lists are present, the emulator merges them at combat start, evaluates the conditions, and applies the passing deltas in order. Per-section and per-enemy modifiers stack additively.
 
 **Composing with Rule 14.** Rule 14 (Combat Modifier Scope) says to scan the whole section for modifier phrasing and put the text into `special_rules`. Rule 17 adds the structural counterpart: the same modifier should ALSO be encoded as a `combat_modifiers` entry so the emulator actually applies the math. Both fields should reflect the same rule. Real example using LW section 55:
 
@@ -649,31 +651,31 @@ The `special_rules` text is displayed verbatim above the combat panel (so the pl
 
 Here the target is `player.damage_bonus` because GrailQuest's round_script reads that field instead of `player.attack`. The mechanism is the same; the target name reflects the book's combat vocabulary.
 
-**Per-enemy intrinsic example** (a Vordak in any Lone Wolf book):
+**Per-section modifier on a recurring enemy** (a Vordak in Lone Wolf):
+
+When the same enemy type appears in multiple sections and each section states the same combat rule, encode the modifier on each combat event independently. The source of truth is the section text, not the enemy name.
 
 ```json
 {
-  "vordak_s29": {
-    "name": "Vordak",
-    "COMBAT SKILL": 17,
-    "ENDURANCE": 25,
-    "special": "Vordaks attack with Mindforce. Deduct 2 from COMBAT SKILL unless you have Mindshield. Enemy is immune to Mindblast.",
-    "intrinsic_modifiers": [
-      {
-        "target": "player.attack",
-        "delta": -2,
-        "reason": "Vordak Mindforce",
-        "condition": {
-          "type": "not",
-          "condition": { "type": "has_ability", "ability": "Mindshield" }
-        }
+  "type": "combat",
+  "enemy_ref": "vordak_s29",
+  "win_to": 270,
+  "special_rules": "Deduct 2 from COMBAT SKILL unless you have Mindshield.",
+  "combat_modifiers": [
+    {
+      "target": "player.attack",
+      "delta": -2,
+      "reason": "Vordak Mindforce attack (negated by Mindshield)",
+      "condition": {
+        "type": "not",
+        "condition": { "type": "has_ability", "ability": "Mindshield" }
       }
-    ]
-  }
+    }
+  ]
 }
 ```
 
-The Mindshield-conditional -2 travels with the Vordak catalog entry, so every section that has a Vordak combat automatically picks up the modifier without the modifier needing to be restated on each combat event. If LW has 14 Vordak fights across all 28 books in the main series, the rule is encoded once, not 14 times.
+The modifier lives on the combat event because that is where the section text describes it. If a different section has a different Vordak encounter that also states the -2 rule, that section's combat event gets its own `combat_modifiers` entry independently. The duplication is intentional: each encounter is self-contained, and the encoding should be derivable from the section text alone without needing to know what other sections say about the same enemy type. The `enemies_catalog` entry for this Vordak carries stats and identity only — no `intrinsic_modifiers` — because the combat rule is stated per-section, not delegated to a catalog.
 
 **What's NOT in scope for `combat_modifiers` (use a different mechanism):**
 
@@ -682,7 +684,7 @@ The Mindshield-conditional -2 travels with the Vordak catalog entry, so every se
 - **Choice-driven modifiers** — "the player chose to wield the cursed sword, which does +3 damage but takes -1 LUCK per round" — this belongs in the combat event AFTER the choice that enables it, not as a condition on a modifier. If the player's *decision* before combat gates the bonus, use choice-level branching to route to a combat event with the modifier pre-baked in.
 - **Damage overrides** — "this enemy deals 3 damage per hit instead of the standard 2," "this fight uses 1d6 damage instead of flat 2" — these change the damage formula, not an input to it. Encode them directly in the round_script's `standard_damage` or in a per-combat damage override (future schema extension).
 
-**Ability-bonus suppression (narrow scope).** A specific case not yet covered by either Rule 17 or Rule 18: an enemy that suppresses a player-side ability bonus without affecting damage scaling (e.g., 'this enemy is immune to Mindblast, so the +2 Kai-Discipline bonus does not apply'). As of codex v2.8 this is still handled imperatively inside the round_script (the Lua script reads the player's disciplines and conditionally omits the bonus). A future schema version may introduce a structured `suppress_abilities: ["Mindblast"]` field on enemies_catalog entries once a second book demonstrates the need for it; until then, document the rule in `special` text and handle it in the round_script. Do not try to fake ability-bonus suppression via a negative `combat_modifier` that cancels the bonus — it works numerically but the UI will show both a +2 Mindblast modifier and a -2 suppression, which is confusing and narratively wrong.
+**Ability-bonus suppression (narrow scope).** A specific case not yet covered by either Rule 17 or Rule 18: an enemy that suppresses a player-side ability bonus without affecting damage scaling (e.g., a section's text says "this creature is immune to Mindblast," meaning the +2 Kai-Discipline bonus does not apply for this fight). This is currently handled imperatively inside the round_script (the Lua script reads the player's disciplines and conditionally omits the bonus). Document the rule in the combat event's `special_rules` text so the player sees it, and let the round_script handle the enforcement. A future schema version may introduce a structured `suppress_abilities` field once a second book demonstrates the need for it. Do not try to fake ability-bonus suppression via a negative `combat_modifier` that cancels the bonus — it works numerically but the UI will show both a +2 Mindblast modifier and a -2 suppression, which is confusing and narratively wrong.
 
 **Rule of thumb:** if the rule adds or subtracts a number from a field the round_script reads as input, use `combat_modifiers`. If the rule scales damage the round_script produces as output (including zeroing it for immunities), use `damage_interactions` (Rule 18). If the rule requires per-round dynamic decision-making, encode it in the round_script directly.
 
@@ -746,15 +748,7 @@ The emulator normalizes both forms to the same internal component list before ap
   "name": "Helghast",
   "COMBAT SKILL": 20,
   "ENDURANCE": 32,
-  "special": "Helghast are creatures of shadow. Only silvered or blessed weapons can harm them. Additionally: deduct 2 from COMBAT SKILL unless you have Mindshield.",
-  "intrinsic_modifiers": [
-    {
-      "target": "player.attack",
-      "delta": -2,
-      "reason": "Helghast Mindforce",
-      "condition": { "type": "not", "condition": { "type": "has_ability", "ability": "Mindshield" } }
-    }
-  ],
+  "special": "Only silvered or blessed weapons can harm this creature. Deduct 2 from COMBAT SKILL unless you have Mindshield.",
   "intrinsic_damage_interactions": [
     {
       "kind": "immunity",
@@ -765,7 +759,7 @@ The emulator normalizes both forms to the same internal component list before ap
 }
 ```
 
-Two orthogonal mechanisms on the same enemy — an additive modifier (Mindshield gate on player attack) and a multiplicative damage interaction (weapon-property gate on damage output). They do not interact with each other; they compose at different points in the round pipeline.
+Note: the -2 COMBAT SKILL / Mindshield modifier for this encounter is encoded on the combat event's `combat_modifiers` (per Rule 17), not on the catalog entry. It appears in the catalog's `special` text for display, but the structured enforcement lives per-section. The `intrinsic_damage_interactions` shown here is the damage-interaction half only — it demonstrates how weapon-property-based immunity is encoded on the catalog entry when every encounter with this enemy type states the same immunity in its section text.
 
 **Worked example 2: Compound damage against a fire elemental.**
 
@@ -879,7 +873,7 @@ The `has_equipped_with_property` condition is particularly important for damage_
 
 **Auto-equip is non-displacing.** When `add_item` fires for an equippable item with `auto_equip: true`, the emulator adds the item to inventory and fills its equipment slot *only* if the slot is currently empty. If the slot is already occupied by a different item, the new item goes into plain inventory with the existing occupant still equipped, and the player must explicitly click equip (via the equipment panel's per-item button) if they want to swap. This is "non-displacement" semantics: a section narrative might say "you pick up a sword," but the player's hand is already holding the axe they were using, and they don't drop the axe silently just because a sword appeared in their backpack. The player-driven equip action — where the player clicks the equip button on an item in their inventory list — still displaces the current occupant, because that click is an explicit opt-in to swap. Only the automatic code path (triggered by `add_item`) is non-displacing. If a book wants "drop old weapon when taking new" semantics (e.g., Warlock, where the narrative explicitly says "you must leave your old sword behind"), the section that grants the new weapon should include an explicit `remove_item` event for the old one *before* the `add_item` for the new one — the `remove_item` clears the slot, then `add_item` with `auto_equip: true` finds the slot empty and fills it. The equipment framework does not change the inventory semantics; it adds a layer of slot-based state on top.
 
-**Design history.** An earlier version of the codex (v2.8 through v2.8.2) specified displacement-on-auto-equip semantics, where `add_item` with `auto_equip: true` always moved into the slot and bumped any existing occupant to plain inventory. A real-playthrough test during the Chat #3 Phase 3 browser pass surfaced the UX problem with that choice: in LW1 section 62 the player finds a sword (narrative "three undamaged Swords; book says 'you may keep one if you wish'") and the book encodes it as `add_item item: "sword"`. Under displacement semantics the sword silently replaced the player's equipped axe as the active weapon, against player intent — the player had been using the axe successfully for many sections and had no reason to suddenly become a swordsman. Non-displacement semantics fix that: the sword goes into inventory, the axe stays active, and the player can choose to equip the sword via the equipment panel if they want to. This matches player intuition for picking up loot: "I now carry this" is a different mental model from "I now wield this." Codex v2.8.3 / emulators v3.0.2 change the default to non-displacement and leave the explicit player-driven equip path unchanged. No book data needs to change to adopt the new semantic — it's purely an emulator behavior fix.
+**Design history.** An earlier version of the codex specified displacement-on-auto-equip semantics, where `add_item` with `auto_equip: true` always moved into the slot and bumped any existing occupant to plain inventory. A real-playthrough test surfaced the UX problem: a player who picks up a sword while already wielding an axe has the axe silently unequipped and replaced, against player intent. Non-displacement semantics fix that: the new item goes into inventory, the existing equipped item stays active, and the player can choose to equip the new item via the equipment panel. This matches player intuition: "I now carry this" is a different mental model from "I now wield this." No book data needs to change to adopt the new semantic — it's purely an emulator behavior fix.
 
 **Removal clears equipped state.** When `remove_item` fires on an item currently occupying an equipment slot, the slot is automatically cleared. This matches the intuition: if the player loses the sword, they're no longer wielding it.
 
@@ -889,7 +883,7 @@ The `has_equipped_with_property` condition is particularly important for damage_
 
 ### Rule 20: Loot-Detection Vocabulary (Scan Every Section for Pickup Phrasing)
 
-Every section whose narrative describes the player finding, receiving, or being offered an item MUST emit a corresponding `add_item` event — or a `choose_items` event when the text offers a selection from a list. This sounds obvious, but it is a high-frequency silent failure mode because the pickup phrasing in real gamebooks is surprisingly varied. The canonical "note this on your Action Chart" trigger appears in only a fraction of pickups; a parser (or reader) that gates on it alone misses most of the loot in a typical book. Rule 20 gives pickup detection its own dedicated rule, decision-table row, and pre-output checklist entry so it cannot be quietly missed the way it was in LW1 iters 5–12 (nine sections with loot text, no pickup events — see the LW iter 13 worked example below).
+Every section whose narrative describes the player finding, receiving, or being offered an item MUST emit a corresponding `add_item` event — or a `choose_items` event when the text offers a selection from a list. This sounds obvious, but it is a high-frequency silent failure mode because the pickup phrasing in real gamebooks is surprisingly varied. The canonical "note this on your Action Chart" trigger appears in only a fraction of pickups; a parser (or reader) that gates on it alone misses most of the loot in a typical book. Rule 20 gives pickup detection its own dedicated rule, decision-table row, and pre-output checklist entry so it cannot be quietly missed the way a single-trigger parser would miss it (nine LW1 sections had loot text with no corresponding pickup events in an earlier encoding — see the worked example below).
 
 **The vocabulary to scan for.** When reading a section, treat any sentence matching **any** of the patterns below as a probable pickup. A sentence containing an item name AND any of the verbs / phrases below is a probable pickup even if the canonical Action-Chart trigger is absent. The Action-Chart trigger is a **strong corroborating signal, not a required signal** — many sections describe pickups without ever invoking it.
 
@@ -914,7 +908,7 @@ The pattern to recognise: an opening clause that accesses a container (e.g. an "
 
 Plus a new `items_catalog` entry for any item that does not already exist (e.g. a note or scrap of paper, if it plays a gating role in a later section via `has_item`). A parser that gates on a single canonical "note this on your character sheet" trigger alone misses this case entirely because the canonical phrasing is absent — yet the pickup is unambiguous from the combination of find-verb, positional construction, and permission clause.
 
-Motivating real-world case: LW1's section 267 has this exact compound-pickup pattern and was missing both pickup events in iters 5–12 (tracked in the books-repo `known_issues.md`; the fix is in scope for LW iter 13).
+Motivating real-world case: LW1 section 267 has this exact compound-pickup pattern — a saddlebag containing a message, introduced by a container clause, with a positional "Deeper in the bag is…" clause introducing a second item (a dagger), followed by a permission clause granting the player both. An encoding gated on the canonical Action-Chart trigger alone would miss both pickups because the trigger phrase does not appear in this section.
 
 **Cross-verification pass (required during comprehensive review).** After parsing all sections (or during a Step 3a-1 comprehensive review of an existing book), walk every section's text once more with this rule's vocabulary open in your context, looking specifically for item-name + pickup-phrase matches that do NOT have a corresponding `add_item` / `choose_items` event in the section's `events[]` array. Every miss is a silent failure: the player reads the narrative about finding the item, but the emulator never puts the item in the inventory, so any later section gated on `has_item` will fail incorrectly and the book has a stealth-impassable path.
 
@@ -933,10 +927,10 @@ When a book tracks a per-adventure food supply — whatever the book calls it (M
 
 **What this rules out:**
 
-1. **No `meal` / `ration` / `food` entries in `items_catalog`.** Provisions never appear as items. Creating a catalog entry called `"meal"` with `type: "consumable"` and pointing `add_item` events at it routes the grant into `state.inventory`, where the stat bar and `eat_meal` handler cannot see it. The player ends up with "Meal" rows piling up in the inventory list while the resource counter stays at whatever character creation left it at — the exact failure mode known_issues.md documents for LW1 iters 5–12.
+1. **No `meal` / `ration` / `food` entries in `items_catalog`.** Provisions never appear as items. Creating a catalog entry called `"meal"` with `type: "consumable"` and pointing `add_item` events at it routes the grant into `state.inventory`, where the stat bar and `eat_meal` handler cannot see it. The player ends up with "Meal" rows piling up in the inventory list while the resource counter stays at whatever character creation left it at.
 2. **No `add_item item:"meal"` events for grant operations.** When a section's text says "you find a Meal," the structured event is `modify_stat stat:"provisions" amount:1`, not `add_item`. The `modify_stat` routes into `state.provisions` and is visible to the stat bar, the eat_meal handler, and any later condition using `stat_gte: "provisions"`.
 3. **No `set_resource resource:"meals"` character-creation steps.** The canonical resource slot name is `"provisions"`, not `"meals"`, regardless of what the book calls it in narrative text. A step written as `set_resource resource:"meals" amount:1` writes to `state.meals` (a legacy slot the emulator keeps for backward compatibility but does not surface in the stat bar) and leaves `state.provisions` at whatever the default was. The correct shape is either (a) `set_resource resource:"provisions" amount:1`, or (b) nothing at all if `rules.provisions.starting_amount` already carries the right value — the emulator auto-init will populate the slot.
-4. **No parallel `state.meals` rendering in the character-creation summary.** The "starting equipment" summary screen that appears before the player hits Begin Adventure must read from `state.provisions`, not from `state.meals`, so the count the player sees matches the count the game-screen stat bar shows. Reading two different slots for the same counter produces the three-disjoint-slots failure mode (character-creation summary, game-screen stat bar, and in-section `add_item` destination, each pointing at a different slot) — the exact state-inspection bug captured in known_issues.md for LW1.
+4. **No parallel `state.meals` rendering in the character-creation summary.** The "starting equipment" summary screen that appears before the player hits Begin Adventure must read from `state.provisions`, not from `state.meals`, so the count the player sees matches the count the game-screen stat bar shows. Reading two different slots for the same counter produces the three-disjoint-slots failure mode (character-creation summary, game-screen stat bar, and in-section `add_item` destination, each pointing at a different slot).
 
 **Parsing guidance.** During Step 5 (Parse Rules and Character Creation), look in the rules section for any mention of food the player eats to restore health on a schedule. The book usually dedicates a short paragraph to it ("You have 3 Meals at the start of the adventure. You may eat a Meal at any time unless instructed otherwise; eating restores 4 ENDURANCE. When the text instructs you to eat a Meal and you have none, you lose 3 ENDURANCE.") That paragraph is the source for `rules.provisions`: `starting_amount` from the first sentence, `heal_amount` and `heal_stat` from the second, `when_usable` from "unless instructed otherwise" → `"when_instructed"`, penalty_amount from the third sentence. Set `display_name` to whatever word the book uses in the player-visible narrative ("Meals", "Rations"). DO NOT also add a `meal` items_catalog entry — the provisions block is the single source of truth for the mechanic.
 
@@ -2536,7 +2530,7 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 16 (Codex maintainer discipline).** *(Only applies if I am editing the codex doc itself, not parsing a book.)* When I shipped a doc commit that changed a rule, the same commit added a row to the topical decision table at the top of the Critical Rules section AND added one entry to this checklist for the new rule. The codex's job is to produce correct output by default; output patches do not compound.
 
-**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. Per-enemy-type traits (Vordak Mindforce, Helghast presence) live on the enemy's `intrinsic_modifiers` instead, so they travel with the catalog entry.
+**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. All modifiers are per-section on the combat event — even when the same enemy type appears in multiple sections with the same rule, the modifier belongs on each combat event independently because gamebook encounters are self-contained.
 
 **Rule 18 (Damage interactions).** For every immunity, resistance, or weakness the book describes that scales damage rather than adding to a stat input ("immune to non-silver weapons," "takes half damage from blunt," "double damage from fire"), I encoded it as a `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) entry — not as a large negative `combat_modifier`. The round_script reports damage as `combat.damage_to_enemy` / `combat.damage_to_player` (not by mutating `*.health` directly), and uses the full `{amount, sources}` component-list form for any attack that deals more than one damage type in one swing.
 
