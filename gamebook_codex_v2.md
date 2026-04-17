@@ -266,7 +266,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Roll dice / pick a number" to determine a starting **stat** (COMBAT SKILL, STAMINA, SKILL, LUCK, HP — anything declared in `rules.stats[]`) at character creation | Rule 11 | `roll_stat` action with the declared stat name and the formula |
 | "Roll dice / pick a number" to determine a starting **resource** (Gold Crowns, Provisions, Meals, or any currency the book treats as a counter rather than a free-form stat) at character creation | Rule 11 (schema v1.6+ `roll_resource`) | `roll_resource` action writing to the canonical slot (`gold` / `provisions` / `meals`) or to a declared-stat-currency matching `rules.stats[].name`. NEVER `roll_stat` into a scratch stat name like `starting_gold_crowns` — that rolls but the value never reaches the slot the game reads from, so the player's currency display stays at zero |
 | "Combat stat is computed from other stats" — e.g. `CV = Strength + Agility + bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dex + Class + Level` | Section 7.5 → "Games without `attack_stat`" | `rules.attack_stat: null`; do NOT declare the derived name in `rules.stats[]`; round_script computes the derived value from component stats inside Lua |
-| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | New `distribute_points` action on a `character_creation_step` pending schema v1.7 (not landed as of v1.6); until then, flag the gap and stop — do NOT paper over with `manual_set` (Bug D) |
+| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | A `distribute_points` action on `character_creation_step` is the target encoding but is not yet in the schema; until it lands, flag the gap and stop — do NOT paper over with `manual_set` |
 | "You may only use one weapon at a time" / "wear one helmet" / "the chainmail you are wearing" / any "worn / wielded / equipped" language | Rule 19 | `equippable: true`, `slot: "<name>"`, `equip_timing`, `auto_equip` on the items_catalog entry; `stat_modifier.when: "equipped"` for slot-gated bonuses |
 | "Once worn, cannot be removed" / "the curse cannot be lifted" / cursed permanent items | Rule 19 | `equip_timing: "once"` on the item; only `remove_item` events can clear the slot |
 | "Immune to non-silver weapons" / "only silvered or blessed weapons can harm them" / "takes half damage from blunt attacks" / "double damage from fire" | Rule 18 | `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) with `kind`, `multiplier`, `source_has_any` / `source_lacks_all`, optional `condition` |
@@ -507,7 +507,7 @@ Note that `special_rules` text is a *display* field — the emulators render it 
 
 **The rule (stated generally, no series required):** When a book's rules section describes any discipline-, class-, item-, stat-, or flag-driven **exemption from a per-event mechanic** — or conversely a gate that prevents an event from firing for certain players — every event that triggers that mechanic MUST encode the exemption as an event `condition`. Do not rely on narrative text alone, do not flag the section for later, and do not restructure into sub-sections to work around the gate: the `condition` field is the canonical encoding for this pattern.
 
-As of schema v1.2.0 (codex v2.4), every event type supports an optional `condition` field that gates execution. When the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI, no log line visible to the player. The next event in the queue runs as if the gated event wasn't there. The field accepts the same condition union as `choice.condition` (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`, `and`, `or`, `test_failed`, `test_succeeded`), so anything you can gate a choice on, you can gate an event on.
+Every event type supports an optional `condition` field that gates execution. When the condition is present and evaluates to false at the moment the event is processed, the event is skipped entirely — no state changes, no pause, no UI, no log line visible to the player. The next event in the queue runs as if the gated event wasn't there. The field accepts the same condition union as `choice.condition` (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `not`, `and`, `or`, `test_failed`, `test_succeeded`), so anything you can gate a choice on, you can gate an event on.
 
 **General shape:**
 
@@ -694,7 +694,7 @@ The modifier lives on the combat event because that is where the section text de
 
 **The rule:** When a combat has a mechanical rule that scales the *damage dealt* — an immunity, a resistance, a weakness, or any other multiplicative effect on how much damage gets through — encode it as a structured `damage_interactions` entry on the combat event (for per-encounter situational rules) or as an `intrinsic_damage_interactions` entry on the enemy's catalog entry (for traits that travel with the enemy type across every section it appears in). Do not try to fake damage scaling with large negative `combat_modifiers`; combat_modifiers are additive deltas on inputs to the round_script, and they cannot express "× 0" or "× 2" on the script's output.
 
-As of schema v1.5.0 (codex v2.8), `damage_interaction` entries have the following shape:
+`damage_interaction` entries have the following shape:
 
 ```json
 {
@@ -710,7 +710,7 @@ As of schema v1.5.0 (codex v2.8), `damage_interaction` entries have the followin
 
 Every field except `kind` is optional. The `multiplier` defaults to 0 for `immunity`, 0.5 for `resistance`, 2.0 for `weakness`. The `direction` defaults to `incoming` (damage dealt to the enemy by the player). The source filters and `condition` default to "no filtering" (the interaction applies to all damage regardless of source tags or player state). The `reason` is purely for display and logging.
 
-**The round_script contract for structured damage.** Schema v1.5+ emulators require round_scripts to report damage as values on the `combat` table, *not* by directly mutating `player.health` or `enemy.health`. The script sets:
+**The round_script contract for structured damage.** Round_scripts must report damage as values on the `combat` table, *not* by directly mutating `player.health` or `enemy.health`. The script sets:
 
 ```lua
 combat.damage_to_enemy = <value>   -- damage dealt to the enemy this round
@@ -853,7 +853,7 @@ When multiple interactions match a single component, their multipliers compose m
 
 **When to use `auto_equip: false`:** the default is `true` (matching the "pick up the helmet, you're wearing it" narrative). Set it to `false` for items the player must consciously choose to equip: a second carried weapon that the player might prefer not to use as their active, a suspicious ring the player wants to identify before wearing, an unfamiliar magical robe. With `auto_equip: false`, `add_item` adds the item to inventory but does not change the equipment slot; the player must issue an explicit equip action later.
 
-**Equipment and stat_modifier.** The items_catalog `stat_modifier.when` field has three values: `always`, `combat`, and `equipped`. Schema v1.5+ emulators honor all three:
+**Equipment and stat_modifier.** The items_catalog `stat_modifier.when` field has three values: `always`, `combat`, and `equipped`. All three are honored:
 
 - `always` — applies whenever the item is in inventory, regardless of equipped state.
 - `combat` — applies only during combat rounds, regardless of equipped state.
@@ -861,7 +861,7 @@ When multiple interactions match a single component, their multipliers compose m
 
 For equipment like LW's Shield (+2 COMBAT SKILL while carried and usable) or the Chainmail Waistcoat (+2 ENDURANCE while worn), set `when: "equipped"` so the bonus activates only while the item is in its slot. A future version of the book that lets the player lose the chainmail without losing the shield (because shield is stored separately, say) correctly handles the chainmail bonus going away without touching the shield.
 
-**Equipment-aware conditions.** Schema v1.5+ adds three new condition types for events, choices, combat_modifiers, and damage_interactions:
+**Equipment-aware conditions.** Three condition types key off equipment state and can be used on events, choices, combat_modifiers, and damage_interactions:
 
 - **`has_equipped_item`** — true if the named item is in any equipped slot. Use for checks like "does the player have the Sommerswerd equipped?" where you want a specific item by id.
 - **`has_equipped_in_slot`** — true if the named slot holds a specific item (if `item` is given) or any item at all (if `item` is omitted). Use for "is anything in the weapon slot?" or "is the Helm of Truesight specifically in the head slot?"
@@ -1709,7 +1709,7 @@ The same pattern generalises to any derived-stat combat system: the component st
 
 ### Round Script Contract
 
-**Schema v1.5+ / Codex v2.8+ / Emulators v3.0+.** The round_script reports its verdict by setting *damage values* on the `combat` table. It does not mutate `player.health` or `enemy.health` directly — the emulator is responsible for translating damage into state changes, because the emulator is the layer that knows how to apply `damage_interactions` (Rule 18) to scale the damage before subtracting from health.
+**Structured damage contract.** The round_script reports its verdict by setting *damage values* on the `combat` table. It does not mutate `player.health` or `enemy.health` directly — the emulator is responsible for translating damage into state changes, because the emulator is the layer that knows how to apply `damage_interactions` (Rule 18) to scale the damage before subtracting from health.
 
 After execution, the emulator reads:
 
