@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.7.0",
+  "title": "Gamebook Format (GBF) v1.8.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -391,6 +391,11 @@
           "type": "object",
           "description": "Additional system-specific parameters.",
           "additionalProperties": true
+        },
+        "standing_modifiers": {
+          "type": "array",
+          "description": "Schema v1.8+. Book-wide combat modifiers that apply to EVERY combat in the book unless shadowed by a per-section or per-enemy modifier with the same target. Use for rules the book's rules section states as standing rules rather than per-encounter rules — the canonical example is Lone Wolf's 'If you enter combat with no weapons, deduct 4 points from your COMBAT SKILL,' which applies to every combat across the whole book, not to any specific encounter. Each entry is a `combat_modifier` object with the same shape used by per-section and per-enemy modifiers (target dot-path, signed delta, optional condition, optional reason, optional duration). The emulator merges standing_modifiers with per-section combat_modifiers on the combat event and per-enemy intrinsic_modifiers from the enemies_catalog at combat start, evaluates each entry's condition, and freezes the surviving list for the fight. Conditions gate standing_modifiers the same way they gate per-section modifiers — the canonical no-weapon rule becomes `{target: 'player.attack', delta: -4, condition: {type: 'not', condition: {type: 'has_equipped_in_slot', slot: 'weapon'}}, reason: 'No weapon in hand'}`. See Rule 23 in the codex doc for the full specification and worked examples.",
+          "items": { "$ref": "#/definitions/combat_modifier" }
         }
       }
     },
@@ -589,6 +594,7 @@
             "modify_stat",
             "add_item",
             "remove_item",
+            "remove_inventory_category",
             "set_flag",
             "combat",
             "stat_test",
@@ -618,6 +624,7 @@
         "modify_initial": { "type": "boolean", "description": "modify_stat: when true, also apply `amount` to `initialStats[stat]` so the adjustment is permanent (reduces or raises the stat's ceiling). Use for book mechanics that say 'your INITIAL stat is reduced by N' or 'increase your INITIAL stat by N'. When false (or absent) the modify_stat only adjusts the current value, which healing can restore up to the unchanged initial." },
 
         "item": { "type": "string", "description": "add_item, remove_item: item_id." },
+        "category": { "type": "string", "description": "remove_inventory_category (schema v1.8+): the `inventory_category` name to purge from the player's inventory. Every item in `state.inventory` whose `items_catalog[id].inventory_category` matches this string is removed; any of those items currently occupying an equipment slot is also unequipped. Use for book events that say things like 'the Kraan has ripped away your Backpack. You have lost the Pack and all the Equipment that was inside it' (LW1 §188 canonical example) — a single-event way to remove every backpack-category item at once, rather than emitting one `remove_item` per id. The category name is the string the book's items_catalog uses in its own `inventory_category` field; common values in existing books are `backpack`, `special`, `weapons`, `armor`, but the schema does not enumerate them — whatever the book declares is legal. See Rule 24 in the codex doc for the full specification." },
         "number": { "type": "integer", "description": "add_item: for numbered items (keys etc)." },
         "cost": { "type": "object", "description": "add_item: cost to acquire (e.g., {\"stat\": \"gold\", \"amount\": 20})." },
         "note": { "type": "string", "description": "Any event: supplementary parser note." },
@@ -685,9 +692,14 @@
             "properties": {
               "target": {
                 "type": ["integer", "string", "null"],
-                "description": "Section id to navigate to for this roll result. Integer or string. May be null to indicate 'fall through' semantics: when the range hits and target is null, the emulator does not navigate — it continues to the next event in the section, or presents the section's choices if there are no more events. Use this for roll branches that produce a side effect (via an accompanying text or a per-range events array) but leave the player on the current section, e.g., 'roll 1d6: 1-3 the lock holds, you may try again; 4-6 the lock breaks, turn to 42'."
+                "description": "Section id to navigate to for this roll result. Integer or string. May be null to indicate 'fall through' semantics: when the range hits and target is null, the emulator does not navigate — it continues to the next event in the section, or presents the section's choices if there are no more events. Use this for roll branches that produce a side effect (via an accompanying text or a per-range effects array) but leave the player on the current section, e.g., 'roll 1d6: 1-3 the lock holds, you may try again; 4-6 the lock breaks, turn to 42'."
               },
-              "text": { "type": "string" }
+              "text": { "type": "string" },
+              "effects": {
+                "type": "array",
+                "description": "Schema v1.8+. Per-range side effects applied when this range matches. Each entry is a full event object from the shared event definition (`modify_stat`, `add_item`, `remove_item`, `set_flag`, `remove_inventory_category`, `script`, etc.). Applied in order AFTER the range match is determined and BEFORE the `target` navigation (if any), so a range entry can both change state and navigate in a single roll. Use this for the canonical Pattern 7.6.9 shape where one branch of a roll attaches a mechanical side effect — e.g. 'if the number is 4 or lower, you have fallen. Lose 2 ENDURANCE points and turn to 140. If the number is 5 or higher, turn to 323' encodes as `results: { '0-4': { effects: [{ type: 'modify_stat', stat: 'ENDURANCE', amount: -2 }], target: 140 }, '5-9': { target: 323 } }`. Effects apply regardless of whether `target` is set; an effects-only range with `target: null` produces a stat change and leaves the player on the current section. See Rule 22 in the codex doc for the full specification.",
+                "items": { "$ref": "#/definitions/event" }
+              }
             }
           }
         },

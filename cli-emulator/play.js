@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.2.1';
+const CODEX_EMULATOR_VERSION = '3.3.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.2.1';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '66d7d7d';
+const CODEX_EMULATOR_COMMIT = '309164d';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -990,6 +990,32 @@ function handleEvent(event, state, book) {
       state.log.push(`Lost: ${event.item}`);
       return 'continue';
     }
+    case 'remove_inventory_category': {
+      // Rule 24 (schema v1.8+): remove every inventory item whose
+      // items_catalog[id].inventory_category matches event.category, and
+      // auto-unequip any currently-equipped items in that set. Canonical
+      // use: LW1 §188 Kraan Backpack loss. Items without an
+      // inventory_category (or with a non-matching one) are unaffected.
+      // No-op if the category matches nothing currently carried.
+      const category = event.category;
+      const catalog = book.items_catalog || {};
+      if (!category) {
+        state.log.push('[Warning: remove_inventory_category event has no category field]');
+        return 'continue';
+      }
+      const doomed = state.inventory.filter(id => (catalog[id] || {}).inventory_category === category);
+      for (const id of doomed) {
+        const idx = state.inventory.indexOf(id);
+        if (idx >= 0) state.inventory.splice(idx, 1);
+        autoUnequipOnRemove(state, id);
+      }
+      if (doomed.length > 0) {
+        state.log.push(`Lost ${doomed.length} ${category} item${doomed.length === 1 ? '' : 's'}: ${doomed.join(', ')}${event.reason ? ' (' + event.reason + ')' : ''}`);
+      } else {
+        state.log.push(`No ${category} items to remove${event.reason ? ' (' + event.reason + ')' : ''}`);
+      }
+      return 'continue';
+    }
     case 'set_flag':
       if (!state.flags.includes(event.flag)) state.flags.push(event.flag);
       state.log.push(`Flag set: ${event.flag}`);
@@ -1162,8 +1188,18 @@ function startCombat(event, state, book) {
       intrinsicModifiers.push(...cat.intrinsic_modifiers);
     }
   }
+  // Rule 23 (schema v1.8+): book-wide standing modifiers from
+  // rules.combat_system.standing_modifiers[] apply to every combat in
+  // the book unless their condition evaluates false. Merged into the
+  // same frozen list as per-section and per-enemy modifiers. Canonical
+  // use: LW's "if you enter combat with no weapons, deduct 4 from
+  // COMBAT SKILL" — one entry in the book's rules block covers every
+  // fight, rather than repeating the modifier on every combat event.
+  const standingModifiers = Array.isArray(book.rules?.combat_system?.standing_modifiers)
+    ? book.rules.combat_system.standing_modifiers
+    : [];
   const appliedModifiers = [];
-  for (const mod of [...eventModifiers, ...intrinsicModifiers]) {
+  for (const mod of [...standingModifiers, ...eventModifiers, ...intrinsicModifiers]) {
     if (mod.condition && !evalCondition(mod.condition, state, book)) continue;
     const target = typeof mod.target === 'string' ? mod.target : null;
     const delta = typeof mod.delta === 'number' ? mod.delta : 0;
@@ -1695,17 +1731,19 @@ function applyAction(state, book, action, args) {
 
       // Result table lookup
       const results = event.results || {};
-      let target = null, matched = false, resultText = '';
+      let target = null, matched = false, resultText = '', matchedEntry = null;
       if (results[String(result.total)]) {
         matched = true;
-        target = results[String(result.total)].target;
-        resultText = results[String(result.total)].text || results[String(result.total)].note || '';
+        matchedEntry = results[String(result.total)];
+        target = matchedEntry.target;
+        resultText = matchedEntry.text || matchedEntry.note || '';
       } else {
         for (const [key, val] of Object.entries(results)) {
           if (key.includes('-')) {
             const [lo, hi] = key.split('-').map(Number);
             if (result.total >= lo && result.total <= hi) {
               matched = true;
+              matchedEntry = val;
               target = val.target;
               resultText = val.text || val.note || '';
               break;
@@ -1715,6 +1753,26 @@ function applyAction(state, book, action, args) {
       }
       if (resultText) state.log.push(resultText);
       state.pause = null;
+      // Per-range effects (Rule 22, schema v1.8+). Effects fire AFTER the
+      // range match and BEFORE the target navigation, so a branch can both
+      // mutate state and move the player in a single roll_dice event. Each
+      // effect is a full event object — modify_stat, add_item, remove_item,
+      // remove_inventory_category, set_flag, etc. Applied synchronously
+      // via handleEvent; the common case is all non-pausing events. If an
+      // inner event pauses (unsupported per Rule 22 — use a `script` event
+      // instead for that shape), we log a warning and skip the rest; if it
+      // navigates (e.g. a nested script sets navigate_to), that navigation
+      // shadows the range's target.
+      if (matched && matchedEntry && Array.isArray(matchedEntry.effects)) {
+        for (const subEvent of matchedEntry.effects) {
+          const subResult = handleEvent(subEvent, state, book);
+          if (subResult === 'navigate') return state;
+          if (subResult === 'pause') {
+            state.log.push('[Warning: roll_dice per-range effects do not support pausing events; remaining effects and target navigation skipped. Use a script event for this shape per Rule 22.]');
+            return state;
+          }
+        }
+      }
       if (target) return navigateTo(state, book, target);
       if (matched) return processNextEvent(state, book);
       state.log.push(`No result for ${result.total}`);

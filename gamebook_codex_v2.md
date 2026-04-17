@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.10.0
+# THE GAMEBOOK CODEX v2.11.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -14,9 +14,9 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 | Artifact | Version | Canonical path |
 |---|---|---|
 | `codex.schema.json` (GBF format) | ≥ 1.7.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 3.2.1 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 3.2.1 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 3.2.1 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `cli-emulator/play.js` | ≥ 3.3.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 3.3.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 3.3.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -287,6 +287,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | One-of-a-kind named antagonist (final boss, unique wizard, the Warlock himself) | Rule 10 (exception) | Bare snake-case id (`warlock_of_firetop_mountain`, `vampire_lord_markos`) is acceptable when the name is genuinely unique across the whole book |
 | "You find X" / "You take X" / "You may keep X" / "Deeper in the bag is Y" / "X lies at your feet" / "note this on your Action Chart" / reward or gift phrasing / container+positional phrasing for any item — with OR without the canonical Action-Chart trigger | Rule 20 | One `add_item` event per item described (compound pickup paragraphs fire multiple events); `choose_items` when the text lists "one of the following" alternatives; items_catalog entry added if the item is new |
 | "You have N Meals at the start" / "Rations" / "Food supply" / "Provisions" / any per-adventure food counter the book tracks on the Action Chart | Rule 21 | `rules.provisions` block (`starting_amount`, `heal_amount`, `heal_stat`, `when_usable`, `display_name`); `modify_stat stat:"provisions"` for grants (NOT `add_item`); `eat_meal` for consumption; NO `meal` entry in items_catalog |
+| A *named* magical consumable that doubles as a Meal (Laumspur, Iron Rations of the Dwarves, Elven Waybread, Healing Draught) — discrete named item with a mechanical effect beyond "counts as one Meal" | Rule 21 (named-consumable carve-out) | `items_catalog` entry with a real id + name + description; grants via `add_item`; consumption via `eat_meal` with `condition: has_item` + companion `remove_item`, OR a `modify_stat` + `remove_item` pair when the book treats the item as a separate heal rather than a Meal replacement |
 | "Roll a die, lose/gain that many points" — die is the *quantity*, not the routing | Section 7.6 → Pattern 7.6.5 | `roll_dice` event with the die's outcome funneled into `apply_to_stat` — NOT a `script` event |
 | "Sequential N Luck tests" / "test Luck three times in a row" | Section 7.6 → Pattern 7.6.3 | `script` event using a Lua loop over `roll('1d6')` calls and the `luck_in_combat` global |
 | "Restore [stat] to its Initial value" | Section 7.6 → Pattern 7.6.1 | `script` event reading `initial_stats` and writing `player_stats` |
@@ -295,7 +296,9 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Roll for the time of day" / "if it is morning … / if it is night …" wall-clock checks | Section 7.6 → Pattern 7.6.7 | `script` event reading and writing a `state.time_of_day` flag |
 | "If you have visited this section before, …" / one-time visit flags | Rule 15 + Section 7.6 | `set_flag` on first visit, conditional events gated on `has_flag` thereafter |
 | "Subroutine section that returns to where you came from" | Section 7.6 → Pattern 7.6.8 | `script` event using `state.return_to_section` set by the caller before navigating |
-| Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects | Section 7.6 → Pattern 7.6.9 | `roll_dice` with per-range `effects` and `target` |
+| Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects — "if 4 or lower, lose 2 ENDURANCE and turn to 140; if 5 or higher, turn to 323" | Rule 22 (Pattern 7.6.9) | `roll_dice` event with per-range `effects` (array of event objects) plus `target`. Schema v1.8+. Effects run AFTER the range match and BEFORE navigation, so a single event mutates state and moves the player. Falls back to `script` only when the effects array cannot express the branching (cumulative loops, conditional re-rolls, complex multi-stage logic). |
+| Book-wide combat rule stated in the *rules section* (not in any specific encounter) — "if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while wearing the Ring of Hostility all enemies attack at +1", any universal combat rule keyed on player state | Rule 23 | `rules.combat_system.standing_modifiers[]` (schema v1.8+). One `combat_modifier` entry per rule, with `target` dot-path, signed `delta`, optional `condition` for "applies when…" rules, optional `reason`. Emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start. Never re-encode the same rule per-section — that's lossy (misses fights the parser forgets) and redundant. |
+| Section describes losing an entire inventory category — "you lose the Pack and all the Equipment that was inside it" (LW1 §188 Kraan Backpack loss), "your weapons are confiscated", "all your Special Items are stripped from you" | Rule 24 | `remove_inventory_category` event (schema v1.8+) with `category` matching the book's own `inventory_category` string (e.g. `"backpack"`, `"special"`, `"weapons"`). Single event replaces per-id `remove_item` sequences; auto-unequips any equipped items whose id falls in the removed category. |
 | Computed navigation: "add up your gold and turn to that section" / cipher-style page jumps | Section 8.1 | `input_number` event with `target: "computed"` and a documented formula |
 | Hidden-information puzzle solved from an illustration (counting objects, decoding a glyph) | Section 8.2 | `input_number` event referencing the illustration; the answer is the section to turn to |
 | Password / text entry ("speak the word of opening") | Section 8.3 | `input_text` event with the expected string |
@@ -937,6 +940,114 @@ When a book tracks a per-adventure food supply — whatever the book calls it (M
 **Cross-verification pass.** Every book's items_catalog must be walked once with Rule 21 in mind. If any entry has an id or name like `meal`, `ration`, `food`, `provisions`, `supplies`, or similar, check whether the book actually presents that as an inventory-tracked item (a unique magical ration, a named feast, an identifiable ingredient) or as a provisions counter. If it's a provisions counter, the entry is spurious and should be removed, and every `add_item item:"<that id>"` event in the book should be rewritten as `modify_stat stat:"provisions" amount:<count>`.
 
 **Emulator contract (codex v2.9 / emulators v3.1).** Both reference emulators auto-initialise `state.provisions = rules.provisions.starting_amount` at character-creation start. The character-creation summary renderer reads from `state.provisions` only, labeled via `rules.provisions.display_name`. Pre-v3.1 emulators did NOT auto-initialise and relied on the book's `character_creation.steps[]` to set the value via `set_resource` — books that forgot the step (or mistyped the slot name) left `state.provisions` at 0. This rule pair — the codex mandates a single canonical slot, the emulator auto-initialises it — closes that bug class entirely for future parses.
+
+**Named magical consumables are a carved-out exception.** Rule 21's rules-out list targets the generic sustenance counter (plain Meals, generic Provisions, generic Rations, generic Food). Some books introduce *named* magical consumables that double as provisions while also being distinct inventory items with their own mechanical effect — the canonical example is Lone Wolf's Laumspur Meal (a healing herb that satisfies a `eat_meal` prompt AND restores a fixed amount of ENDURANCE per use, tracked as an identifiable Backpack Item with a distinct name, not as an interchangeable unit of the generic provisions counter). These belong in `items_catalog` with a real id, a real `name`, their own description, and — crucially — a name that is *not* a synonym for generic provisions. The carve-out is narrow: the item must be named (`"Laumspur"`, `"Iron Rations of the Dwarves"`, `"Elven Waybread"`, `"Healing Draught"`), must have a mechanical effect beyond "counts as one Meal" (usually a heal, sometimes a stat_modifier, sometimes a flag), and must be countable as a discrete item in narrative ("you find a single flask of Laumspur") rather than as an abstract supply ("you find 3 Meals"). If those three conditions all hold, the item belongs in `items_catalog` and the eating mechanic can be encoded either as an `eat_meal` event whose `condition` checks for the specific item followed by a companion `remove_item` (when the book treats using Laumspur as both a Meal AND a heal) or as a `modify_stat` + `remove_item` pair gated on a player-facing choice (when the book treats Laumspur as a separate heal that does not also tick the Meals counter). Either encoding is legitimate — pick the one that matches the book's rules text. What remains forbidden by Rule 21 is the reverse of the carve-out: creating a catalog entry whose id or name is `meal` / `ration` / `food` / `provisions` / `supplies` and whose semantics are "a generic unit of the provisions counter." The distinguishing test is *naming and distinctness*: if the book writes "you find a Meal" (generic) the grant is `modify_stat stat:"provisions" amount:1`; if the book writes "you find a flask of Laumspur" (named, distinct) the grant is `add_item item:"laumspur_flask_01"` and the item has its own catalog entry. Worked example from LW1 §113 (a shrine where the player may pray for food): the player is granted a single Laumspur Meal — `add_item item:"laumspur_meal"` into inventory plus an `items_catalog.laumspur_meal` entry with description noting it restores 3 ENDURANCE when eaten AND satisfies an `eat_meal` prompt. The generic Meals counter is unaffected by this grant, which is the correct behaviour — Laumspur does not stack with ordinary Meals because the book tracks them as separate categories.
+
+### Rule 22: Per-Range Effects on `roll_dice` (Canonical Encoding for Pattern 7.6.9)
+
+When a section instructs the player to roll and branches on the result, AND one or more branches attaches a mechanical side effect (stat loss, item change, flag set) that applies *only* to that branch, the correct encoding is a `roll_dice` event whose `results[range]` entries carry an `effects` array holding the branch-specific events. The emulator matches the range, applies the listed effects in order, then navigates to the `target` (if any). Effects run *after* range selection and *before* navigation, so a single event both mutates state and moves the player.
+
+**The shape.** Each entry in `results` is an object that may carry `target` (section id or null), `text` (narrative for the branch), and `effects` (array of event objects). The `effects` array accepts any event type the schema defines — `modify_stat`, `add_item`, `remove_item`, `remove_inventory_category`, `set_flag`, `script`, etc. Events inside `effects` follow the same contract as section-level events: they may carry their own `condition` field, they fire in array order, and they run before navigation. An `effects` array with `target: null` produces side effects and leaves the player on the current section (for roll branches that change state but do not navigate, e.g. "the lock holds" branches that return control to the section's choices).
+
+**Canonical worked example — LW1 §36 (the ladder).** The source text reads "Pick a number from the Random Number Table. If the number is 4 or lower, you have fallen. Lose 2 ENDURANCE points and turn to 140. If the number is 5 or higher, turn to 323." Correct encoding:
+
+```json
+{
+  "type": "roll_dice",
+  "dice": "R10",
+  "prompt": "Pick a number from the Random Number Table",
+  "results": {
+    "0-4": {
+      "text": "You fall.",
+      "effects": [
+        {"type": "modify_stat", "stat": "ENDURANCE", "amount": -2, "reason": "Fell from the ladder"}
+      ],
+      "target": 140
+    },
+    "5-9": {
+      "text": "You keep your footing.",
+      "target": 323
+    }
+  }
+}
+```
+
+**Why not a `script` event.** Pre-Rule-22 guidance in Pattern 7.6.9 recommended a `script` event for random-branch-with-side-effects sections, which worked but had three drawbacks: (1) the roll is buried inside imperative Lua rather than visible as a structured `roll_dice`, so playthrough logs and UIs cannot summarise the branch choices without executing the script, (2) script events cannot add or remove items (sandbox restriction), so item-changing branches had to decompose into 7.6.8-style sub-sections, and (3) each random-branch section re-derived its roll idiom in Lua, accumulating duplication across books. Per-range `effects` close all three: the roll is structural, any event type is legal in `effects` (including `add_item` / `remove_item` / `remove_inventory_category`), and the shape is declarative. The script-event encoding remains valid for genuinely complex cases (multi-stage branching, cumulative cost loops, conditional re-rolls), but the common "roll + per-branch side effect + navigate" shape belongs in `roll_dice` with `effects`.
+
+**Backward compatibility.** `results[range]` entries with only `target` and `text` (no `effects`) behave exactly as they did pre-Rule-22 — the field is additive. Existing books that encoded branch-with-side-effect sections as `script` events continue to work unchanged; Rule 22 specifies the preferred shape for new parses and for sub-agent re-runs. Pattern 7.6.9 below is rewritten to recommend `roll_dice` + `effects` as the canonical encoding, with `script` as the fallback for cases the effects array cannot express.
+
+**Verification.** For every `roll_dice` event in a book, check whether any branch attaches a mechanical side effect (stat change, item change, flag set) in the section's narrative. If yes, the corresponding `results[range].effects` array carries the event(s) that apply the side effect. If the section has a parallel section-level `modify_stat` (or similar) event that fires unconditionally, that's a Rule 12 violation — the per-branch effect and the unconditional event double-count.
+
+### Rule 23: Book-Wide Standing Combat Modifiers
+
+Some books state combat rules in their *rules section* (not in any specific encounter) that apply to every combat the player enters. The canonical example is Lone Wolf's "If you enter combat with no weapons, deduct 4 points from your COMBAT SKILL" — a standing rule that applies to every fight across the whole book, keyed on whether the player is currently carrying an equipped weapon. Rule 23 specifies the canonical encoding: `rules.combat_system.standing_modifiers[]` (schema v1.8+), an array of `combat_modifier` objects that the emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start.
+
+**The shape.** Each entry is a `combat_modifier` with `target` (dot-path like `player.attack`), `delta` (signed number), optional `condition`, optional `reason`, and optional `duration`. The emulator evaluates each entry's `condition` at combat start (like it does for per-section modifiers), freezes the passing deltas onto the combat's `appliedModifiers` list, and applies them to player/enemy data before every round's math.
+
+**Canonical worked example — LW's no-weapon rule.** The book's rules section says "If you enter combat with no weapons, deduct 4 points from your COMBAT SKILL." Correct encoding on `rules.combat_system.standing_modifiers[]`:
+
+```json
+{
+  "combat_system": {
+    "standing_modifiers": [
+      {
+        "target": "player.attack",
+        "delta": -4,
+        "condition": {"type": "not", "condition": {"type": "has_equipped_in_slot", "slot": "weapon"}},
+        "reason": "No weapon in hand"
+      }
+    ]
+  }
+}
+```
+
+At every combat start the emulator evaluates the condition against current state: if the player has nothing equipped in the `weapon` slot, the -4 penalty applies to `player.attack` for the fight; if they do have a weapon equipped, the condition fails and the penalty is skipped. The book's data declares the rule once; every combat in the book inherits it automatically.
+
+**When a standing modifier is the right shape, vs. per-section or per-enemy.** Three rules of thumb: (a) if the modifier applies to every combat regardless of who the enemy is or which section the fight happens in, it's a standing modifier on `rules.combat_system`; (b) if the modifier is a property of the enemy *type* (a creature that always suppresses psychic attacks wherever it appears), it's an `intrinsic_modifiers` entry on the enemies_catalog entry per Rule 17; (c) if the modifier is scoped to a single encounter (surprise attack in §283 round 1, narrative setback that only applies this fight), it's a `combat_modifiers` entry on the combat event per Rule 17. A modifier encoded at the wrong level either leaks (standing when it should be per-section, applying to unrelated fights) or is lossy (per-section when it should be standing, forcing re-encoding on every combat event and silently missing any fight the parser forgets to mark).
+
+**Condition gating is the escape hatch for "applies when…".** Standing modifiers are not only for unconditional rules. The no-weapon example is the common case: a standing rule that applies *conditionally on player state*, checked at every combat start. Other examples the shape naturally covers: "while wearing the Ring of Hostility, enemies attack with +1" (standing modifier with `has_equipped_item`), "when health is below 5, all your attacks are at -2" (standing modifier with `stat_lte`). These are all properties of the book's combat system taken as a whole — the encoding keeps them in the rules block where the book itself states them.
+
+**What NOT to encode as a standing modifier.** Per-encounter rules that only fire in one specific section (surprise attack, enemy-specific monologue), per-enemy-type rules (Vordak's Mindblast suppression across every Vordak encounter), and modifiers that compose (a +2 buff in §50 that stacks on top of a -4 standing penalty) — these belong at their natural level. Standing modifiers are the *book-wide* level; use per-section and per-enemy for the other two.
+
+**Verification.** Walk the book's rules section looking for any combat rule phrased as a universal statement ("if you enter combat with…", "whenever you fight…", "while carrying X, your attacks…", "in any combat, the following applies"). Every such rule maps to a `rules.combat_system.standing_modifiers[]` entry. Re-scan all combat events in the book: if the same modifier appears on many (more than ~3) combat events, consider whether it's actually a standing rule that was re-encoded per-section because the standing slot didn't exist at parse time. Consolidate into the standing list, or leave per-section with a note if the rule genuinely varies by encounter.
+
+### Rule 24: `remove_inventory_category` for Whole-Category Inventory Loss
+
+Some sections describe an event that removes an entire *category* of items rather than specific named items — the canonical example is Lone Wolf 1 §188 ("the Kraan has ripped away your Backpack. You have lost the Pack and all the Equipment that was inside it"). Before schema v1.8 the only way to encode whole-category loss was a sequence of `remove_item` events, one per id, requiring the parser to enumerate every backpack-category item the player could possibly be carrying at that point — which is both lossy (new items added later won't be removed) and fragile (each comprehensive review re-enumerates). Schema v1.8 adds `remove_inventory_category` as a single-event primitive: the emulator walks the player's current inventory, removes every item whose `items_catalog[id].inventory_category` matches the event's `category` field, and auto-unequips any of those items currently occupying an equipment slot.
+
+**The shape.**
+
+```json
+{
+  "type": "remove_inventory_category",
+  "category": "backpack",
+  "reason": "The Kraan has ripped away your Backpack"
+}
+```
+
+The `category` value is the exact string the book's `items_catalog` uses in its own `inventory_category` fields — common values are `"backpack"`, `"special"`, `"weapons"`, `"armor"`, but the schema does not enumerate categories, so whatever the book declares is legal. Items without an `inventory_category` (or with a non-matching one) are unaffected.
+
+**Canonical worked example — LW1 §188.** The Kraan strips the player of their Backpack. Encoding:
+
+```json
+{
+  "events": [
+    {
+      "type": "remove_inventory_category",
+      "category": "backpack",
+      "reason": "The Kraan rips away your Backpack — you lose the Pack and all its Equipment"
+    }
+  ]
+}
+```
+
+That single event replaces what would otherwise be 10-20 `remove_item` events one per id, and stays correct even as the book's backpack-category inventory evolves in future parses.
+
+**When NOT to use it.** The category primitive is correct for "lose the whole bag / the whole category" events; it is NOT correct for selective loss ("you lose any one Special Item of your choice"), for partial loss ("you lose half your Meals"), or for conditional loss ("any Special Item that is made of iron is rusted and destroyed"). Selective loss uses `choose_items` (loss variant — schema does not yet have this event, tracked separately); partial loss uses `modify_stat` on a resource counter; conditional loss decomposes into per-id `remove_item` events gated on conditions, or a `script` event that walks the catalog. Rule 24 is scoped narrowly: a single inventory category, removed wholesale, no selection and no gating.
+
+**Relationship to equipment slots.** When `remove_inventory_category` removes an item that is currently equipped, the emulator auto-unequips it (same hook as `remove_item`). The slot becomes empty; the player's `player.equipment` map no longer carries that item. This is important for Rule 19 interactions: losing the Backpack might also mean losing the Helmet or weapon that was stored inside it, and those items' equipped-state bonuses should drop off when the items are removed. The emulator handles this automatically — parsers and encoding authors do not need to emit companion unequip events.
+
+**Verification.** Every `remove_inventory_category` event carries a valid `category` string that matches at least one `items_catalog[id].inventory_category` value in the book. If the category doesn't match any item, the event is a no-op (not an error, but usually a parser bug — the author meant a category that doesn't exist). During comprehensive review, cross-check the category value against the catalog to catch typos. Also: if a section's text describes losing "the Pack and all its Equipment" but the encoding is a sequence of `remove_item` events rather than `remove_inventory_category`, that's a pre-v1.8 encoding that should be migrated to the new shape during the next sub-agent pass.
 
 ---
 
@@ -2112,13 +2223,31 @@ A single emulator may implement both and switch between them per-session (e.g. a
 - "Roll two dice. If the total is 7 or higher, you dodge the falling rubble and turn to 205. If the total is 6 or lower, you are trapped and must also remove 2 Meals from your backpack — turn to 312."
 - A Lone Wolf section whose description says "pick a number... if X, lose Y and turn to T1; otherwise turn to T2" where the "lose Y" side effect applies only on one branch.
 
-**Why not `roll_dice` with a `results` table:** The `results` form is correct for pure navigation rolls where the roll only picks a destination section and the destination handles any stat changes itself. It is wrong for per-branch side effects, because a `roll_dice` event's `results` entries carry only `target` and `text` — there is no hook to apply a stat change, remove an item, or set a flag between the roll and the navigation. Putting a `modify_stat` event *after* the `roll_dice` event doesn't work either: the roll_dice navigates immediately on a match, so the sequel event never fires.
+**Canonical encoding: `roll_dice` with per-range `effects` (Rule 22, schema v1.8+).** `roll_dice.results[range]` entries carry an optional `effects` array holding event objects that fire when the range matches. Effects run AFTER the range selection and BEFORE navigation, so the branch can both mutate state and navigate in a single event. The common "roll + branch-specific side effect + navigate" shape lands directly:
+
+```json
+{
+  "type": "roll_dice",
+  "dice": "R10",
+  "prompt": "Pick a number from the Random Number Table",
+  "results": {
+    "0-4": {
+      "text": "You fall.",
+      "effects": [{"type": "modify_stat", "stat": "ENDURANCE", "amount": -2, "reason": "Fell from the ladder"}],
+      "target": 140
+    },
+    "5-9": {"text": "You keep your footing.", "target": 323}
+  }
+}
+```
+
+This supersedes the pre-Rule-22 guidance (which recommended a `script` event for this shape). See Rule 22 for the full specification, including a `remove_inventory_category` example and the conditions under which `script` remains the right choice.
 
 **Why not `stat_test`:** `stat_test` compares a roll against a single stat and branches on success/failure. It doesn't model "roll a random number without comparison, branch on the raw value, and apply a side effect on one of the branches."
 
-**Encoding:** Use a `script` event. Scripts can roll dice via `roll()`, branch arbitrarily in Lua, modify `game_state` fields, and set `player.navigate_to` — all in a single event. This is the canonical pattern for any mechanic shaped as "roll + range check + branch-specific side effect + navigate." It is a cousin of pattern 7.6.2 (dual- or multi-stat gate), extended to allow side effects per branch.
+**When `script` is still the right fallback.** Use a `script` event for random-branch mechanics that the effects array cannot express: (a) **cumulative / stateful branching** where the side effect depends on a running total or a previously-set flag ("each failed attempt loses another 2 STAMINA"), (b) **re-roll loops** where a bad roll retries with cost ("keep rolling until you succeed, losing K each failure" — Pattern 7.6.4's shape extended with randomness), (c) **multi-stage branching** where the first roll determines which of several further tests fire, (d) **cross-event state reads** where the branch needs to consult something only available via the Lua sandbox (full `game_state`, `initial_stats`, arbitrary arithmetic). For the straightforward "one roll, pick a branch, apply the branch's events, navigate" shape, prefer `roll_dice` with `effects`.
 
-**Canonical `script` shape (Lone Wolf R10 ladder example):**
+**Script fallback shape (Lone Wolf R10 ladder, shown for fallback cases only):**
 
 ```lua
 local r = roll('R10')
@@ -2538,7 +2667,13 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 20 (Loot-detection vocabulary).** I walked every section's text once more looking specifically for pickup phrasing — not just "note this on your Action Chart," but also container/positional phrasing ("deeper in the bag is," "at the bottom of," "wrapped in a bundle is," "X lies at your feet"), permission phrasing ("you may take / keep / pick up"), gift/reward phrasing ("you are given," "hands you," "as a reward"), and enumerated lists ("one of the following," "pick from these"). Every sentence containing an item name AND any pickup-phrase trigger has a corresponding `add_item` event in the section's `events[]` (or a `choose_items` event when the text offers a list). Compound pickup paragraphs fire one event per item, not one event for the whole paragraph. No item-name + pickup-phrase sentence is left without a structured event — the cross-verification pass is a hard gate, not a soft suggestion.
 
-**Rule 21 (Provisions as resource counter).** If the book tracks a per-adventure food counter (Meals, Provisions, Rations, Food, Supplies), I encoded it via `rules.provisions` with `starting_amount`, `heal_amount`, `heal_stat`, `when_usable`, and `display_name`, AND I did NOT create a `meal`/`ration`/`food` entry in `items_catalog`, AND every in-section grant uses `modify_stat stat:"provisions" amount:N` (never `add_item item:"meal"`), AND every consumption uses `eat_meal`. The character-creation summary and the game-screen stat bar both read `state.provisions` (via the `display_name` label). The emulator auto-initialises `state.provisions` from `rules.provisions.starting_amount` so `character_creation.steps[]` does not need an explicit `set_resource` for the starting count (if one is present, the slot name is `"provisions"`, not `"meals"`).
+**Rule 21 (Provisions as resource counter).** If the book tracks a per-adventure food counter (Meals, Provisions, Rations, Food, Supplies), I encoded it via `rules.provisions` with `starting_amount`, `heal_amount`, `heal_stat`, `when_usable`, and `display_name`, AND I did NOT create a `meal`/`ration`/`food` entry in `items_catalog`, AND every in-section grant uses `modify_stat stat:"provisions" amount:N` (never `add_item item:"meal"`), AND every consumption uses `eat_meal`. The character-creation summary and the game-screen stat bar both read `state.provisions` (via the `display_name` label). The emulator auto-initialises `state.provisions` from `rules.provisions.starting_amount` so `character_creation.steps[]` does not need an explicit `set_resource` for the starting count (if one is present, the slot name is `"provisions"`, not `"meals"`). **Named magical consumables (Laumspur, Iron Rations of the Dwarves, Elven Waybread) that double as Meals are a carved-out exception** — they belong in `items_catalog` with a real id + name + description (and NOT an id that is a synonym for generic provisions), granted via `add_item`, consumed via `eat_meal` with `condition: has_item` + `remove_item`, or via `modify_stat` + `remove_item` if the book treats the item as a standalone heal rather than a Meal replacement. The distinguishing test is *naming and distinctness*: "you find a Meal" (generic) → `modify_stat stat:"provisions"`; "you find a flask of Laumspur" (named, distinct, with its own mechanical effect) → `add_item` + catalog entry.
+
+**Rule 22 (Per-range effects on `roll_dice`).** For every `roll_dice` event where one or more branches attaches a mechanical side effect (a stat change, item change, flag set, or inventory-category removal that applies only to that branch), the branch is encoded as a `results[range]` entry with an `effects` array holding the branch-specific events. Side effects fire AFTER the range match and BEFORE the `target` navigation. Same-section `modify_stat` / `add_item` / `set_flag` events that apply to all branches unconditionally live at section level (not in any branch's `effects`); same-section `modify_stat` events that double-count a per-branch loss are Rule 12 violations and were removed. For random-branch sections whose side effects cannot be expressed as ordinary events (cumulative loops, conditional re-rolls, multi-stage branching), the encoding is a `script` event — not a `roll_dice` with an incomplete `effects` array.
+
+**Rule 23 (Book-wide standing combat modifiers).** If the book's rules section states a combat rule as a universal statement ("if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while carrying the Ring of Hostility all enemies attack with +1", "whenever you fight in total darkness you attack at -3"), I encoded it as a `rules.combat_system.standing_modifiers[]` entry rather than repeating it per-section on every combat event. The entry carries the standard `combat_modifier` shape (target dot-path, signed delta, optional condition gating on player state, optional reason). I did NOT leave a standing rule unencoded on the assumption that "players will read the rules section" — the emulator merges standing_modifiers into every combat's frozen modifier list, so the rule mechanically applies. Conversely, I did NOT encode a per-encounter rule (surprise attack in §283, narrative setback specific to this fight) as a standing modifier — per-section and per-enemy modifiers belong at their natural levels per Rule 17.
+
+**Rule 24 (`remove_inventory_category` for whole-category loss).** For every section that describes the player losing an entire inventory category ("the Kraan has ripped away your Backpack", "your weapons are confiscated", "all your Special Items are stripped from you"), I encoded it as a single `remove_inventory_category` event with `category` matching the book's own `inventory_category` string, NOT as a sequence of per-id `remove_item` events. Partial loss ("you lose half your Meals"), selective loss ("you lose any one Special Item of your choice"), and conditional loss ("any iron item is rusted and destroyed") use different encodings — `modify_stat` on a resource counter, `choose_items` (loss variant), or per-id `remove_item` gated on conditions, respectively. The `category` value matches at least one `items_catalog[id].inventory_category` in the book — I cross-checked to catch typos.
 
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised.
 
@@ -2593,7 +2728,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.10.0 / GBF schema v1.7.0 / CLI emulator v3.2.1 / HTML emulator v3.2.1.**
+**Codex v2.11.0 / GBF schema v1.8.0 / CLI emulator v3.3.0 / HTML emulator v3.3.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

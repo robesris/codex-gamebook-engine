@@ -508,6 +508,194 @@ test('eat_meal honours explicit heal_amount: 0 (no || 4 fallthrough)', () => {
 });
 
 // ============================================================
+// Test 12: roll_dice per-range effects (Rule 22, schema v1.8+).
+// ============================================================
+// MOTIVATED_BY: Chat #8 LW1 fresh-parse probe surfaced that
+// roll_dice.results[range] couldn't express "lose 2 ENDURANCE AND
+// turn to 140" without demoting the whole event to a script event.
+// Rule 22 adds a per-range `effects` array that fires after range
+// match and before navigation. Canonical example: LW1 §36 ladder.
+// END_TO_END_VERIFY: encode LW1 §36 as a `roll_dice` with per-range
+// effects during LW iter 14 sub-agent pass; drive the emulator
+// through §36, confirm ENDURANCE drops by 2 on a 0-4 roll, stays
+// put on a 5-9 roll, and that navigation lands on 140 or 323
+// respectively.
+test('roll_dice per-range effects apply on match, before navigation', () => {
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'roll branch',
+        events: [{
+          type: 'roll_dice',
+          dice: 'R10',
+          prompt: 'pick',
+          results: {
+            '0-4': {
+              text: 'fall',
+              effects: [{ type: 'modify_stat', stat: 'TESTSTAT_A', amount: -2 }],
+              target: '2',
+            },
+            '5-9': { text: 'safe', target: '3' },
+          },
+        }],
+        choices: [],
+      },
+      '2': { text: 'fell', events: [], choices: [] },
+      '3': { text: 'safe', events: [], choices: [] },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { TESTSTAT_A: 10 };
+
+  play.navigateTo(state, book, '1');
+  assertEqual(state.pause && state.pause.type, 'roll_dice', 'paused on roll_dice');
+
+  // Force a low roll (2 → within 0-4): effects should fire, then navigate to 2.
+  play.applyAction(state, book, 'provide_roll', [2]);
+  assertEqual(state.stats.TESTSTAT_A, 8, 'per-range modify_stat effect applied (-2)');
+  assertEqual(state.currentSection, '2', 'navigated to target after effects');
+
+  // Reset and try a high roll: no effects, navigate to 3.
+  const state2 = play.initialState('synthetic');
+  state2.frontmatterDone = true;
+  state2.creationDone = true;
+  state2.pause = null;
+  state2.stats = { TESTSTAT_A: 10 };
+  play.navigateTo(state2, book, '1');
+  play.applyAction(state2, book, 'provide_roll', [7]);
+  assertEqual(state2.stats.TESTSTAT_A, 10, 'non-matching range has no effects');
+  assertEqual(state2.currentSection, '3', 'navigated to high-roll target');
+});
+
+// ============================================================
+// Test 13: rules.combat_system.standing_modifiers merge into
+// combat at start (Rule 23, schema v1.8+).
+// ============================================================
+// MOTIVATED_BY: Chat #8 LW1 fresh-parse probe surfaced that LW's
+// book-wide "no weapon in hand = -4 COMBAT SKILL" rule had no
+// canonical home — it was either re-encoded on every combat event
+// (lossy) or left as narrative-only text (silent). Rule 23 adds
+// a `standing_modifiers` list under rules.combat_system that the
+// emulator merges with per-section and per-enemy modifiers at
+// every combat start.
+// END_TO_END_VERIFY: populate rules.combat_system.standing_modifiers
+// on LW1 with the no-weapon -4 rule during LW iter 14 sub-agent
+// pass; drive a CLI combat with and without an equipped weapon;
+// confirm the modifier panel shows the -4 when no weapon equipped
+// and omits it when a weapon is equipped.
+test('standing_modifiers merge into combat, condition-gated', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'COMBAT_SKILL' }, { name: 'HEALTH' }],
+      attack_stat: 'COMBAT_SKILL',
+      health_stat: 'HEALTH',
+      combat_system: {
+        round_script: '-- noop round script',
+        standing_modifiers: [{
+          target: 'player.attack',
+          delta: -4,
+          condition: { type: 'not', condition: { type: 'has_equipped_in_slot', slot: 'weapon' } },
+          reason: 'No weapon in hand',
+        }],
+      },
+    },
+    sections: {
+      '1': {
+        text: 'fight',
+        events: [{
+          type: 'combat',
+          enemy_ref: 'test_enemy_01',
+          win_to: '2',
+        }],
+        choices: [],
+      },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+    enemies_catalog: {
+      test_enemy_01: { name: 'Test Enemy', COMBAT_SKILL: 10, HEALTH: 5 },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { COMBAT_SKILL: 15, HEALTH: 20 };
+  state.inventory = [];
+  state.equipment = {};
+
+  play.navigateTo(state, book, '1');
+  assertTrue(state.combat, 'combat started');
+  const mods = state.combat.appliedModifiers;
+  assertTrue(Array.isArray(mods), 'appliedModifiers is an array');
+  const standing = mods.find(m => m.reason === 'No weapon in hand');
+  assertTrue(standing, 'standing modifier present when no weapon equipped');
+  assertEqual(standing.delta, -4, 'standing modifier delta is -4');
+
+  // Re-run with a weapon equipped: condition fails, modifier skipped.
+  const state2 = play.initialState('synthetic');
+  state2.frontmatterDone = true;
+  state2.creationDone = true;
+  state2.pause = null;
+  state2.stats = { COMBAT_SKILL: 15, HEALTH: 20 };
+  state2.inventory = ['test_weapon_01'];
+  state2.equipment = { weapon: 'test_weapon_01' };
+
+  play.navigateTo(state2, book, '1');
+  const mods2 = state2.combat.appliedModifiers;
+  const standing2 = mods2.find(m => m.reason === 'No weapon in hand');
+  assertTrue(!standing2, 'standing modifier skipped when weapon equipped');
+});
+
+// ============================================================
+// Test 14: remove_inventory_category purges category + unequips
+// (Rule 24, schema v1.8+).
+// ============================================================
+// MOTIVATED_BY: Chat #8 LW1 fresh-parse probe surfaced that §188
+// ("the Kraan has ripped away your Backpack") had no single-event
+// encoding — the alternative was a per-id remove_item sequence
+// that is lossy (misses newly-added items) and fragile. Rule 24
+// adds a category-based primitive.
+// END_TO_END_VERIFY: encode LW1 §188 as a single
+// remove_inventory_category event during LW iter 14; drive the
+// emulator through §188 with a populated Backpack; confirm every
+// backpack-category item drops from state.inventory AND any
+// equipped item in that category is auto-unequipped.
+test('remove_inventory_category drops category items and unequips', () => {
+  const book = buildBook({
+    items_catalog: {
+      test_item_bp_01: { name: 'Rope',    type: 'general', inventory_category: 'backpack' },
+      test_item_bp_02: { name: 'Helmet',  type: 'armor',   inventory_category: 'backpack', equippable: true, slot: 'head' },
+      test_item_sp_01: { name: 'Amulet',  type: 'general', inventory_category: 'special' },
+      test_item_free:  { name: 'Loose',   type: 'general' },
+    },
+    sections: {
+      '1': {
+        text: 'Kraan rips',
+        events: [{ type: 'remove_inventory_category', category: 'backpack', reason: 'Kraan attack' }],
+        choices: [],
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.inventory = ['test_item_bp_01', 'test_item_bp_02', 'test_item_sp_01', 'test_item_free'];
+  state.equipment = { head: 'test_item_bp_02' };
+
+  play.navigateTo(state, book, '1');
+
+  assertTrue(!state.inventory.includes('test_item_bp_01'), 'backpack item 1 removed');
+  assertTrue(!state.inventory.includes('test_item_bp_02'), 'backpack item 2 removed');
+  assertTrue(state.inventory.includes('test_item_sp_01'), 'special item preserved');
+  assertTrue(state.inventory.includes('test_item_free'),  'uncategorised item preserved');
+  assertTrue(!state.equipment.head, 'equipped backpack item auto-unequipped');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;

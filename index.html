@@ -637,7 +637,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.2.1';
+const CODEX_EMULATOR_VERSION = '3.3.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -650,7 +650,7 @@ const CODEX_EMULATOR_VERSION = '3.2.1';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '66d7d7d';
+const CODEX_EMULATOR_COMMIT = '309164d';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -1995,6 +1995,10 @@ function processNextEvent() {
       handleRemoveItem(event);
       processNextEvent();
       break;
+    case 'remove_inventory_category':
+      handleRemoveInventoryCategory(event);
+      processNextEvent();
+      break;
     case 'set_flag':
       handleSetFlag(event);
       processNextEvent();
@@ -2150,6 +2154,45 @@ function handleRemoveItem(event) {
   const msg = document.createElement('div');
   msg.className = 'event-msg loss';
   msg.textContent = `Lost: ${getItemName(event.item)}`;
+  content.appendChild(msg);
+  updateInventory();
+  renderEquipmentPanel();
+}
+
+// --- Remove Inventory Category ---
+// Rule 24 (schema v1.8+): remove every inventory item whose
+// items_catalog[id].inventory_category matches event.category, and
+// auto-unequip any equipped items in that set. Canonical use: LW1 §188
+// Kraan Backpack loss — "you have lost the Pack and all the Equipment
+// that was inside it" encodes as a single remove_inventory_category
+// event instead of a per-id sequence. Items without an
+// inventory_category (or with a non-matching one) are unaffected.
+function handleRemoveInventoryCategory(event) {
+  const content = document.getElementById('game-content');
+  const category = event.category;
+  const catalog = (gameData && gameData.items_catalog) || {};
+  if (!category) {
+    const msg = document.createElement('div');
+    msg.className = 'event-msg info';
+    msg.textContent = '[Warning: remove_inventory_category event has no category field]';
+    content.appendChild(msg);
+    return;
+  }
+  const doomed = state.inventory.filter(id => (catalog[id] || {}).inventory_category === category);
+  for (const id of doomed) {
+    const idx = state.inventory.indexOf(id);
+    if (idx >= 0) state.inventory.splice(idx, 1);
+    autoUnequipOnRemove(id);
+  }
+  const msg = document.createElement('div');
+  if (doomed.length > 0) {
+    msg.className = 'event-msg loss';
+    const names = doomed.map(id => getItemName(id)).join(', ');
+    msg.textContent = `Lost ${doomed.length} ${category} item${doomed.length === 1 ? '' : 's'}: ${names}${event.reason ? ' — ' + event.reason : ''}`;
+  } else {
+    msg.className = 'event-msg info';
+    msg.textContent = `No ${category} items to remove${event.reason ? ' — ' + event.reason : ''}`;
+  }
   content.appendChild(msg);
   updateInventory();
   renderEquipmentPanel();
@@ -2677,8 +2720,17 @@ function handleCombat(event) {
       intrinsicModifiers.push(...cat.intrinsic_modifiers);
     }
   }
+  // Rule 23 (schema v1.8+): book-wide standing modifiers from
+  // rules.combat_system.standing_modifiers[] apply to every combat in
+  // the book unless their condition evaluates false. Merged into the
+  // same frozen list as per-section and per-enemy modifiers. Canonical
+  // use: LW's "no weapon in hand = -4 COMBAT SKILL" book-wide rule —
+  // encoded once in the rules block, auto-applied to every fight.
+  const standingModifiers = Array.isArray(gameData?.rules?.combat_system?.standing_modifiers)
+    ? gameData.rules.combat_system.standing_modifiers
+    : [];
   const appliedModifiers = [];
-  for (const mod of [...eventModifiers, ...intrinsicModifiers]) {
+  for (const mod of [...standingModifiers, ...eventModifiers, ...intrinsicModifiers]) {
     if (mod.condition && !evaluateCondition(mod.condition)) continue;
     const target = typeof mod.target === 'string' ? mod.target : null;
     const delta = typeof mod.delta === 'number' ? mod.delta : 0;
@@ -3302,11 +3354,13 @@ function handleRollDice(event) {
     let matched = false;
     let target = null;
     let resultText = '';
+    let matchedEntry = null;
     const results = event.results || {};
     if (results[String(result.total)]) {
       matched = true;
-      target = results[String(result.total)].target;
-      resultText = results[String(result.total)].text || results[String(result.total)].note || '';
+      matchedEntry = results[String(result.total)];
+      target = matchedEntry.target;
+      resultText = matchedEntry.text || matchedEntry.note || '';
     } else {
       // Check range keys like "1-2"
       for (const [key, val] of Object.entries(results)) {
@@ -3314,6 +3368,7 @@ function handleRollDice(event) {
           const [lo, hi] = key.split('-').map(Number);
           if (result.total >= lo && result.total <= hi) {
             matched = true;
+            matchedEntry = val;
             target = val.target;
             resultText = val.text || val.note || '';
             break;
@@ -3327,6 +3382,42 @@ function handleRollDice(event) {
       <div class="dice-display">[${result.rolls.join(', ')}] = ${result.total}</div>
       ${resultText ? `<p>${resultText}</p>` : ''}
     `;
+
+    // Per-range effects (Rule 22, schema v1.8+). Effects fire AFTER the
+    // range match and BEFORE the target navigation. Each entry is a full
+    // event object; we dispatch each through processEvent-equivalent
+    // handlers for the non-pausing types. Pausing events inside effects
+    // are not supported by Rule 22 — use a `script` event for that shape.
+    // The CLI emulator mirrors this dispatch.
+    if (matched && matchedEntry && Array.isArray(matchedEntry.effects)) {
+      for (const subEvent of matchedEntry.effects) {
+        if (subEvent.condition && !evaluateCondition(subEvent.condition)) continue;
+        switch (subEvent.type) {
+          case 'modify_stat':
+            handleModifyStat(subEvent);
+            break;
+          case 'add_item':
+            handleAddItem(subEvent);
+            break;
+          case 'remove_item':
+            handleRemoveItem(subEvent);
+            break;
+          case 'remove_inventory_category':
+            handleRemoveInventoryCategory(subEvent);
+            break;
+          case 'set_flag':
+            handleSetFlag(subEvent);
+            break;
+          default: {
+            const warn = document.createElement('div');
+            warn.className = 'event-msg info';
+            warn.textContent = `[Warning: roll_dice per-range effects do not support '${subEvent.type}' events. Use a script event for this shape per Rule 22.]`;
+            area.appendChild(warn);
+          }
+        }
+      }
+      updateStatBar();
+    }
 
     if (target) {
       // Add a Continue button so the player can read the section text
