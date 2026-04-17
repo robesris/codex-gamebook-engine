@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "play": "node cli-emulator/play.js",
-    "replay": "node cli-emulator/replay.js"
+    "replay": "node cli-emulator/replay.js",
+    "test": "node tests/run.js"
   },
   "dependencies": {
     "fengari": "0.1.5"

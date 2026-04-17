@@ -2513,6 +2513,7 @@ module.exports = {
   getPlayerHealth,
   navigateTo,
   rollDice,
+  evalCondition,
 };
 
 if (require.main === module) {
