@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.2.0';
+const CODEX_EMULATOR_VERSION = '3.2.1';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.2.0';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '04c1363';
+const CODEX_EMULATOR_COMMIT = '66d7d7d';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -1726,7 +1726,7 @@ function applyAction(state, book, action, args) {
       const hasFood = state.provisions > 0 || state.meals > 0;
       if (action === 'eat' && hasFood) {
         // Normal eat path: decrement food, apply heal.
-        const heal = event.heal_amount || book.rules?.provisions?.heal_amount || 4;
+        const heal = event.heal_amount ?? book.rules?.provisions?.heal_amount ?? 4;
         const stat = event.heal_stat || book.rules?.provisions?.heal_stat || 'stamina';
         if (state.provisions > 0) state.provisions--;
         else if (state.meals > 0) state.meals--;

@@ -637,7 +637,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.2.0';
+const CODEX_EMULATOR_VERSION = '3.2.1';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -650,7 +650,7 @@ const CODEX_EMULATOR_VERSION = '3.2.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '04c1363';
+const CODEX_EMULATOR_COMMIT = '66d7d7d';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -3359,7 +3359,7 @@ function handleEatMeal(event) {
   content.appendChild(area);
 
   const provRules = gameData.rules.provisions || {};
-  const healAmount = event.heal_amount || provRules.heal_amount || 4;
+  const healAmount = event.heal_amount ?? provRules.heal_amount ?? 4;
   const healStat = event.heal_stat || provRules.heal_stat || 'stamina';
 
   const isRequired = event.required === true;

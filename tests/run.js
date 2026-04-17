@@ -463,6 +463,51 @@ test('rules.provisions.starting_amount auto-initialises state.provisions', () =>
 });
 
 // ============================================================
+// Test 11: eat_meal honours explicit heal_amount: 0 on rules.provisions
+// (no per-event override), does NOT fall through to the 4-default.
+// ============================================================
+// MOTIVATED_BY: `|| 4` fallback bug surfaced by the Chat #8 LW1
+// fresh-parse probe (emulators v3.2.1). cli-emulator/play.js:1729
+// and index.html:3362 both read
+// `event.heal_amount || book.rules?.provisions?.heal_amount || 4;`,
+// which coalesces an explicit 0 to the default 4 — a book whose
+// plain Meals restore nothing (LW1: Meals are sustenance only;
+// healing comes from named Laumspur only) ended up granting +4
+// ENDURANCE per Meal eaten. Fix: switch both sites to `??`.
+// END_TO_END_VERIFY: drive the CLI emulator through LW1 to any
+// offered eat_meal (e.g. §63 or any section where the player may
+// voluntarily eat); confirm ENDURANCE does NOT increase and the
+// provisions counter decrements by 1.
+test('eat_meal honours explicit heal_amount: 0 (no || 4 fallthrough)', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'TESTSTAT_A' }],
+      provisions: { heal_amount: 0, heal_stat: 'TESTSTAT_A' },
+    },
+    sections: {
+      '1': {
+        text: 'offer meal',
+        events: [{ type: 'eat_meal', required: false }],
+        choices: [],
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { TESTSTAT_A: 5 };
+  state.provisions = 2;
+
+  play.navigateTo(state, book, '1');
+  assertEqual(state.pause && state.pause.type, 'eat_meal', 'paused on eat_meal');
+
+  play.applyAction(state, book, 'eat', []);
+  assertEqual(state.stats.TESTSTAT_A, 5, 'heal_amount: 0 honoured — no heal applied');
+  assertEqual(state.provisions, 1, 'provisions decremented regardless of heal');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;

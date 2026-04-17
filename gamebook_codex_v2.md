@@ -14,9 +14,9 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 | Artifact | Version | Canonical path |
 |---|---|---|
 | `codex.schema.json` (GBF format) | ≥ 1.7.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 3.2.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 3.2.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 3.2.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `cli-emulator/play.js` | ≥ 3.2.1 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 3.2.1 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 3.2.1 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -2593,7 +2593,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.10.0 / GBF schema v1.7.0 / CLI emulator v3.2.0 / HTML emulator v3.2.0.**
+**Codex v2.10.0 / GBF schema v1.7.0 / CLI emulator v3.2.1 / HTML emulator v3.2.1.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
