@@ -637,7 +637,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.1.0';
+const CODEX_EMULATOR_VERSION = '3.2.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -748,6 +748,21 @@ function roll2d6() {
 
 function getEnemy(ref) {
   return gameData.enemies_catalog[ref] || null;
+}
+
+// Schema v1.7+ duration-aware modifier filtering. Given a frozen modifier
+// entry and a 1-based combat round number, return true if the modifier
+// participates in that round. Round 0 is pre-first-round (nothing applies
+// yet); round 1 is the first fighting round; round 2+ are subsequent
+// rounds. Undefined duration means 'fight' (backward-compatible default).
+// 'round' is reserved for a future per-round dynamic semantic and is
+// currently treated as 'fight'.
+function modifierAppliesAtRound(mod, round) {
+  if (round < 1) return false;
+  const dur = (mod && mod.duration) || 'fight';
+  if (dur === 'first_round') return round === 1;
+  if (dur === 'after_first_round') return round >= 2;
+  return true;
 }
 
 // Resolve combat stat names from the game data's rules.attack_stat and rules.health_stat
@@ -2468,15 +2483,20 @@ function handleCombat(event) {
   const specialRules = event.special_rules || null;
 
   // Sum the deltas of every applied combat_modifier whose dot-path target
-  // matches the given string (e.g. "player.attack"). Used by renderCombat
-  // to compute effective stat values for display. The full modifier
+  // matches the given string (e.g. "player.attack") AND which is active
+  // in the given round per its `duration` field. Used by renderCombat to
+  // compute effective stat values for display. The full modifier
   // application pipeline lives in combatAttack(); this helper is display-
   // only and does not mutate any state.
-  function sumAppliedModifiersForTarget(appliedModifiers, target) {
+  //
+  // Schema v1.7+ duration-aware. When the display is called before the
+  // first round runs (roundNum === 0), the caller should pass 1 so the
+  // stat bar previews what the upcoming round will use.
+  function sumAppliedModifiersForTarget(appliedModifiers, target, round) {
     if (!Array.isArray(appliedModifiers) || appliedModifiers.length === 0) return 0;
     let sum = 0;
     for (const m of appliedModifiers) {
-      if (m && m.target === target && typeof m.delta === 'number') sum += m.delta;
+      if (m && m.target === target && typeof m.delta === 'number' && modifierAppliesAtRound(m, round)) sum += m.delta;
     }
     return sum;
   }
@@ -2525,8 +2545,11 @@ function handleCombat(event) {
     // A modifier with positive delta colours the effective value green.
     // The base value is shown in a dimmed parenthetical so the player can
     // always see both the base and the effective number at a glance.
-    const playerAttackDelta = sumAppliedModifiersForTarget(c.appliedModifiers, 'player.attack');
-    const enemyAttackDelta = sumAppliedModifiersForTarget(c.appliedModifiers, 'enemy.attack');
+    // Preview the upcoming round for pre-combat display (c.roundNum === 0)
+    // so the stat bar reflects what the first fighting round will see.
+    const displayRound = c.roundNum === 0 ? 1 : c.roundNum;
+    const playerAttackDelta = sumAppliedModifiersForTarget(c.appliedModifiers, 'player.attack', displayRound);
+    const enemyAttackDelta = sumAppliedModifiersForTarget(c.appliedModifiers, 'enemy.attack', displayRound);
 
     let html = `<div class="combat-header"><h3>COMBAT</h3>`;
     if (c.enemies.length > 1) {
@@ -2539,14 +2562,23 @@ function handleCombat(event) {
     }
     if (c.appliedModifiers && c.appliedModifiers.length > 0) {
       // Render the frozen combat-modifier list for this fight. Schema
-      // v1.4 combat_modifiers. Each entry shows target (dot-path), the
-      // signed delta, and the reason if present. Purely informational —
-      // the math is applied to playerData/enemyData before the
-      // round_script runs in combatAttack.
+      // v1.4 combat_modifiers; duration-aware since v1.7. Each entry
+      // shows target (dot-path), signed delta, an optional duration tag
+      // when narrower than 'fight', and the reason if present. Purely
+      // informational — the math is applied to playerData/enemyData
+      // before the round_script runs in combatAttack, filtered by the
+      // same duration logic. Modifiers not active in the current round
+      // are dimmed but still shown so the player sees the full fight
+      // landscape.
       const rows = c.appliedModifiers.map(m => {
         const sign = m.delta >= 0 ? '+' : '';
         const reason = m.reason ? ` — ${m.reason}` : '';
-        return `<div>${m.target} ${sign}${m.delta}${reason}</div>`;
+        const durTag = m.duration === 'first_round' ? ' <span style="color:var(--text-dim);font-size:0.85em">[round 1]</span>'
+          : m.duration === 'after_first_round' ? ' <span style="color:var(--text-dim);font-size:0.85em">[round 2+]</span>'
+          : '';
+        const active = modifierAppliesAtRound(m, displayRound);
+        const style = active ? '' : ' style="opacity:0.5"';
+        return `<div${style}>${m.target} ${sign}${m.delta}${durTag}${reason}</div>`;
       }).join('');
       html += `<div class="special-rules-box"><strong>Modifiers:</strong>${rows}</div>`;
     }
@@ -2651,7 +2683,10 @@ function handleCombat(event) {
     const target = typeof mod.target === 'string' ? mod.target : null;
     const delta = typeof mod.delta === 'number' ? mod.delta : 0;
     if (!target || delta === 0) continue;
-    appliedModifiers.push({ target, delta, reason: mod.reason || null });
+    // Schema v1.7+ honors the duration field. Preserve it on the frozen
+    // list so combatAttack and the modifier-panel display can filter per
+    // round. Absent duration defaults to 'fight' (backward compatible).
+    appliedModifiers.push({ target, delta, reason: mod.reason || null, duration: mod.duration || 'fight' });
   }
 
   // Evaluate damage_interactions (schema v1.5) the same way combat_modifiers
@@ -2807,14 +2842,20 @@ function handleCombat(event) {
     // Ensure health is the current value, not the catalog max
     enemyData.health = enemy.currentHealth;
 
-    // Apply the frozen combat_modifiers list (schema v1.4). The list was
-    // evaluated once at combat start — see the combat-init block further
-    // up in this function. Each modifier has a target dot-path like
-    // "player.attack", "player.hit_threshold", "enemy.armor", etc. The
-    // delta is added to the existing field value on playerData or
-    // enemyData. Fields that are currently undefined are treated as 0
-    // so books can introduce new fields purely via modifiers.
-    for (const mod of c.appliedModifiers || []) {
+    // Apply the frozen combat_modifiers list (schema v1.4; duration-aware
+    // since v1.7). The list was evaluated once at combat start — see the
+    // combat-init block further up in this function. Each modifier has a
+    // target dot-path like "player.attack", "player.hit_threshold",
+    // "enemy.armor", etc. The delta is added to the existing field value
+    // on playerData or enemyData. Fields currently undefined are treated
+    // as 0 so books can introduce new fields purely via modifiers.
+    //
+    // The `duration` field filters which rounds the modifier
+    // participates in: 'fight' (default) every round, 'first_round' only
+    // round 1, 'after_first_round' only rounds 2+, 'round' reserved and
+    // currently treated as 'fight'.
+    const activeThisRound = (c.appliedModifiers || []).filter(m => modifierAppliesAtRound(m, c.roundNum));
+    for (const mod of activeThisRound) {
       const target = mod.target;
       const delta = mod.delta;
       const dotIdx = target.indexOf('.');
@@ -2828,13 +2869,17 @@ function handleCombat(event) {
       const current = typeof dataObj[field] === 'number' ? dataObj[field] : 0;
       dataObj[field] = current + delta;
     }
-    // Surface the applied modifier list in the combat log on round 1 so
-    // the player knows what's in effect for the duration of the fight.
-    // Subsequent rounds don't re-log because nothing has changed.
-    if (c.roundNum === 1 && c.appliedModifiers && c.appliedModifiers.length > 0) {
-      for (const m of c.appliedModifiers) {
+    // Surface newly-active modifiers in the combat log the round they
+    // start participating. A 'fight' or 'first_round' modifier logs in
+    // round 1; an 'after_first_round' modifier logs in round 2.
+    const newlyActive = activeThisRound.filter(m => !modifierAppliesAtRound(m, c.roundNum - 1));
+    if (newlyActive.length > 0) {
+      for (const m of newlyActive) {
         const sign = m.delta >= 0 ? '+' : '';
-        c.combatLog.push(`<span class="lucky">Modifier: ${m.target} ${sign}${m.delta}${m.reason ? ' (' + m.reason + ')' : ''}</span>`);
+        const durTag = m.duration === 'first_round' ? ' [first round only]'
+          : m.duration === 'after_first_round' ? ' [rounds 2+]'
+          : '';
+        c.combatLog.push(`<span class="lucky">Modifier: ${m.target} ${sign}${m.delta}${durTag}${m.reason ? ' (' + m.reason + ')' : ''}</span>`);
       }
     }
 

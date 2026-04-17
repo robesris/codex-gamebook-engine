@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.6.0",
+  "title": "Gamebook Format (GBF) v1.7.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -860,8 +860,8 @@
         },
         "duration": {
           "type": "string",
-          "enum": ["fight", "first_round", "round"],
-          "description": "Reserved for future use. As of schema v1.4 all modifiers behave as if `duration: \"fight\"` — they apply for the entire combat. The field is documented so books can declare their intent (and a future schema version can honor it) but currently the emulator treats 'first_round' and 'round' the same as 'fight'. Document the intent anyway so future emulator versions can back-fill the semantics without re-parsing books."
+          "enum": ["fight", "first_round", "after_first_round", "round"],
+          "description": "How long the modifier applies within a combat. `fight` (default when absent): applies every round of the fight. `first_round`: applies only in round 1, then drops off. `after_first_round` (schema v1.7+): applies in round 2 and every subsequent round, but NOT in round 1 — used for section-specific rules like 'add 2 to COMBAT SKILL for the first round only (surprise), then deduct 2 from COMBAT SKILL for the second and subsequent rounds' where the penalty is explicitly scoped to rounds after the first. `round` is reserved for a future per-round dynamic semantic and is currently treated as `fight` by the emulators. Schema v1.7.0 / emulators v3.2.0 honor `first_round` and `after_first_round`; earlier versions treated all values as `fight`. Conditions are still snapshotted at combat start (a modifier gated on an ability the player expends mid-fight stays in effect until the fight ends) — duration narrows WHICH ROUNDS the frozen modifier participates in, not whether the condition is re-evaluated."
         }
       }
     },

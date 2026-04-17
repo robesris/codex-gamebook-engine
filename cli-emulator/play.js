@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.1.0';
+const CODEX_EMULATOR_VERSION = '3.2.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -672,6 +672,21 @@ function interactionMatchesComponent(inter, component) {
 }
 
 // Apply frozen damage_interactions to a list of damage components and
+// Schema v1.7+ duration-aware modifier filtering. Given a frozen modifier
+// entry and a 1-based combat round number, return true if the modifier
+// participates in that round. Round 0 is pre-first-round (nothing applies
+// yet); round 1 is the first fighting round; round 2+ are subsequent
+// rounds. Undefined duration means 'fight' (backward-compatible default).
+// 'round' is reserved for a future per-round dynamic semantic and is
+// currently treated as 'fight'.
+function modifierAppliesAtRound(mod, round) {
+  if (round < 1) return false;
+  const dur = (mod && mod.duration) || 'fight';
+  if (dur === 'first_round') return round === 1;
+  if (dur === 'after_first_round') return round >= 2;
+  return true;
+}
+
 // return the summed scaled damage. Interactions are filtered by direction
 // (incoming / outgoing), then by source tags per-component. Matching
 // interactions' multipliers compose multiplicatively on a component.
@@ -1153,7 +1168,10 @@ function startCombat(event, state, book) {
     const target = typeof mod.target === 'string' ? mod.target : null;
     const delta = typeof mod.delta === 'number' ? mod.delta : 0;
     if (!target || delta === 0) continue;
-    appliedModifiers.push({ target, delta, reason: mod.reason || null });
+    // Schema v1.7+ honors the duration field. Preserve it on the frozen
+    // list so runCombatRound and the status-bar display can filter per
+    // round. Absent duration is treated as 'fight' (backward compatible).
+    appliedModifiers.push({ target, delta, reason: mod.reason || null, duration: mod.duration || 'fight' });
   }
 
   // Evaluate damage_interactions (schema v1.5) once at combat start, the
@@ -1949,16 +1967,24 @@ function runCombatRound(forcedRollsArg, state, book) {
   };
   enemyData.health = enemy.currentHealth;
 
-  // Apply the frozen combat_modifiers list (schema v1.4). The list was
-  // evaluated once at combat start in startCombat() and stored on
-  // combat.appliedModifiers. Each modifier has a target dot-path like
-  // "player.attack", "player.hit_threshold", "enemy.armor", etc. The
-  // delta is added to the existing value of the target field on
-  // playerData or enemyData. Fields that are currently undefined are
-  // treated as 0 so books can introduce new fields purely via
-  // modifiers (e.g., `hit_threshold_penalty`).
+  // Apply the frozen combat_modifiers list (schema v1.4; duration-aware
+  // since v1.7). The list was evaluated once at combat start in
+  // startCombat() and stored on combat.appliedModifiers. Each modifier has
+  // a target dot-path like "player.attack", "player.hit_threshold",
+  // "enemy.armor", etc. The delta is added to the existing value of the
+  // target field on playerData or enemyData. Fields that are currently
+  // undefined are treated as 0 so books can introduce new fields purely
+  // via modifiers (e.g., `hit_threshold_penalty`).
+  //
+  // The `duration` field filters WHICH ROUNDS the modifier participates
+  // in: 'fight' (default) applies every round, 'first_round' only in
+  // round 1, 'after_first_round' only in round 2+, 'round' is reserved
+  // and currently treated as 'fight'. Conditions are still snapshotted
+  // at combat start; duration just selects among the frozen list per
+  // round.
   const applied = combat.appliedModifiers || [];
-  for (const mod of applied) {
+  const activeThisRound = applied.filter(m => modifierAppliesAtRound(m, combat.round));
+  for (const mod of activeThisRound) {
     const target = mod.target;
     const delta = mod.delta;
     const dotIdx = target.indexOf('.');
@@ -1972,12 +1998,20 @@ function runCombatRound(forcedRollsArg, state, book) {
     const current = typeof dataObj[field] === 'number' ? dataObj[field] : 0;
     dataObj[field] = current + delta;
   }
-  // First round logs the applied modifiers so the playthrough log
-  // and the summary display can see what's in effect.
-  if (combat.round === 1 && applied.length > 0) {
-    for (const m of applied) {
+  // Log the modifiers that just became active this round. Modifiers with
+  // `duration: "fight"` (or absent duration) log once in round 1.
+  // Modifiers with `duration: "first_round"` also log in round 1 (and
+  // stop applying after). Modifiers with `duration: "after_first_round"`
+  // log in round 2 when they first take effect. This gives the player a
+  // visible note at the moment the modifier starts participating.
+  const newlyActive = activeThisRound.filter(m => !modifierAppliesAtRound(m, combat.round - 1));
+  if (newlyActive.length > 0) {
+    for (const m of newlyActive) {
       const sign = m.delta >= 0 ? '+' : '';
-      state.log.push(`Combat modifier: ${m.target} ${sign}${m.delta}${m.reason ? ' (' + m.reason + ')' : ''}`);
+      const durTag = m.duration === 'first_round' ? ' [first round only]'
+        : m.duration === 'after_first_round' ? ' [rounds 2+]'
+        : '';
+      state.log.push(`Combat modifier: ${m.target} ${sign}${m.delta}${durTag}${m.reason ? ' (' + m.reason + ')' : ''}`);
     }
   }
 
@@ -2324,11 +2358,17 @@ function summarize(state, book) {
     // plain "COMBAT SKILL 15" when no modifier is active. Plain text
     // only — no ANSI colour — so the output stays friendly to log files
     // and the playbook regression harness.
+    // Sum only modifiers that are active in the upcoming round. When
+    // combat is about to start (combat.round === 0), treat the display
+    // as if round 1 — that's what the next attack will use. Schema v1.7+
+    // duration-aware filtering.
     const applied = state.combat.appliedModifiers || [];
-    const playerAtkDelta = applied
+    const displayRound = state.combat.round === 0 ? 1 : state.combat.round;
+    const activeForDisplay = applied.filter(m => modifierAppliesAtRound(m, displayRound));
+    const playerAtkDelta = activeForDisplay
       .filter(m => m && m.target === 'player.attack' && typeof m.delta === 'number')
       .reduce((s, m) => s + m.delta, 0);
-    const enemyAtkDelta = applied
+    const enemyAtkDelta = activeForDisplay
       .filter(m => m && m.target === 'enemy.attack' && typeof m.delta === 'number')
       .reduce((s, m) => s + m.delta, 0);
     const fmt = (base, delta) => {
