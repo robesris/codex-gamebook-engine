@@ -339,10 +339,10 @@
 
     "stat_definition": {
       "type": "object",
-      "required": ["name", "generation"],
+      "required": ["name"],
       "properties": {
         "name": { "type": "string", "description": "Stat name as it appears in the book (e.g., 'skill', 'stamina', 'luck', 'combat_skill', 'endurance')." },
-        "generation": { "type": "string", "description": "Dice formula for initial value. e.g., '1d6+6', '2d6+12', 'R10+10', 'fixed:20'." },
+        "generation": { "type": "string", "description": "Dice formula for initial value (e.g., '1d6+6', '2d6+12', 'R10+10', 'fixed:20'). Optional as of schema v1.10+ / codex Rule 26 — stats initialised by a `distribute_points` character-creation step (or by another explicit initialiser like `set_resource`) have no dice formula and should omit this field. When absent, the `character_creation.steps[]` entries are authoritative for the starting value; the emulators' post-creation validation pass flags any declared stat still undefined after character creation completes." },
         "min": { "type": "integer" },
         "max": { "type": ["integer", "null"] },
         "initial_is_max": { "type": "boolean", "description": "If true, stat cannot exceed its rolled starting value unless specifically instructed." },
