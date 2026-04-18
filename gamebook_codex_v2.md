@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.11.0
+# THE GAMEBOOK CODEX v2.13.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -13,10 +13,10 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.7.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 3.4.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 3.4.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 3.4.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `codex.schema.json` (GBF format) | ≥ 1.10.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -266,7 +266,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Roll dice / pick a number" to determine a starting **stat** (COMBAT SKILL, STAMINA, SKILL, LUCK, HP — anything declared in `rules.stats[]`) at character creation | Rule 11 | `roll_stat` action with the declared stat name and the formula |
 | "Roll dice / pick a number" to determine a starting **resource** (Gold Crowns, Provisions, Meals, or any currency the book treats as a counter rather than a free-form stat) at character creation | Rule 11 (schema v1.6+ `roll_resource`) | `roll_resource` action writing to the canonical slot (`gold` / `provisions` / `meals`) or to a declared-stat-currency matching `rules.stats[].name`. NEVER `roll_stat` into a scratch stat name like `starting_gold_crowns` — that rolls but the value never reaches the slot the game reads from, so the player's currency display stays at zero |
 | "Combat stat is computed from other stats" — e.g. `CV = Strength + Agility + bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dex + Class + Level` | Section 7.5 → "Games without `attack_stat`" | `rules.attack_stat: null`; do NOT declare the derived name in `rules.stats[]`; round_script computes the derived value from component stats inside Lua |
-| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Section 7.2 → unprofiled rules parse + tracked engine backlog (Windhammer Bug A) | A `distribute_points` action on `character_creation_step` is the target encoding but is not yet in the schema; until it lands, flag the gap and stop — do NOT paper over with `manual_set` |
+| "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Rule 26 (schema v1.10+) | `character_creation.steps[]` entry with `action: "distribute_points"`, `total_points: N`, and `stats: [{name, min, max}, ...]` covering every point-distributed stat. Every `name` must also appear in `rules.stats[]` (with no `generation` formula — the `distribute_points` step is the initialiser). Both emulators present this as a point-buy UI and reject invalid allocations. Do NOT paper over with `manual_set` or with a scratch `roll_stat` — Rule 26 is the canonical encoding. |
 | "You may only use one weapon at a time" / "wear one helmet" / "the chainmail you are wearing" / any "worn / wielded / equipped" language | Rule 19 | `equippable: true`, `slot: "<name>"`, `equip_timing`, `auto_equip` on the items_catalog entry; `stat_modifier.when: "equipped"` for slot-gated bonuses |
 | "Once worn, cannot be removed" / "the curse cannot be lifted" / cursed permanent items | Rule 19 | `equip_timing: "once"` on the item; only `remove_item` events can clear the slot |
 | "Immune to non-silver weapons" / "only silvered or blessed weapons can harm them" / "takes half damage from blunt attacks" / "double damage from fire" | Rule 18 | `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) with `kind`, `multiplier`, `source_has_any` / `source_lacks_all`, optional `condition` |
@@ -1089,6 +1089,47 @@ With this entry in place, any section that fires an `eat_meal` event exposes a `
 
 **Verification.** Every named-consumable catalog entry whose description promises a mechanical effect (Laumspur "restores ENDURANCE when consumed", Iron Rations "restore EXPERIENCE when eaten", Healing Draught "restores 5 LIFE POINTS") carries a `consume.effects` array encoding that effect, AND if the item is intended to count as a Meal it also carries `consume.satisfies_eat_meal: true`. A catalog entry with prose that promises a heal but no `consume` block is the pre-Rule-25 shape and should be migrated during the next sub-agent pass. Conversely: a `consume` entry on an item whose description does NOT promise a consumable effect is a parser bug (the item is probably equipment whose `stat_modifier` / `equip_timing` was mis-encoded as `consume`).
 
+### Rule 26: Point-Distribution Character Creation (`distribute_points`)
+
+Some gamebooks set the player's starting stats by a **point-buy allocation** rather than a die roll. The rules section says something like "you have 50 points to distribute among your five attributes, with each attribute between 5 and 11," and the player fills in the numbers themselves — no dice involved. Chronicles of Arborell (Windhammer) is the canonical example: 50 points across Strength, Agility, Endurance, Luck, and Intuition, with each in the range 5–11. Before schema v1.10 this pattern had no structural encoding, and unprofiled parses fell back to either (a) inventing a non-standard field like `generation: "distribute:5-11"` on `rules.stats[]` (which neither emulator reads), leaving the stats uninitialised; or (b) using a `manual_set` workaround in the playthrough script (which silently degrades Tier 3 runs to PARTIAL and hides the real gap — see the "Tier 3 playthroughs" check in Section 10). Rule 26 closes this with a first-class character-creation step.
+
+**The shape.** Add a `distribute_points` entry to `character_creation.steps[]` with two fields:
+
+- `total_points` (integer): the exact total the player must distribute — the sum of all per-stat allocations must equal this value.
+- `stats` (array of `{name, min, max}`): the stats being distributed, each with an inclusive `[min, max]` range. Every `name` must appear in `rules.stats[]`; every stat declared in `rules.stats[]` whose generation is "point-distribution" should appear in this array (it's the initialiser for those stats).
+
+Both emulators present this as a point-buy UI. The CLI exposes a `distribute <stat1>=<n1> <stat2>=<n2> ...` action that validates the sum equals `total_points` and each `<ni>` lies within the declared `[min, max]` before committing. The HTML emulator renders one row per stat with `+` / `−` buttons, a remaining-points counter, and a Confirm button that disables until the allocation is valid. On confirm, each stat is written to BOTH `state.stats[name]` AND `state.initialStats[name]` — the point-buy allocation counts as the player's initial maxima, so `initial_is_max` clamping on subsequent `modify_stat` calls works the same as for rolled stats.
+
+**Canonical worked example — Windhammer (Chronicles of Arborell).** The rules text: *"Before beginning, you have 50 points to distribute among your five attributes: Strength, Agility, Endurance, Luck, and Intuition. Each attribute must be between 5 and 11 points."* The canonical encoding:
+
+```json
+"character_creation": {
+  "steps": [
+    {
+      "action": "distribute_points",
+      "total_points": 50,
+      "stats": [
+        {"name": "Strength",  "min": 5, "max": 11},
+        {"name": "Agility",   "min": 5, "max": 11},
+        {"name": "Endurance", "min": 5, "max": 11},
+        {"name": "Luck",      "min": 5, "max": 11},
+        {"name": "Intuition", "min": 5, "max": 11}
+      ]
+    }
+  ]
+}
+```
+
+`rules.stats[]` declares each of the five stats with `initial_is_max: true` (point-buy allocations are treated as character-sheet maxima so damage and recovery clamp the same way) and no `generation` formula — the initialiser is this step, not a dice formula. A valid player allocation: Strength 10, Agility 10, Endurance 10, Luck 10, Intuition 10 (sum 50, each in [5, 11]). An invalid allocation: Strength 12, Agility 10, ... (Strength exceeds max); or Strength 10, Agility 10, Endurance 10, Luck 10, Intuition 11 (sum 51 ≠ 50). Both emulators reject invalid allocations at confirm time.
+
+**Derived combat stats.** When the book's combat stat is computed from the point-distributed stats (Windhammer's `Combat Value = Strength + Agility + skill/talent/armour bonuses`), Rule 26 composes with Section 7.5's "Games without `attack_stat`" pattern: set `rules.attack_stat: null`, leave the derived name out of `rules.stats[]`, and have the round_script compute the derived value inside Lua from the point-distributed component stats (`local cv = (player.strength or 0) + (player.agility or 0)`). Rule 26 provides the mechanism for initialising the components; Section 7.5 provides the mechanism for the derived computation. Neither is redundant.
+
+**What Rule 26 does NOT cover.** Rule 26 is scoped to stat distribution with integer allocations and fixed per-stat ranges. Adjacent point-buy patterns — equipment point-buy ("you have 50 gold to spend on starting gear, each item has a cost"), ability-slot point-buy ("pick any N abilities, each costs K of your M points"), and weighted-cost point-buy ("each attribute point beyond 8 costs 2 of your pool") — are out of scope and would require separate action types (`purchase_items`, weighted versions of `choose_abilities`, etc.). When such patterns surface in a book, file a codex/schema gap rather than contorting `distribute_points` into them.
+
+**Emulator-side book validation (Bug C).** Schema v1.10 / emulators v3.5 add a book-load validation pass that surfaces the silent-broken cases Rule 26's motivating book revealed. Both emulators warn when (a) `rules.attack_stat` names a stat not declared in `rules.stats[]` (so `state.stats[attack_stat]` resolves to undefined and `player.attack` is 0 every round), (b) `rules.health_stat` names a stat not declared in `rules.stats[]` (same failure mode), and (c) any declared stat in `rules.stats[]` is still `undefined` in `state.stats` after `character_creation.steps[]` has run (the "stat declared but never initialised" case). The warnings surface as a visible banner above the play area (HTML) or a `WARNING:` block at the top of the status output (CLI) — not hard errors, so the game still runs and downstream symptoms are visible, but the diagnostic points at the root cause rather than the symptom. Both emulators also harmonise the display of undefined stats: instead of rendering literal `undefined` (CLI pre-v3.5) or `0` (HTML pre-v3.5), the stat bar shows `—` (em dash) with the warning already visible at the top. The purpose is operational: books whose codex run produced an incomplete `rules` block or an incomplete `character_creation.steps[]` should fail visibly at load time, not silently during play.
+
+**Verification.** When the book's rules section says the player distributes a fixed total of points among declared stats — the phrases "distribute N points", "N points to spend across", "assign N points", "choose how to allocate" are reliable triggers — the `character_creation.steps[]` contains exactly one `distribute_points` entry whose `stats` array covers every point-distributed stat, each `name` matches a declared stat in `rules.stats[]`, each `{min, max}` comes straight from the rules text, and `total_points` is the book's stated total. No corresponding `roll_stat` entries exist for those stats (they share initialisation with the distribute step, not duplicate it). No `manual_set` workaround appears anywhere in Tier 3 playthrough scripts or in the book's data. If the codex sees a point-distribution rule in the source text and emits anything other than a `distribute_points` step, that's a Rule 26 miss — revise before shipping.
+
 ---
 
 ## TABLE OF CONTENTS
@@ -1657,7 +1698,7 @@ Same as any other parse: **produce a complete, correct, playable GBF JSON file**
 1. **Identify the series** (if possible). Search the book's front matter and copyright page for the series title, author, and publisher. Even if we don't have a profile for the series, naming it in `metadata.series` helps future passes and future readers. If you truly can't identify it, set `series: null` or `series: "Unknown"` and move on.
 
 2. **Parse the rules section completely and verbatim.** Read every page of the book that describes mechanics before the numbered sections begin. Extract:
-   - **Stats**: every named stat the book mentions, with its generation formula (`"R10+10"`, `"1d6+6"`, `"3d6"`, `"10+1d6"`, etc.), min, max, and whether it can be restored above its initial value (`initial_is_max`). **Use the book's own names for these stats** — do not translate "Strength" into "STAMINA" or "Might" into "SKILL" because that's what other series use. Whatever the book says, the data says. Every stat declared in `rules.stats[]` MUST also be initialised by a corresponding `character_creation.steps[]` entry; if the book uses point-distribution to set stats and the schema does not yet have a `distribute_points` action type, stop and report the gap rather than leaving stats uninitialised (do NOT use `manual_set` to paper over the gap — see "Tier 3 playthrough discipline" in Section 10's per-rule checklist).
+   - **Stats**: every named stat the book mentions, with its generation formula (`"R10+10"`, `"1d6+6"`, `"3d6"`, `"10+1d6"`, etc.), min, max, and whether it can be restored above its initial value (`initial_is_max`). **Use the book's own names for these stats** — do not translate "Strength" into "STAMINA" or "Might" into "SKILL" because that's what other series use. Whatever the book says, the data says. Every stat declared in `rules.stats[]` MUST also be initialised by a corresponding `character_creation.steps[]` entry. If the book uses point-distribution to set stats (the rules say "you have N points to distribute across these attributes, each between A and B"), encode it as a `distribute_points` step per Rule 26 — stats initialised this way should have no `generation` formula on their `rules.stats[]` entry (the step is the initialiser). Do NOT use `manual_set` or a scratch `roll_stat` to paper over point-distribution; see "Tier 3 playthrough discipline" in Section 10's per-rule checklist.
    - **Attack and health stats**: set `rules.attack_stat` and `rules.health_stat` to the exact stat names the book declares. The emulators look these up in the `rules.stats` array so they must match. **Critical: derived combat stats.** If the book's combat stat is *computed from other stats* — anything of the form `Combat Value = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dexterity + Class + Level`, or any similar formula — then `rules.attack_stat` MUST be `null` and the derived name MUST NOT be declared in `rules.stats[]`. Instead, the round_script computes the derived value inside Lua from the component stats (`local cv = (player.strength or 0) + (player.agility or 0)`). Setting `rules.attack_stat` to the derived name and not declaring it in `rules.stats[]` produces a silently-broken book where `state.stats[attack_stat]` is undefined and `player.attack` is 0 for the entire fight. See Section 7.5 → "Games without `attack_stat`" → "Derived combat stats: worked example" for the canonical encoding pattern with a Windhammer-shaped Lua snippet.
    - **Currency**: if the book has a currency, set `rules.inventory.currency_display_name` to whatever the book calls it (which could be anything — "Gold Pieces," "Silver Pennies," "Doubloons," "Credits," "Caps," "Bits," etc.). There are two supported encodings for currency, and which one to pick depends on how the book's rules section treats it:
      - **Canonical-slot encoding (recommended for most books).** The book uses currency as an auxiliary resource rather than a first-class stat — the player starts with some amount, gains and spends it in sections, but it doesn't appear on a character-sheet stats table and isn't tested against. Use `set_resource: gold` in character creation to initialize it (the canonical lowercase slot `gold`) and use `modify_stat` with `stat: gold` in sections for changes. The UI renders it as `state.gold` under the `currency_display_name` label. This is what Lone Wolf and most Fighting Fantasy books do.
@@ -2717,6 +2758,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 25 (Named-consumable heal semantics).** For every `items_catalog` entry whose description promises a mechanical effect on consumption ("restores ENDURANCE when consumed", "restores 5 LIFE POINTS", "cures one disease"), I encoded the effect on the entry itself via a `consume` block (schema v1.9+). If the item is a Meal-substitute per Rule 21's carve-out, `consume.satisfies_eat_meal: true` is set so the emulator offers it during every `eat_meal` pause. `consume.effects` carries the event(s) that fire on consumption — typically a single `modify_stat` with the book's health stat and a positive delta, but any non-pausing event type is legal. I did NOT leave the promise of a heal only in the item's `description` prose (that reduces the effect to narrative label with no machine-readable counterpart) and I did NOT restate the heal on every section that references the item — the heal lives on the item once and is dispatched automatically by the emulator at eat_meal time.
 
+**Rule 26 (Point-distribution character creation).** If the book's rules section describes a point-buy stat generation ("you have N points to distribute among these M attributes, with each between A and B", "assign N points across your attributes", or any variant using "distribute", "spend", or "allocate" with a fixed total and per-stat bounds), I encoded it as a single `character_creation.steps[]` entry with `action: "distribute_points"`, `total_points` matching the book's stated total, and `stats: [{name, min, max}, ...]` covering every point-distributed stat with ranges taken verbatim from the rules text (schema v1.10+). Every `name` in the step's `stats` array also appears in `rules.stats[]`. I did NOT also emit `roll_stat` or scratch `roll_resource` entries for those stats (the step is the only initialiser), and I did NOT use `manual_set` anywhere in the book's data or any Tier 3 playthrough script to paper over the allocation.
+
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised.
 
 **Section 7.2 (Stat completeness on unprofiled series).** Every stat declared in `rules.stats[]` has a generation formula AND an initialising `character_creation.steps[]` entry, so after character creation completes there are no `undefined` stats in `state.stats`. If the book uses point-distribution rather than rolling and the schema does not yet have a `distribute_points` step type, I stopped and reported the gap rather than leaving stats uninitialised.
@@ -2770,7 +2813,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.12.0 / GBF schema v1.9.0 / CLI emulator v3.4.0 / HTML emulator v3.4.0.**
+**Codex v2.13.0 / GBF schema v1.10.0 / CLI emulator v3.5.0 / HTML emulator v3.5.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

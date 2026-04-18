@@ -822,6 +822,147 @@ test('eat_meal does not auto-penalty when only a named consumable is available',
 });
 
 // ============================================================
+// Test 17: distribute_points validates sum against total_points and
+//          rejects allocations that fall outside per-stat ranges;
+//          accepts valid allocations and writes each stat to both
+//          state.stats and state.initialStats.
+// ============================================================
+// MOTIVATED_BY: Rule 26 / schema v1.10+ (Windhammer Bug A). Point-buy
+// character creation had no schema primitive before v1.10, so
+// unprofiled parses either invented a non-standard generation string
+// (which neither emulator reads) or papered over the gap with
+// manual_set. v1.10's distribute_points action closes the mechanism
+// gap; this test locks in the validation + write semantics so a
+// future regression doesn't silently accept invalid allocations.
+// END_TO_END_VERIFY: drive the CLI through Windhammer character
+// creation and confirm the point-buy step paused, rejects
+// over/under allocations, and commits the valid allocation into
+// both state.stats and state.initialStats for each named attribute.
+test('distribute_points validates sum + ranges and writes stats + initialStats', () => {
+  const book = buildBook({
+    rules: {
+      stats: [
+        { name: 'TESTSTAT_STR', initial_is_max: true },
+        { name: 'TESTSTAT_AGI', initial_is_max: true },
+        { name: 'TESTSTAT_END', initial_is_max: true },
+      ],
+    },
+    character_creation: {
+      steps: [
+        {
+          action: 'distribute_points',
+          total_points: 20,
+          stats: [
+            { name: 'TESTSTAT_STR', min: 5, max: 11 },
+            { name: 'TESTSTAT_AGI', min: 5, max: 11 },
+            { name: 'TESTSTAT_END', min: 5, max: 11 },
+          ],
+        },
+      ],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+
+  play.startCharacterCreation(state, book);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute', 'paused on distribute');
+
+  // Wrong sum — should be rejected, pause still active, no stats written.
+  play.applyAction(state, book, 'distribute', ['TESTSTAT_STR=7', 'TESTSTAT_AGI=7', 'TESTSTAT_END=7']);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute', 'sum=21 rejected, pause retained');
+  assertEqual(state.stats.TESTSTAT_STR, undefined, 'stats not mutated on rejection');
+
+  // Out-of-range — should be rejected.
+  play.applyAction(state, book, 'distribute', ['TESTSTAT_STR=12', 'TESTSTAT_AGI=4', 'TESTSTAT_END=4']);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute', 'out-of-range rejected, pause retained');
+
+  // Valid allocation.
+  play.applyAction(state, book, 'distribute', ['TESTSTAT_STR=7', 'TESTSTAT_AGI=6', 'TESTSTAT_END=7']);
+  assertEqual(state.stats.TESTSTAT_STR, 7, 'STR written');
+  assertEqual(state.stats.TESTSTAT_AGI, 6, 'AGI written');
+  assertEqual(state.stats.TESTSTAT_END, 7, 'END written');
+  assertEqual(state.initialStats.TESTSTAT_STR, 7, 'initial STR written');
+  assertEqual(state.initialStats.TESTSTAT_AGI, 6, 'initial AGI written');
+  assertEqual(state.initialStats.TESTSTAT_END, 7, 'initial END written');
+  assertTrue(state.creationDone, 'creation completed after valid allocation');
+});
+
+// ============================================================
+// Test 18: Book-load validation warns when rules.attack_stat names
+//          a stat not declared in rules.stats[] (Windhammer Bug C).
+// ============================================================
+// MOTIVATED_BY: Rule 26 / Windhammer Bug C. v2.8's Windhammer parse
+// set rules.attack_stat: "combat_value" without declaring
+// combat_value in rules.stats[], causing player.attack to resolve to
+// 0 for the whole fight with no diagnostic. v3.5's validation pass
+// writes a visible warning so the root cause is named at load time.
+// END_TO_END_VERIFY: load a book whose rules.attack_stat mismatches
+// rules.stats[] in either emulator; confirm a warning banner
+// appears above the play area / at the top of the status output
+// before the first section renders.
+test('validateBookShape warns on rules.attack_stat not declared in rules.stats[]', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'TESTSTAT_STR' }, { name: 'TESTSTAT_AGI' }],
+      attack_stat: 'TESTSTAT_CV',
+    },
+    character_creation: {
+      steps: [
+        { action: 'set_resource', resource: 'TESTSTAT_STR', amount: 8 },
+        { action: 'set_resource', resource: 'TESTSTAT_AGI', amount: 8 },
+      ],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+
+  play.startCharacterCreation(state, book);
+
+  assertTrue(Array.isArray(state.validationWarnings), 'validationWarnings array exists');
+  const joined = (state.validationWarnings || []).join(' | ');
+  assertTrue(/TESTSTAT_CV/.test(joined), 'warning names the undeclared attack_stat');
+  assertTrue(/attack_stat/.test(joined), 'warning mentions attack_stat');
+});
+
+// ============================================================
+// Test 19: Post-creation validation warns when a declared stat is
+//          still undefined after character_creation.steps[] completed.
+// ============================================================
+// MOTIVATED_BY: Rule 26 / Windhammer Bug C. The "stat declared but
+// never initialised" case — a book that lists a stat in rules.stats[]
+// but ships no character-creation step that writes it. Without the
+// post-creation check, the stat renders as em-dash with no root-cause
+// diagnostic; with the check, a warning names the stat so the codex
+// run's incomplete output is visible.
+// END_TO_END_VERIFY: load a book whose rules.stats[] declares a stat
+// with no matching character_creation step; confirm a warning
+// appears on the validation banner after character creation
+// completes.
+test('validatePostCreation warns on declared-but-uninitialised stat', () => {
+  const book = buildBook({
+    rules: {
+      stats: [
+        { name: 'TESTSTAT_INIT' },
+        { name: 'TESTSTAT_GHOST' },  // declared but never set
+      ],
+    },
+    character_creation: {
+      steps: [
+        { action: 'set_resource', resource: 'TESTSTAT_INIT', amount: 10 },
+      ],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+
+  play.startCharacterCreation(state, book);
+
+  const joined = (state.validationWarnings || []).join(' | ');
+  assertTrue(/TESTSTAT_GHOST/.test(joined), 'warning names the uninitialised stat');
+  assertTrue(!/TESTSTAT_INIT/.test(joined) || /TESTSTAT_INIT.*undefined/.test(joined) === false, 'initialised stat not flagged');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;

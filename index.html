@@ -447,6 +447,41 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 .choose-item-btn .item-desc { font-size: 0.8em; color: var(--text-dim); margin-top: 2px; }
 .choose-items-count { font-size: 0.85em; color: var(--text-dim); margin-bottom: 8px; }
 
+/* --- Point-buy Distribution (Rule 26 / schema v1.10+) --- */
+.distribute-grid {
+  display: flex; flex-direction: column; gap: 8px; margin: 12px 0;
+}
+.distribute-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto 3em auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+}
+.distribute-row .stat-name { font-weight: 600; color: var(--text-bright); }
+.distribute-row .stat-range { font-size: 0.8em; color: var(--text-dim); }
+.distribute-row .stat-value {
+  font-family: monospace; font-size: 1.1em; font-weight: 600;
+  text-align: center; color: var(--accent);
+}
+.distribute-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* --- Book validation banner (Rule 26 / Bug C) --- */
+.validation-banner {
+  background: #4a2a0f; border: 1px solid #c07830; border-radius: 6px;
+  color: #ffd79a; padding: 10px 14px; margin: 8px 0;
+  font-size: 0.88em; line-height: 1.45;
+}
+.validation-banner .banner-title {
+  font-weight: 700; color: #ffb85c; margin-bottom: 4px;
+}
+.validation-banner ul { margin: 4px 0 0 18px; padding: 0; }
+.validation-banner li { margin-bottom: 4px; }
+
 /* --- Debug Panel --- */
 .debug-toggle {
   position: fixed; bottom: 10px; right: 10px; z-index: 100;
@@ -598,6 +633,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
   <!-- GAME SCREEN -->
   <div id="game-screen" class="screen">
+    <div id="validation-banner-container"></div>
     <div class="stat-bar" id="stat-bar"></div>
     <div class="save-bar">
       <button onclick="saveGame()">Save</button>
@@ -637,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.4.0';
+const CODEX_EMULATOR_VERSION = '3.5.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -650,7 +686,7 @@ const CODEX_EMULATOR_VERSION = '3.4.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '4d4d612';
+const CODEX_EMULATOR_COMMIT = '7dd7501';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -1265,8 +1301,32 @@ function startCharacterCreation() {
     abilities: [],
     currentSection: null,
     visitedSections: new Set(),
+    // Book-shape + post-creation validation warnings (schema v1.10+ /
+    // emulators v3.5+, Windhammer Bug C). See codex Rule 26. Rendered
+    // as a banner above the play area so silent-broken books fail
+    // loud.
+    validationWarnings: [],
   };
   window._lastTestResult = null;
+
+  // Schema v1.10+ / emulators v3.5+ (Windhammer Bug C). Warn at
+  // character-creation start about rules.attack_stat / rules.health_stat
+  // that name stats not declared in rules.stats[]. A silent mismatch
+  // causes player.attack to resolve to 0 and cosmetic "0" health renders
+  // — surface the root cause instead.
+  {
+    const warnings = [];
+    const declaredNames = new Set((gameData?.rules?.stats || []).map(s => s.name));
+    const aStat = gameData?.rules?.attack_stat;
+    if (aStat && !declaredNames.has(aStat)) {
+      warnings.push(`rules.attack_stat "${aStat}" is not declared in rules.stats[] — player.attack will resolve to 0. Either add "${aStat}" to rules.stats[] or set rules.attack_stat: null and compute the attack value inside the round_script (codex Rule 26 / Section 7.5).`);
+    }
+    const hStat = gameData?.rules?.health_stat;
+    if (hStat && !declaredNames.has(hStat)) {
+      warnings.push(`rules.health_stat "${hStat}" is not declared in rules.stats[] — health display will fail.`);
+    }
+    state.validationWarnings.push(...warnings);
+  }
 
   showScreen('creation-screen');
   document.getElementById('game-title').textContent = gameData.metadata?.title || 'Gamebook';
@@ -1362,6 +1422,14 @@ function startCharacterCreation() {
       interactiveSteps.push({ type: 'choose_one', step });
     } else if (step.action === 'choose_abilities') {
       interactiveSteps.push({ type: 'abilities', step });
+    } else if (step.action === 'distribute_points') {
+      // Schema v1.10+ / codex v2.13+ (Rule 26). Point-buy character
+      // creation — player distributes a fixed total of points across
+      // declared stats within per-stat [min, max] ranges. Defer to
+      // phase 2 so the player can interactively allocate; the phase-2
+      // handler renders a grid with +/- controls and a confirm button
+      // that disables until the allocation is valid.
+      interactiveSteps.push({ type: 'distribute', step });
     } else if (step.action === 'add_item') {
       items.push(step.item);
     } else if (step.action === 'set_resource') {
@@ -1554,6 +1622,74 @@ function processCreationSteps(steps, items) {
       });
       container.appendChild(btn);
     }
+  } else if (current.type === 'distribute') {
+    // Schema v1.10+ / codex v2.13+ (Rule 26). Point-buy UI: one row
+    // per declared stat with +/- buttons, a remaining-points counter,
+    // and a Confirm button that disables until the allocation is
+    // valid (sum equals total_points AND each value within its
+    // declared [min, max]). On confirm, each stat is written to BOTH
+    // state.stats[name] AND state.initialStats[name] so initial_is_max
+    // clamping works the same as for rolled stats.
+    const dStep = current.step;
+    const total = dStep.total_points;
+    const statSpecs = dStep.stats || [];
+    const allocation = {};
+    for (const s of statSpecs) allocation[s.name] = s.min;
+
+    const section = document.createElement('div');
+    section.className = 'mt-2';
+    section.id = 'distribute-section';
+    rollContainer.parentNode.insertBefore(section, document.getElementById('equipment-section'));
+
+    function renderDistribute() {
+      const sum = statSpecs.reduce((a, s) => a + allocation[s.name], 0);
+      const remaining = total - sum;
+      const allInRange = statSpecs.every(s => allocation[s.name] >= s.min && allocation[s.name] <= s.max);
+      const valid = remaining === 0 && allInRange;
+
+      let html = `<h3>Distribute ${total} Points</h3>`;
+      html += `<div class="choose-items-count">Remaining: ${remaining} / ${total}</div>`;
+      html += `<div class="distribute-grid">`;
+      for (const s of statSpecs) {
+        const v = allocation[s.name];
+        const canInc = v < s.max && remaining > 0;
+        const canDec = v > s.min;
+        html += `<div class="distribute-row">
+          <span class="stat-name">${s.name}</span>
+          <span class="stat-range">[${s.min}..${s.max}]</span>
+          <button class="btn-small" data-stat="${s.name}" data-delta="-1" ${canDec ? '' : 'disabled'}>−</button>
+          <span class="stat-value">${v}</span>
+          <button class="btn-small" data-stat="${s.name}" data-delta="+1" ${canInc ? '' : 'disabled'}>+</button>
+        </div>`;
+      }
+      html += `</div>`;
+      html += `<div class="center mt-1"><button class="btn" id="confirm-distribute-btn" ${valid ? '' : 'disabled'}>Confirm Allocation</button></div>`;
+      section.innerHTML = html;
+
+      section.querySelectorAll('.btn-small').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.disabled) return;
+          const name = btn.dataset.stat;
+          const delta = parseInt(btn.dataset.delta, 10);
+          allocation[name] += delta;
+          renderDistribute();
+        });
+      });
+      const confirmBtn = section.querySelector('#confirm-distribute-btn');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+          if (confirmBtn.disabled) return;
+          for (const s of statSpecs) {
+            state.stats[s.name] = allocation[s.name];
+            state.initialStats[s.name] = allocation[s.name];
+          }
+          const summary = statSpecs.map(s => `${s.name} ${allocation[s.name]}`).join(', ');
+          section.innerHTML = `<div class="event-msg gain">Attributes: ${summary}</div>`;
+          processCreationSteps(steps, items);
+        });
+      }
+    }
+    renderDistribute();
   } else if (current.type === 'abilities') {
     const abStep = current.step;
     const abRules = gameData.rules.abilities || {};
@@ -1657,6 +1793,24 @@ function processAbilityRolls(section, rollAbilities, idx, steps, items) {
 }
 
 function showEquipmentAndBegin() {
+  // Schema v1.10+ / emulators v3.5+ (Windhammer Bug C). Post-creation
+  // validation: flag any stat declared in rules.stats[] that is still
+  // undefined in state.stats — the "stat declared but never initialised"
+  // case. Run once, append to state.validationWarnings, rendered on the
+  // game screen by renderValidationBanner.
+  {
+    const warnings = [];
+    const statsArr = gameData?.rules?.stats || [];
+    for (const s of statsArr) {
+      if (typeof s?.name !== 'string') continue;
+      const v = state.stats[s.name];
+      if (v === undefined || v === null || Number.isNaN(v)) {
+        warnings.push(`Stat "${s.name}" declared in rules.stats[] is still undefined after character creation. Check the book's character_creation.steps[] — no roll_stat, distribute_points, set_resource, or other initialiser wrote to it.`);
+      }
+    }
+    if (warnings.length) state.validationWarnings.push(...warnings);
+  }
+
   const section = document.getElementById('equipment-section');
   section.style.display = '';
   const list = document.getElementById('equipment-list');
@@ -1697,7 +1851,31 @@ function showEquipmentAndBegin() {
 function beginAdventure() {
   showScreen('game-screen');
   updateReferenceButton();
+  renderValidationBanner();
   navigateTo('1');
+}
+
+// Schema v1.10+ / emulators v3.5+ (Windhammer Bug C). Render
+// state.validationWarnings as a visible banner above the stat bar so
+// silent-broken books fail loud. Called from beginAdventure and kept
+// in sync if warnings are appended later.
+function renderValidationBanner() {
+  const container = document.getElementById('validation-banner-container');
+  if (!container) return;
+  const warnings = Array.isArray(state?.validationWarnings) ? state.validationWarnings : [];
+  if (warnings.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+  const items = warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('');
+  container.innerHTML = `<div class="validation-banner">
+    <div class="banner-title">⚠ Book validation — ${warnings.length} warning(s) (codex Rule 26 / Bug C)</div>
+    <ul>${items}</ul>
+  </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // Show or hide the Reference button in the game-screen save bar based on
@@ -1722,10 +1900,15 @@ function updateStatBar() {
   // Render every declared stat. This covers both profiled series (LW
   // COMBAT SKILL / ENDURANCE, FF SKILL / STAMINA / LUCK) and unprofiled
   // series that may declare additional stats like EXPERIENCE, HONOUR,
-  // MAGIC, LIFE POINTS, or their own currency-as-a-stat.
+  // MAGIC, LIFE POINTS, or their own currency-as-a-stat. Emulators v3.5+
+  // (Windhammer Bug C): display undefined stats as em-dash rather than
+  // coercing to 0 — paired with the validation banner so the root cause
+  // is named at the top while the bar shows a neutral placeholder.
   for (const sd of statDefs) {
-    const val = state.stats[sd.name] || 0;
-    const initial = state.initialStats[sd.name] || val;
+    const raw = state.stats[sd.name];
+    const rawInit = state.initialStats[sd.name];
+    const val = (raw === undefined || raw === null || Number.isNaN(raw)) ? '—' : raw;
+    const initial = (rawInit === undefined || rawInit === null || Number.isNaN(rawInit)) ? '—' : rawInit;
     html += `<div class="stat-item ${sd.name}">
       <span class="stat-label">${sd.name}</span>
       <span class="stat-val">${val}/${initial}</span>
