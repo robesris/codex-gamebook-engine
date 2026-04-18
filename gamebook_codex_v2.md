@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.13.0
+# THE GAMEBOOK CODEX v2.14.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -114,6 +114,8 @@ Quality: approaches or exceeds a fully hand-iterated file. Cost: Tier 3 plus ano
 **Resumability.** Between tiers, always save the current state of the book file and any playbook deliverables so a future session (or a next-day session after hitting a daily message limit) can resume without redoing earlier work. If the user hits a limit mid-tier, leave a short note describing the last completed step and what the next step would be.
 
 **Honesty about estimates.** Any message-count estimates in your tier descriptions should be labeled as rough. Actual counts depend heavily on book size, source quality, and how many bugs the parser catches vs. needs guided fixes. You may refine the estimate after completing Tier 1 and re-quote for the upper tiers.
+
+**Long books: plan multi-chat chunking up front.** Books with more than ~200–300 sections, books with dense rules pages, and scanned-PDF sources of any size will not fit in a single chat's context and token budget. Do NOT attempt a single-chat parse in that case — the failure mode is losing mid-parse work to a context or message-limit overflow. Before parsing begins, confirm the section count and source quality with the user, and if you are over the single-chat ceiling, propose the canonical chunk breakdown documented in Section 9.9 (skeleton + rules + character_creation as chunk 1; section ranges of ~100 each as chunks 2..N; catalog reconciliation + verification as chunk N+1; playability validation as chunk N+2). Each chunk is a separate chat with the accumulating book JSON, relevant PDF pages, and prior-chunk notes as inputs. Section 9.9 has the full procedure, what to carry between chats, and what not to carry.
 
 ### Step 3: Assess Source Quality
 Once the source is available, evaluate it:
@@ -310,6 +312,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | A schema field exists but the codex didn't know to use it for this specific book's mechanic and it's a true one-off | Step 3a-2 (Targeted Fix) | Targeted Fix mode — but if you are a maintainer of a first-party book, prefer Rule 16 first |
 | You (a maintainer) found a data bug in a maintained book | Rule 16 | Improve the rule first, re-run the comprehensive review; never hand-patch outputs as the primary fix |
 | You (a maintainer) added a new rule to this document | "Codex doc evolution discipline" (DEV_PROCESS.md) | Same commit must add one row to this table AND one yes/no entry to the pre-output verification checklist in Section 10. Non-negotiable. |
+| Book is 400+ sections, or has a dense rules section, or the source is a scanned PDF | Section 9.9 (multi-chat parsing) | Plan chunk breakdown up front with the user: Chunk 1 = skeleton + rules + character_creation + round_script; Chunks 2..N = section ranges of ~100 each; Chunk N+1 = catalog reconciliation + checklist; Chunk N+2 = playability validation. Do NOT attempt a single-chat parse on a long book — the failure mode is mid-parse context overflow with no clean resume point. Step 2b's "Long books" paragraph has the up-front decision framing. |
 
 **How to use this table during a parse.** During Step 5 (Parse Rules and Character Creation), read the book's rules section once with this table open in your context. For every paragraph in the rules section, scan the left column for a matching trigger and note which rules apply to this book. Then during Step 6 (Parse Sections), as you encounter each section, scan the left column again — section-level triggers (combat modifiers, conditional choices, multi-event paragraphs) often only become apparent when you're looking at a specific section's text. The table is meant to be re-scanned, not memorised on a single read.
 
@@ -2672,6 +2675,52 @@ After fetching, verify the file's embedded version constant matches the expected
 
 If the user's environment does not support outbound HTTP fetches at all (some sandboxed environments block `raw.githubusercontent.com`), fall back to asking the user to upload the files directly.
 
+### 9.9 Multi-Chat Parsing for Long Books
+
+The single-chat workflow implicit in Sections 9.1–9.8 assumes the whole book fits in one conversation's context and token budget. It does, for books under roughly 200–300 sections with clean text and a modest rules section. For longer books — Chronicles of Arborell (Windhammer) at 600 sections, Fabled Lands volumes at 700+, some of the larger D&D Adventure Gamebooks — a single chat will overflow either the model's context window or the client's per-conversation message budget before the parse is finished. Discovering this mid-parse is expensive: the work already done in the dying chat is hard to carry forward cleanly, the user has to re-upload inputs, and the next chat wastes budget re-establishing context that was already built once. The fix is to plan the chunking up front.
+
+**When to chunk.** Ask the user up front: how many numbered sections does the book have, and what's the page count? Rough guidance:
+
+- **≤ 200 sections, clean text.** Single-chat parse is usually fine. Proceed with the Section 9.2 / 9.5 workflows.
+- **200–400 sections.** Borderline. If the rules section is small (stats, combat, inventory, a couple of optional mechanics), a single chat can usually cover it; if the rules section is dense (lots of abilities, spells, special mechanics, multi-phase combat), plan two chats — one for rules + character_creation + skeleton, one for sections + verification.
+- **400+ sections, or any book with a scanned-PDF source, or any book with a very dense rules section.** Chunk. Start with the breakdown below.
+
+**Canonical chunk boundaries.** The chunks are natural narrative boundaries in the parse work itself — not arbitrary section-count splits. Following them keeps each chat's deliverable coherent and gives you clean resume points between chats.
+
+1. **Chunk 1 — Skeleton + rules + character creation.** Parse frontmatter pages, the rules section completely (stats, combat system, inventory rules, provisions, abilities, any special mechanics — everything in Section 7.2's workflow), the full `character_creation.steps[]` (applying Rule 11 for rolls, Rule 26 for point-buy, etc.), and the `round_script` (applying Section 7.5's derived-combat-stat pattern when the book's combat stat is computed rather than rolled). Seed `items_catalog` and `enemies_catalog` with entries discovered in the rules pages and in Section 1. Emit a book JSON with complete `metadata` / `rules` / `frontmatter` / `character_creation`, empty `sections: {}`, initial catalogs, and `metadata.total_sections` set to the expected book-wide count. Save this skeleton as the chunk-1 output; it is the authoritative input to every subsequent chunk. Budget: this chat is rule-heavy and script-heavy, not section-heavy — allocate most of it to rules parsing and `round_script` authoring, not to narrative transcription.
+
+2. **Chunks 2..N — Section ranges.** Each chat parses one contiguous range of sections (e.g., 1–100, 101–200, 201–300, …). Input to each chunk: the accumulating book JSON (rules + catalogs + any sections parsed so far) and the PDF/text pages covering this chunk's range. Output: the `sections[id]` entries for this range, merged into the accumulating JSON; any new `items_catalog[id]` or `enemies_catalog[id]` entries discovered while parsing sections (often enemies with section-specific stat blocks, or items granted only in a specific section) are added to the catalogs. Suggested chunk size: ~100 sections per chat on clean-text sources, scaled down if sections are dense (many combats, many multi-event paragraphs) or scaled up if they're sparse (mostly narrative with thin mechanics). Keep catalog entries consolidated in the accumulated JSON — do not fragment by chunk, do not emit a new catalog per chat.
+
+3. **Chunk N+1 — Catalog reconciliation + verification.** Once all sections are parsed, walk the book end-to-end and verify (a) every `add_item.item` points at an existing `items_catalog[id]`; (b) every `combat.enemy_ref` points at an existing `enemies_catalog[id]`; (c) every `choice.target` and `roll_dice.results[range].target` points at an existing `sections[id]`; (d) the pre-output verification checklist in Section 10 is walked front-to-back over the full book. Fix cross-reference bugs. This chunk is largely mechanical — a parser-driven workflow per Rule 7 is ideal, and Rule 6 (no narrative echoing) is load-bearing since you are NOT re-reading narrative here, only cross-referencing structural fields.
+
+4. **Chunk N+2 — Playability validation.** Run the coverage probe playbook, the smoke playbook, and any Tier 3 playthroughs against the canonical emulators per Section 9.6. Fix sections flagged by the probes. Confirm Tier 3 playthroughs complete without `manual_set` workarounds (see Section 10's checklist on Tier 3 playthrough discipline). This chunk is test-driven; its output is a green regression log and any final bug-fix commits to the book JSON.
+
+For a 600-section book, that totals 8–9 chats end-to-end (Chunk 1 + 6 section chunks + reconciliation + playability). For a 400-section book, 6–7 chats.
+
+**What the user carries between chats.** Four things:
+
+- **The accumulating book JSON file.** Each chunk reads it, adds to it, and emits the updated version for the user to save. The user uploads the updated file to the next chunk's chat.
+- **Parser-state notes.** Any deferred questions the parser flagged during the chunk ("Section 247 says 'fight the guard' with no stat block — possibly the one from §180?", "Rules mention a 'Second Wind' ability in the frontmatter but no abilities list — check later pages"). Carry forward so the next chunk's parser knows what to watch for. A short plain-text `parse_notes.txt` is sufficient.
+- **The running `metadata.confidence.flagged_for_review` list.** Each chunk appends to this; the reconciliation chunk sweeps it to verify nothing was forgotten.
+- **A pointer to the codex doc.** Each chunk's opening message should link or upload the codex doc so the AI is running against the same version of the rules.
+
+**What the user does NOT carry between chats.** The PDF / source text itself is loaded per-chunk on the pages relevant to that chunk — loading the whole PDF into every chunk wastes context and encourages the AI to read outside its scope. The previous chunks' raw narrative is gone from the accumulating JSON (sections carry only their structured `text`, not a transcription log); don't try to reconstruct it.
+
+**Starting a chunk's chat.** The opening message to the AI should include:
+- The chunk's scope in one sentence ("Parse sections 201–300 of *Windhammer* (Chronicles of Arborell) per codex v2.14.0").
+- The accumulating book JSON (uploaded or pasted).
+- The PDF pages for this chunk's range (uploaded — specify the page numbers).
+- `parse_notes.txt` from prior chunks (if any).
+- A link to (or upload of) the codex doc.
+
+Nothing else. Do not paste the walkthrough (unless this chunk is a Tier 3 playthrough step), do not paste prior chunks' raw text, do not paste the `known_issues.md` file.
+
+**Context hygiene during a chunk.** Follow Rule 6 (never echo book narrative back into your own output). The context-budget failure mode for long-book parses is specifically "the model loads a 100-section range, summarises it in prose, *then* emits JSON" — that reads the input twice and writes it twice, burning tokens for no output-quality gain. Read sections directly via a parser per Rule 7, emit structured JSON, do not re-narrate. If the environment supports code execution, a per-chunk parser script (one that reads PDF pages and emits `sections[id]` JSON for the chunk's range) is the recommended workflow; the model reviews and fixes the parser's output, it doesn't read every section's text into context.
+
+**Resumability.** Treat each chunk's output as a checkpoint. If a chunk runs out of budget mid-range, save whatever the accumulating JSON looks like at that moment, note the last-parsed section id in `parse_notes.txt`, and resume the chunk in a fresh chat from that section.
+
+**Known gap — merge tooling.** Automated chunk-merge tooling (a script that takes N partial JSONs emitted by separate chats and produces one merged book file) would be useful but is not shipped. For now the user manages the merge manually — the easiest workflow is to have the AI write the full updated JSON each chunk (reading in the accumulating JSON, emitting the updated version), rather than asking it to emit a delta patch. If merge tooling ships later it belongs under `scripts/` in the engine repo and would be referenced here.
+
 ---
 
 ## 10. VERIFICATION CHECKLIST
@@ -2813,7 +2862,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.13.0 / GBF schema v1.10.0 / CLI emulator v3.5.0 / HTML emulator v3.5.0.**
+**Codex v2.14.0 / GBF schema v1.10.0 / CLI emulator v3.5.0 / HTML emulator v3.5.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
