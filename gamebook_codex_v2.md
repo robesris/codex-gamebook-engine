@@ -13,10 +13,10 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.7.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 3.3.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 3.3.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 3.3.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `codex.schema.json` (GBF format) | ≥ 1.9.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 3.4.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 3.4.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 3.4.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -299,6 +299,8 @@ The table exists because the codex doc is read by an AI that does not search it 
 | Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects — "if 4 or lower, lose 2 ENDURANCE and turn to 140; if 5 or higher, turn to 323" | Rule 22 (Pattern 7.6.9) | `roll_dice` event with per-range `effects` (array of event objects) plus `target`. Schema v1.8+. Effects run AFTER the range match and BEFORE navigation, so a single event mutates state and moves the player. Falls back to `script` only when the effects array cannot express the branching (cumulative loops, conditional re-rolls, complex multi-stage logic). |
 | Book-wide combat rule stated in the *rules section* (not in any specific encounter) — "if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while wearing the Ring of Hostility all enemies attack at +1", any universal combat rule keyed on player state | Rule 23 | `rules.combat_system.standing_modifiers[]` (schema v1.8+). One `combat_modifier` entry per rule, with `target` dot-path, signed `delta`, optional `condition` for "applies when…" rules, optional `reason`. Emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start. Never re-encode the same rule per-section — that's lossy (misses fights the parser forgets) and redundant. |
 | Section describes losing an entire inventory category — "you lose the Pack and all the Equipment that was inside it" (LW1 §188 Kraan Backpack loss), "your weapons are confiscated", "all your Special Items are stripped from you" | Rule 24 | `remove_inventory_category` event (schema v1.8+) with `category` matching the book's own `inventory_category` string (e.g. `"backpack"`, `"special"`, `"weapons"`). Single event replaces per-id `remove_item` sequences; auto-unequips any equipped items whose id falls in the removed category. |
+| Point-buy stat generation — "distribute N points between the following attributes, each within [min, max]" (Windhammer 50 across 5 attributes; any book whose rules section names a total budget and per-stat bounds rather than dice rolls) | Rule 25 | `distribute_points` character-creation step (schema v1.9+) with `total_points` and a `stats[]` array of `{name, min, max}`. Single step pauses the player on a ± button UI (HTML) or a `distribute <stat>=<val>` action (CLI) until sum equals `total_points` and every value sits within its bounds. Never use `roll_stat` with a fake formula to fake point-buy, and never emit no creation step for declared stats. |
+| Declared stat has no `character_creation.steps[]` entry to populate it, OR `rules.attack_stat` / `rules.health_stat` names a stat not in `rules.stats[]` | Rule 26 | Either add a `roll_stat` / `roll_resource` / `set_resource` / `distribute_points` step that writes to the missing stat, OR remove the stat from `rules.stats[]` if the book explicitly does not initialise it at creation. If `rules.attack_stat` names an undeclared name, either declare it or (for derived-attack systems) set `rules.attack_stat: null` and compute the derivation in the round_script. The v3.4+ emulators surface both gaps as a book-load validation banner so they can't ship silently. |
 | Computed navigation: "add up your gold and turn to that section" / cipher-style page jumps | Section 8.1 | `input_number` event with `target: "computed"` and a documented formula |
 | Hidden-information puzzle solved from an illustration (counting objects, decoding a glyph) | Section 8.2 | `input_number` event referencing the illustration; the answer is the section to turn to |
 | Password / text entry ("speak the word of opening") | Section 8.3 | `input_text` event with the expected string |
@@ -1048,6 +1050,76 @@ That single event replaces what would otherwise be 10-20 `remove_item` events on
 **Relationship to equipment slots.** When `remove_inventory_category` removes an item that is currently equipped, the emulator auto-unequips it (same hook as `remove_item`). The slot becomes empty; the player's `player.equipment` map no longer carries that item. This is important for Rule 19 interactions: losing the Backpack might also mean losing the Helmet or weapon that was stored inside it, and those items' equipped-state bonuses should drop off when the items are removed. The emulator handles this automatically — parsers and encoding authors do not need to emit companion unequip events.
 
 **Verification.** Every `remove_inventory_category` event carries a valid `category` string that matches at least one `items_catalog[id].inventory_category` value in the book. If the category doesn't match any item, the event is a no-op (not an error, but usually a parser bug — the author meant a category that doesn't exist). During comprehensive review, cross-check the category value against the catalog to catch typos. Also: if a section's text describes losing "the Pack and all its Equipment" but the encoding is a sequence of `remove_item` events rather than `remove_inventory_category`, that's a pre-v1.8 encoding that should be migrated to the new shape during the next sub-agent pass.
+
+### Rule 25: `distribute_points` for Point-Buy Stat Generation
+
+Some gamebooks generate starting stats by asking the player to distribute a fixed total of points across a named set of attributes, each attribute bounded by a per-stat minimum and maximum. The rules section typically reads like *"Distribute 50 points between the following five attributes: Strength (5-15), Agility (5-15), Endurance (5-15), Luck (5-15), Intuition (5-15)."* Before schema v1.9 there was no canonical encoding for this shape — parses either invented a non-standard field on `rules.stats[]` (which no emulator reads) or emitted no character-creation step at all, leaving the five attributes `undefined` at play start and silently breaking every combat. Schema v1.9 adds a `distribute_points` action to the `character_creation_step` enum.
+
+**The shape.**
+
+```json
+{
+  "action": "distribute_points",
+  "total_points": 50,
+  "stats": [
+    { "name": "Strength",  "min": 5, "max": 15 },
+    { "name": "Agility",   "min": 5, "max": 15 },
+    { "name": "Endurance", "min": 5, "max": 15 },
+    { "name": "Luck",      "min": 5, "max": 15 },
+    { "name": "Intuition", "min": 5, "max": 15 }
+  ]
+}
+```
+
+Every `stats[].name` should also appear in `rules.stats[].name`. The emulator commits the confirmed allocation to `state.stats[name]` (and to `state.initialStats[name]` for stats declared `initial_is_max: true`). Both reference emulators pause character creation on a dedicated UI — the CLI exposes a `distribute <stat>=<val> <stat>=<val> ...` action that validates the submitted sum and per-stat bounds in one step; the HTML renders one row per stat with `+` / `−` buttons, a remaining-points counter, and a Confirm button that stays disabled until sum equals `total_points` and every value lies within its declared `[min, max]`.
+
+**Canonical worked example — a point-buy stat-generation system.** The rules section of a Windhammer-style book reads *"Distribute 50 points among your five attributes. No attribute may be lower than 5 or higher than 15."* Encoding:
+
+```json
+{
+  "character_creation": {
+    "steps": [
+      {
+        "action": "distribute_points",
+        "total_points": 50,
+        "stats": [
+          { "name": "Strength",  "min": 5, "max": 15 },
+          { "name": "Agility",   "min": 5, "max": 15 },
+          { "name": "Endurance", "min": 5, "max": 15 },
+          { "name": "Luck",      "min": 5, "max": 15 },
+          { "name": "Intuition", "min": 5, "max": 15 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+If the book's combat uses a derived stat (e.g., `Combat Value = Strength + Agility + weapon bonus`), the derived stat is NOT declared in `rules.stats[]` and `rules.attack_stat` is `null`; the round_script computes the derivation from its component stats at attack time. Section 7's derived-stat guidance and Rule 23's `standing_modifiers[]` are the other half of a correct Windhammer-style encoding.
+
+**When NOT to use it.** Use `roll_stat` when the book asks for a die-rolled value (LW1's ENDURANCE roll, FF's d6+6 SKILL). Use `choose_one` when the player picks from a fixed list rather than allocating a budget. Use `set_resource` when the starting value is fixed and non-interactive. `distribute_points` is specifically for budget-with-per-stat-bounds allocation, which is a different interaction mental model from any of the above — the Confirm gate is load-bearing because a partial allocation is not a legal character.
+
+**Per-stat bounds are step-scoped, not book-wide.** The `min` and `max` describe this one creation step's allocation limits. A book's stat definitions in `rules.stats[]` may carry independent clamps for runtime modifications (health min 0, etc.); these are separate concerns. If a stat's starting range is narrower than its runtime range (a common case — you might roll a starting ENDURANCE in [14, 29] but allow it to fall to 0 in combat), the creation-step bound is narrower and the runtime clamp is looser. Both are legal and independent.
+
+**Relationship to Rule 26 validation.** A well-formed `distribute_points` step contributes to satisfying the "every declared stat is populated after character creation" check: each `stats[].name` will be written to `state.stats[name]` when the player confirms, so the end-of-creation validation banner stays empty for those stats. A parse that lists a stat in `rules.stats[]` but fails to include it in any `distribute_points`/`roll_stat`/`set_resource` step triggers the Rule 26 warning — use that signal to catch the gap during comprehensive review.
+
+### Rule 26: Book-Load Validation Warnings for Stat Encoding Gaps
+
+Schema and emulator mechanisms catch many kinds of malformed books, but two failure modes slip past both: (a) `rules.attack_stat` or `rules.health_stat` naming a stat that `rules.stats[]` never declares, and (b) a declared stat that `character_creation.steps[]` never populates. Before schema v1.9 the emulators silently tolerated both: `state.stats[attack_stat]` resolved to `undefined`, the CLI printed the literal string "undefined" in the stat bar while the HTML fell through `|| 0` and printed "0", and combat proceeded with `player.attack = 0` for the entire book. Neither surface made the root cause visible; both pointed the reader at a downstream symptom instead of the parse bug.
+
+Schema v1.9 introduces a book-load validation pass that surfaces both conditions as a prominent banner. The rule specifies what the parse must verify before shipping; the emulators back it up at runtime so mis-encoded books fail loudly instead of quietly.
+
+**What the codex parse must verify before emitting the final JSON.** For every book the parse produces:
+
+1. If `rules.attack_stat` is a string, that string appears in `rules.stats[].name`. If the book's combat system is threshold-based or derives attack from other stats (e.g., Windhammer's `CV = Strength + Agility + bonuses`), `rules.attack_stat` is `null` and the round_script computes the derivation — do NOT declare the derived name in `rules.stats[]`.
+2. If `rules.health_stat` is a string, that string appears in `rules.stats[].name`.
+3. Every name in `rules.stats[]` is populated by at least one `character_creation.steps[]` entry — a `roll_stat`, a `roll_resource` targeting the stat, a `set_resource` whose resource name matches the stat, or a `distribute_points` whose `stats[]` includes the name. Stats that the book explicitly does not initialise at creation time (e.g. a progress counter that stays at 0) should not be declared in `rules.stats[]` at all; use `state.flags` or a script event instead.
+
+**Runtime enforcement (both reference emulators v3.4.0+).** The CLI and HTML emulators run the same checks at book-load time, attach the resulting warnings to `state.warnings`, and surface them in a prominent banner above the play area (HTML) or a `WARNING:` block at the top of the status summary (CLI). The banner does NOT block play — the game still runs so the player can see downstream effects — but it points at the root cause in source-text language so the parse can be fixed.
+
+**Harmonised undefined-stat rendering.** Both emulators now render an `undefined` stat value as an em dash (`—`) in the stat bar, not as the literal string "undefined" (CLI pre-v3.4 behavior) and not as a cosmetic `0` (HTML pre-v3.4 behavior). The `—` makes the missing slot visible at a glance and keeps the stat-bar symptom consistent with the banner diagnosis. A parse that ships with a `—` in the stat bar is a parse whose `character_creation.steps[]` is missing a step for that stat — the banner above the stat bar names the stat and points at the fix.
+
+**Verification.** Before emitting the final JSON: walk `rules.stats[]`, confirm every name is written by at least one character_creation step, confirm `rules.attack_stat` (if non-null) matches a declared name, confirm `rules.health_stat` (if non-null) matches a declared name. This check belongs in the pre-output verification checklist — Rule 26 is the structural companion to Rule 11 (starting resources from rolls) and Rule 25 (point-buy), which tell the parse *how* to encode specific shapes; Rule 26 is the safety net that tells the parse *every stat needs at least one* of those shapes.
 
 ---
 
@@ -2675,9 +2747,13 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 24 (`remove_inventory_category` for whole-category loss).** For every section that describes the player losing an entire inventory category ("the Kraan has ripped away your Backpack", "your weapons are confiscated", "all your Special Items are stripped from you"), I encoded it as a single `remove_inventory_category` event with `category` matching the book's own `inventory_category` string, NOT as a sequence of per-id `remove_item` events. Partial loss ("you lose half your Meals"), selective loss ("you lose any one Special Item of your choice"), and conditional loss ("any iron item is rusted and destroyed") use different encodings — `modify_stat` on a resource counter, `choose_items` (loss variant), or per-id `remove_item` gated on conditions, respectively. The `category` value matches at least one `items_catalog[id].inventory_category` in the book — I cross-checked to catch typos.
 
+**Rule 25 (`distribute_points` for point-buy stat generation).** If the book's rules section asks the player to allocate a fixed budget of points across a named set of attributes with per-stat min/max bounds ("Distribute 50 points among your five attributes, each between 5 and 15"), I encoded it as a single `distribute_points` character-creation step with `total_points` equal to the budget and a `stats[]` array of `{name, min, max}` entries covering every attribute named in the rules text. I did NOT fall back to `roll_stat` with a fake formula, I did NOT emit a generic `custom` step, and I did NOT leave the attributes undeclared — any one of those breaks combat for the whole book by leaving `state.stats[name]` at `undefined`. Every `stats[].name` also appears in `rules.stats[].name` so Rule 26's end-of-creation validation doesn't flag the stats as unpopulated.
+
+**Rule 26 (Book-load validation for stat encoding).** Before I emit the final JSON I walk `rules.stats[]` and confirm every declared stat name is written by at least one `character_creation.steps[]` entry (a `roll_stat`, a `roll_resource` whose `resource` matches the stat name, a `set_resource` whose `resource` matches the stat name, or a `distribute_points` whose `stats[]` includes the name). I also confirm `rules.attack_stat` is either `null` (threshold-based combat or derived-attack system) or equal to a declared stat name, and the same for `rules.health_stat`. A stat that the book explicitly does not initialise at creation (a progress counter, a tally that starts at 0) is represented via `state.flags` or via a script event, NOT declared in `rules.stats[]`. The v3.4+ reference emulators surface both gaps as a validation banner; a parse that shipping triggers the banner is a parse that failed this checklist entry.
+
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised.
 
-**Section 7.2 (Stat completeness on unprofiled series).** Every stat declared in `rules.stats[]` has a generation formula AND an initialising `character_creation.steps[]` entry, so after character creation completes there are no `undefined` stats in `state.stats`. If the book uses point-distribution rather than rolling and the schema does not yet have a `distribute_points` step type, I stopped and reported the gap rather than leaving stats uninitialised.
+**Section 7.2 (Stat completeness on unprofiled series).** Every stat declared in `rules.stats[]` has a generation formula AND an initialising `character_creation.steps[]` entry, so after character creation completes there are no `undefined` stats in `state.stats`. If the book uses point-distribution rather than rolling, I used a single `distribute_points` step per Rule 25 (schema v1.9+) rather than inventing a non-standard field on `rules.stats[]` or emitting no step at all. Rule 26's end-of-creation validation is the safety net that catches any stat this check missed.
 
 **Section 7.2 (Currency encoding choice).** Currency is encoded *either* canonical-slot (`set_resource: gold`, canonical lowercase slot) *or* stat (declared in `rules.stats[]`, `set_resource` matching the stat name) — never both. The choice matches how the book's own rules section treats it: stat-encoded if currency appears in the character-sheet stats table, slot-encoded otherwise.
 
@@ -2728,7 +2804,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.11.0 / GBF schema v1.8.0 / CLI emulator v3.3.0 / HTML emulator v3.3.0.**
+**Codex v2.12.0 / GBF schema v1.9.0 / CLI emulator v3.4.0 / HTML emulator v3.4.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

@@ -696,6 +696,152 @@ test('remove_inventory_category drops category items and unequips', () => {
 });
 
 // ============================================================
+// Test 15: distribute_points pauses, validates, and commits the
+// confirmed allocation (Rule 25, schema v1.9+).
+// ============================================================
+// MOTIVATED_BY: Windhammer unprofiled-series stress test. Bug A in
+// DEV_PROCESS.md's Tracked engine backlog: point-buy stat generation
+// had no schema primitive, so the parse either invented a
+// non-standard `generation` string on rules.stats[] or emitted no
+// creation step at all — combat resolved to player.attack=0 for
+// whole-book runs. Schema v1.9 introduces the action.
+// END_TO_END_VERIFY: point-buy stat-generation Windhammer run: drive
+// the CLI to the point-buy pause, submit `distribute Strength=10
+// Agility=10 Endurance=10 Luck=10 Intuition=10` against a
+// total_points=50 step; confirm state.stats carries the five values
+// exactly and combat reads the non-zero Strength/Agility for CV.
+test('distribute_points pauses, validates, and commits allocation', () => {
+  const book = buildBook({
+    rules: {
+      stats: [
+        { name: 'TESTSTAT_A', initial_is_max: true },
+        { name: 'TESTSTAT_B', initial_is_max: true },
+      ],
+    },
+    character_creation: {
+      steps: [{
+        action: 'distribute_points',
+        total_points: 10,
+        stats: [
+          { name: 'TESTSTAT_A', min: 2, max: 8 },
+          { name: 'TESTSTAT_B', min: 2, max: 8 },
+        ],
+      }],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  play.startCharacterCreation(state, book);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute', 'paused on distribute');
+  assertEqual(state.pause.total_points, 10, 'total_points forwarded');
+  assertEqual(state.pause.stats.length, 2, 'stats list forwarded');
+
+  // Invalid sum — should not mutate state, should leave pause in place.
+  play.applyAction(state, book, 'distribute', ['TESTSTAT_A=7', 'TESTSTAT_B=2']);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute', 'pause persists on invalid sum');
+  assertTrue(state.stats.TESTSTAT_A === undefined, 'state.stats untouched on invalid sum');
+
+  // Out of bounds — rejected.
+  play.applyAction(state, book, 'distribute', ['TESTSTAT_A=10', 'TESTSTAT_B=0']);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute', 'pause persists on out-of-bounds');
+  assertTrue(state.stats.TESTSTAT_A === undefined, 'state.stats untouched on out-of-bounds');
+
+  // Valid allocation — commits and advances.
+  play.applyAction(state, book, 'distribute', ['TESTSTAT_A=6', 'TESTSTAT_B=4']);
+  assertEqual(state.stats.TESTSTAT_A, 6, 'A committed');
+  assertEqual(state.stats.TESTSTAT_B, 4, 'B committed');
+  assertEqual(state.initialStats.TESTSTAT_A, 6, 'A also in initialStats (initial_is_max)');
+  assertTrue(state.creationDone, 'creation advances after valid allocation');
+});
+
+// ============================================================
+// Test 16: validateBookStructure flags undeclared attack_stat /
+// health_stat (Rule 26, schema v1.9+).
+// ============================================================
+// MOTIVATED_BY: Windhammer Bug B (codex v2.8.1 prominence pass
+// already addressed the parse side of this) + Bug C runtime leg:
+// when a parse emits rules.attack_stat naming a stat it never
+// declared in rules.stats[], combat silently resolved to 0 for
+// the whole book. The validation warning surfaces the root cause
+// instead of the downstream symptom.
+// END_TO_END_VERIFY: load a book whose rules.attack_stat points
+// at an undeclared name in either emulator; confirm the validation
+// banner lists the stat with the "not declared" diagnosis on the
+// very first frame of play.
+test('validateBookStructure flags undeclared attack_stat / health_stat', () => {
+  const good = {
+    rules: {
+      stats: [{ name: 'TESTSTAT_A' }, { name: 'TESTSTAT_B' }],
+      attack_stat: 'TESTSTAT_A',
+      health_stat: 'TESTSTAT_B',
+    },
+  };
+  assertEqual(play.validateBookStructure(good), [], 'clean book yields no warnings');
+
+  const badAttack = {
+    rules: {
+      stats: [{ name: 'TESTSTAT_B' }],
+      attack_stat: 'TESTSTAT_A',
+      health_stat: 'TESTSTAT_B',
+    },
+  };
+  const ws = play.validateBookStructure(badAttack);
+  assertEqual(ws.length, 1, 'one warning for undeclared attack_stat');
+  assertTrue(ws[0].includes('TESTSTAT_A'), 'warning mentions the stat name');
+  assertTrue(ws[0].includes('attack_stat'), 'warning cites attack_stat');
+
+  const nullAttack = {
+    rules: {
+      stats: [{ name: 'TESTSTAT_B' }],
+      attack_stat: null,
+      health_stat: 'TESTSTAT_B',
+    },
+  };
+  assertEqual(play.validateBookStructure(nullAttack), [], 'null attack_stat is allowed (threshold-based combat)');
+});
+
+// ============================================================
+// Test 17: end-of-creation pass flags declared-but-unpopulated
+// stats (Rule 26, schema v1.9+).
+// ============================================================
+// MOTIVATED_BY: Windhammer Bug C runtime leg. A parse that declared
+// a stat but never included it in character_creation.steps[] left
+// state.stats[name] === undefined at play start; the stat bar
+// displayed "undefined" (CLI) or "0" (HTML) and neither exposed
+// the root cause. The end-of-creation pass surfaces every such
+// gap with a pointer at the fix (add a roll_stat / set_resource /
+// distribute_points step for the missing stat).
+// END_TO_END_VERIFY: drive either emulator through a book with a
+// deliberately-unpopulated declared stat; confirm the validation
+// banner on the first section lists one "declared stat … undefined
+// after character_creation.steps[]" entry per missing stat.
+test('end-of-creation pass flags declared-but-unpopulated stats', () => {
+  const book = buildBook({
+    rules: {
+      stats: [
+        { name: 'TESTSTAT_A' },
+        { name: 'TESTSTAT_B' },
+      ],
+      attack_stat: 'TESTSTAT_A',
+      health_stat: 'TESTSTAT_B',
+    },
+    character_creation: {
+      steps: [{ action: 'roll_stat', stat: 'TESTSTAT_A', formula: '1d6' }],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  play.startCharacterCreation(state, book);
+  // Resolve the roll for TESTSTAT_A; TESTSTAT_B is never set by any step.
+  play.applyAction(state, book, 'provide_roll', ['4']);
+  assertTrue(state.creationDone, 'creation completes');
+  const missing = (state.warnings || []).filter(w => w.includes('TESTSTAT_B') && w.includes('undefined'));
+  assertEqual(missing.length, 1, 'one warning for TESTSTAT_B');
+  const spurious = (state.warnings || []).filter(w => w.includes('TESTSTAT_A') && w.includes('undefined'));
+  assertEqual(spurious.length, 0, 'no spurious warning for populated TESTSTAT_A');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;

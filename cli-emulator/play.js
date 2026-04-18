@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.3.0';
+const CODEX_EMULATOR_VERSION = '3.4.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.3.0';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '309164d';
+const CODEX_EMULATOR_COMMIT = '4d4d612';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -742,9 +742,37 @@ function getEnemyAttack(enemy, book) {
   return enemy[attackStat] ?? enemy[key] ?? 0;
 }
 
+function validateBookStructure(book) {
+  // Codex v2.12+ / schema v1.9+ book-load validation. Checks structural
+  // encoding errors that neither JSON Schema nor the emulator's event
+  // handlers catch — the kind that silently produce an unplayable book
+  // at runtime because some state lookup falls through to undefined.
+  // Returns an array of human-readable warning strings; callers decide
+  // whether to attach them to state.warnings or surface them some other
+  // way. See Rule 26 in gamebook_codex_v2.md for the rationale and the
+  // Windhammer unprofiled-series stress test that motivated this.
+  const warnings = [];
+  const declared = (book.rules?.stats || []).map(s => s && s.name).filter(n => typeof n === 'string');
+  const attackStat = book.rules?.attack_stat;
+  if (attackStat != null && typeof attackStat === 'string' && !declared.includes(attackStat)) {
+    warnings.push(`rules.attack_stat "${attackStat}" is not declared in rules.stats[] — combat lookups will resolve to 0 for the whole book`);
+  }
+  const healthStat = book.rules?.health_stat;
+  if (healthStat != null && typeof healthStat === 'string' && !declared.includes(healthStat)) {
+    warnings.push(`rules.health_stat "${healthStat}" is not declared in rules.stats[] — death-check and healing will resolve to 0`);
+  }
+  return warnings;
+}
+
 function startCharacterCreation(state, book) {
   state.pause = { type: 'character_creation' };
   state.creationStep = 0;
+  // Attach structural validation warnings once, so the summary banner
+  // surfaces them from first render onward. Idempotent on re-entry.
+  if (!Array.isArray(state.warnings)) state.warnings = [];
+  for (const w of validateBookStructure(book)) {
+    if (!state.warnings.includes(w)) state.warnings.push(w);
+  }
   // Codex v2.9 / schema v1.6: provisions are a resource counter, not
   // an inventory item. The canonical encoding for any book that uses
   // meals/rations/provisions/food as a character-sheet counter is
@@ -820,6 +848,20 @@ function processCreationSteps(state, book) {
         available: (book.rules?.abilities?.available || []).map(a => a.name),
       };
       return state;
+    } else if (step.action === 'distribute_points') {
+      // Schema v1.9+ / codex v2.12+. Point-buy stat generation. Pause on a
+      // dedicated pause type so the player or harness can submit a full
+      // allocation via `distribute <stat>=<val> ...`. The applyAction
+      // handler validates the sum against total_points and each value
+      // against its per-stat min/max before committing, so an in-progress
+      // partial allocation never leaks into state.stats.
+      state.pause = {
+        type: 'character_creation_distribute',
+        step_index: state.creationStep,
+        total_points: step.total_points,
+        stats: Array.isArray(step.stats) ? step.stats.map(s => ({ name: s.name, min: s.min, max: s.max })) : [],
+      };
+      return state;
     } else if (step.action === 'add_item') {
       if (!state.inventory.includes(step.item)) state.inventory.push(step.item);
       autoEquipOnAdd(state, book, step.item);
@@ -871,7 +913,21 @@ function processCreationSteps(state, book) {
       state.creationStep++;
     }
   }
-  // Done with creation
+  // Done with creation. Before transitioning to the first section, run
+  // the runtime leg of the book-load validation: any stat declared in
+  // rules.stats[] that character_creation.steps[] did not populate ends
+  // up undefined at the start of play, which will either render as the
+  // literal string "undefined" (pre-v3.4 CLI) or fall through to 0
+  // (pre-v3.4 HTML). Neither is the right diagnosis — surface the
+  // actual gap as a warning so the parse can be fixed. Rule 26.
+  const declared = (book.rules?.stats || []).map(s => s && s.name).filter(n => typeof n === 'string');
+  if (!Array.isArray(state.warnings)) state.warnings = [];
+  for (const name of declared) {
+    if (state.stats[name] === undefined) {
+      const w = `declared stat "${name}" is undefined after character_creation.steps[] — no roll_stat / set_resource / distribute_points populates it`;
+      if (!state.warnings.includes(w)) state.warnings.push(w);
+    }
+  }
   state.creationDone = true;
   state.pause = null;
   return navigateTo(state, book, '1');
@@ -1300,6 +1356,15 @@ function getAvailableActions(state, book) {
       actions.push({ name: 'choose_abilities', description: `Pick ${state.pause.count} from: ${state.pause.available.join(', ')}` });
       break;
 
+    case 'character_creation_distribute': {
+      const bounds = (state.pause.stats || []).map(s => `${s.name}=[${s.min}..${s.max}]`).join(' ');
+      actions.push({
+        name: 'distribute',
+        description: `Allocate ${state.pause.total_points} points across ${bounds}; call as: distribute ${(state.pause.stats || []).map(s => `${s.name}=<n>`).join(' ')}`,
+      });
+      break;
+    }
+
     case 'section':
       // Choices
       const choices = state.pendingChoices || [];
@@ -1594,6 +1659,64 @@ function applyAction(state, book, action, args) {
         if (!state.flags.includes(flag)) state.flags.push(flag);
       }
       state.log.push(`Chose abilities: ${chosen.join(', ')}`);
+      state.creationStep++;
+      return processCreationSteps(state, book);
+    }
+
+    case 'character_creation_distribute': {
+      // Schema v1.9+ / codex v2.12+ distribute_points action. Args come
+      // in as `<stat>=<val>` tokens (one per stat in the step's `stats`
+      // list). Parse, then validate three things: every named stat is
+      // declared in the pause's stats[] (refuse unknown stat names),
+      // each value is within [min, max], and the sum equals
+      // total_points. If any check fails, log the reason and leave the
+      // pause in place so the caller can retry — partial allocations
+      // never leak into state.stats.
+      const pause = state.pause;
+      const step = book.character_creation.steps[pause.step_index];
+      const bounds = new Map((pause.stats || []).map(s => [s.name, s]));
+      const assignments = {};
+      for (const token of args) {
+        const eq = token.indexOf('=');
+        if (eq <= 0) {
+          state.log.push(`distribute: malformed token "${token}" — expected <stat>=<value>`);
+          return state;
+        }
+        const name = token.slice(0, eq);
+        const val = Number(token.slice(eq + 1));
+        if (!bounds.has(name)) {
+          state.log.push(`distribute: stat "${name}" is not in this step's allocation list`);
+          return state;
+        }
+        if (!Number.isFinite(val)) {
+          state.log.push(`distribute: value for "${name}" is not a number`);
+          return state;
+        }
+        assignments[name] = val;
+      }
+      for (const s of pause.stats || []) {
+        if (!(s.name in assignments)) {
+          state.log.push(`distribute: missing value for stat "${s.name}"`);
+          return state;
+        }
+        const v = assignments[s.name];
+        if (v < s.min || v > s.max) {
+          state.log.push(`distribute: ${s.name}=${v} is outside [${s.min}, ${s.max}]`);
+          return state;
+        }
+      }
+      const sum = Object.values(assignments).reduce((a, b) => a + b, 0);
+      if (sum !== pause.total_points) {
+        state.log.push(`distribute: total ${sum} does not equal required ${pause.total_points}`);
+        return state;
+      }
+      const statDefs = book.rules?.stats || [];
+      for (const [name, val] of Object.entries(assignments)) {
+        state.stats[name] = val;
+        const sd = statDefs.find(d => d.name === name);
+        if (sd && sd.initial_is_max) state.initialStats[name] = val;
+      }
+      state.log.push(`Distributed ${pause.total_points} points: ${Object.entries(assignments).map(([k, v]) => `${k}=${v}`).join(' ')}`);
       state.creationStep++;
       return processCreationSteps(state, book);
     }
@@ -2343,6 +2466,20 @@ function summarize(state, book) {
     }
   }
 
+  // Book-load validation banner (Rule 26 / codex v2.12+). Surfaces
+  // structural encoding errors (undeclared attack_stat/health_stat,
+  // declared-but-uninitialised stats) that would otherwise render as
+  // opaque "undefined" or "0" values in the stat bar. The banner goes
+  // directly below the TIER 3 banner so it's visible from the first
+  // frame onward and survives log dumps. The game still runs so the
+  // player can observe downstream effects; the warning is a diagnostic
+  // pointer at the root cause.
+  const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+  if (warnings.length > 0) {
+    lines.push(`[!!! WARNING — book-load validation found ${warnings.length} issue(s) !!!]`);
+    for (const w of warnings) lines.push(`  ${w}`);
+  }
+
   if (state.pause?.type === 'frontmatter') {
     const page = (book.frontmatter?.pages || [])[state.frontmatterPage];
     if (page) {
@@ -2356,11 +2493,20 @@ function summarize(state, book) {
     lines.push(`[Character Creation] Choose ${state.pause.category}: ${state.pause.options.join(' / ')}`);
   } else if (state.pause?.type === 'character_creation_choose_abilities') {
     lines.push(`[Character Creation] Choose ${state.pause.count} abilities from: ${state.pause.available.join(', ')}`);
+  } else if (state.pause?.type === 'character_creation_distribute') {
+    const bounds = (state.pause.stats || []).map(s => `${s.name} [${s.min}..${s.max}]`).join(', ');
+    lines.push(`[Character Creation] Distribute ${state.pause.total_points} points across ${bounds}`);
   } else if (state.pause?.type === 'section') {
     lines.push(`Section ${state.currentSection}`);
     const stats = [];
-    if (attackStat) stats.push(`${attackStat} ${state.stats[attackStat]}/${state.initialStats[attackStat]}`);
-    if (healthStat) stats.push(`${healthStat} ${state.stats[healthStat]}/${state.initialStats[healthStat]}`);
+    // Harmonised undefined-stat rendering (Rule 26 / codex v2.12+). Pre-v3.4
+    // the CLI printed the literal string "undefined" for an undeclared or
+    // unpopulated stat while the HTML emulator printed 0; both hid the
+    // real diagnosis. Both emulators now render undefined stats as an em
+    // dash ("—"), which the validation banner above explains.
+    const fmtStat = (cur, init) => `${cur === undefined ? '—' : cur}/${init === undefined ? '—' : init}`;
+    if (attackStat) stats.push(`${attackStat} ${fmtStat(state.stats[attackStat], state.initialStats[attackStat])}`);
+    if (healthStat) stats.push(`${healthStat} ${fmtStat(state.stats[healthStat], state.initialStats[healthStat])}`);
     const provLabel = book.rules?.provisions?.display_name || 'Provisions';
     const goldLabel = book.rules?.inventory?.currency_display_name || 'Gold';
     if (state.provisions > 0) stats.push(`${provLabel} ${state.provisions}`);
@@ -2572,6 +2718,7 @@ module.exports = {
   navigateTo,
   rollDice,
   evalCondition,
+  validateBookStructure,
 };
 
 if (require.main === module) {

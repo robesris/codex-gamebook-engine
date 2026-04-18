@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.8.0",
+  "title": "Gamebook Format (GBF) v1.9.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -455,9 +455,10 @@
             "choose_abilities",
             "add_item",
             "set_resource",
-            "set_ability_uses"
+            "set_ability_uses",
+            "distribute_points"
           ],
-          "description": "The step's action. `roll_stat` prompts a die roll for a stat (writes into `state.stats[stat_name]`). `roll_resource` prompts a die roll for a canonical resource slot or declared-stat-currency — the rolled total goes into `state.gold` / `state.provisions` / `state.meals` when `resource` matches a canonical lowercase name, or into `state.stats[resource]` when `resource` matches a declared `rules.stats[].name`. Use `roll_resource` (not `roll_stat`) for starting Gold Crowns, starting Provisions, or any other resource whose value is determined by a die roll but whose target slot is the canonical resource slot rather than a free-form stat name — see Rule 11 for the full story and the LW1 Gold Crowns worked example. `choose_one` prompts a single-option pick from a list. `choose_abilities` prompts the player to pick N items from the abilities list. `add_item` deterministically adds a starting item to inventory. `set_resource` deterministically sets a named resource (provisions, gold, or any declared stat whose name matches a `rules.stats[].name`) to a fixed amount — if the name matches a declared stat, the emulator routes the value into `state.stats[name]` so books that carry currency or experience as a named stat get the right behavior. `set_ability_uses` deterministically initializes the remaining-uses counter for a per-use ability (spells, limited talents, potions-as-ability, etc.) when the book has abilities whose use count is tracked separately from a d6 count or a discrete inventory item — for example, a spell-casting ability with a fixed number of castings per adventure, or a limited-use healing power. Schema v1.6+ adds `roll_resource` (before v1.6, the only encoding for roll-to-starting-resource was to use `roll_stat` with a scratch-stat name and hope the player didn't notice the scratch stat never flowed to the canonical slot — that was the LW1 Gold Crowns data bug)."
+          "description": "The step's action. `roll_stat` prompts a die roll for a stat (writes into `state.stats[stat_name]`). `roll_resource` prompts a die roll for a canonical resource slot or declared-stat-currency — the rolled total goes into `state.gold` / `state.provisions` / `state.meals` when `resource` matches a canonical lowercase name, or into `state.stats[resource]` when `resource` matches a declared `rules.stats[].name`. Use `roll_resource` (not `roll_stat`) for starting Gold Crowns, starting Provisions, or any other resource whose value is determined by a die roll but whose target slot is the canonical resource slot rather than a free-form stat name — see Rule 11 for the full story and the LW1 Gold Crowns worked example. `choose_one` prompts a single-option pick from a list. `choose_abilities` prompts the player to pick N items from the abilities list. `add_item` deterministically adds a starting item to inventory. `set_resource` deterministically sets a named resource (provisions, gold, or any declared stat whose name matches a `rules.stats[].name`) to a fixed amount — if the name matches a declared stat, the emulator routes the value into `state.stats[name]` so books that carry currency or experience as a named stat get the right behavior. `set_ability_uses` deterministically initializes the remaining-uses counter for a per-use ability (spells, limited talents, potions-as-ability, etc.) when the book has abilities whose use count is tracked separately from a d6 count or a discrete inventory item — for example, a spell-casting ability with a fixed number of castings per adventure, or a limited-use healing power. `distribute_points` prompts the player to allocate a fixed total of points across a named set of stats, each with per-stat min/max bounds; the emulator writes the final allocation into `state.stats[name]` (and into `state.initialStats[name]` when the stat is `initial_is_max`) once the sum equals `total_points` and every value is within its [min,max]. Use this for point-buy stat-generation systems like Windhammer's 50-points-across-5-attributes or any book whose rules section says 'distribute N points between the following stats.' Schema v1.6+ adds `roll_resource`. Schema v1.9+ adds `distribute_points` (before v1.9, point-buy stat-generation had no canonical encoding and the parse either invented a non-standard field on `rules.stats[]` or emitted no character-creation step at all, leaving the stats undefined after creation — see Rule 25 and the Windhammer worked example)."
         },
         "stat": { "type": "string", "description": "roll_stat, set_resource (when resource matches a stat name): which stat to target." },
         "formula": { "type": "string", "description": "roll_stat: the dice formula to evaluate (e.g., '2d6*4', 'R10+10')." },
@@ -473,6 +474,21 @@
         "amount": { "type": "number" },
         "ability": { "type": "string", "description": "set_ability_uses: the ability name (must match one of the names in `rules.abilities.available[].name` or be added as a character creation selection)." },
         "uses": { "type": "integer", "description": "set_ability_uses: the initial number of remaining uses for this ability. The emulator stores this in `state.abilityUses[ability]` and decrements on use." },
+        "total_points": { "type": "integer", "minimum": 0, "description": "distribute_points: the total number of points the player must allocate across the stats named in `stats[]`. The emulator holds the character-creation flow in a `character_creation_distribute` pause until the player confirms an allocation whose sum equals this value and whose per-stat values each respect their declared `[min, max]` range." },
+        "stats": {
+          "type": "array",
+          "description": "distribute_points: the stats eligible for point allocation. Each entry names a stat declared in `rules.stats[]` and gives the per-stat minimum and maximum allocation for this step (the bounds describe this one creation step, not a book-wide stat ceiling). Every `name` in the array should also appear in `rules.stats[].name` — the book-load validation pass warns when an allocation target stat is not declared. The emulator writes the confirmed allocation into `state.stats[name]` (and into `state.initialStats[name]` when the matching `rules.stats[]` entry has `initial_is_max: true`).",
+          "items": {
+            "type": "object",
+            "required": ["name", "min", "max"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "description": "Stat name (should match a `rules.stats[].name`)." },
+              "min": { "type": "integer", "description": "Minimum value the player may allocate to this stat." },
+              "max": { "type": "integer", "description": "Maximum value the player may allocate to this stat." }
+            }
+          }
+        },
         "condition": {
           "oneOf": [
             { "$ref": "#/definitions/condition" },

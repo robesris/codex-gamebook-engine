@@ -147,6 +147,53 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 .mt-3 { margin-top: 30px; }
 .mb-1 { margin-bottom: 10px; }
 
+/* --- Validation Banner (codex v2.12+ / Rule 26) --- */
+.validation-banner {
+  background: rgba(180, 60, 40, 0.18);
+  border: 1px solid #b44028;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  color: #ffd9c8;
+  font-size: 0.88em;
+}
+.validation-banner .validation-banner-heading {
+  font-weight: bold;
+  color: #ffb29a;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.validation-banner ul { margin: 0; padding-left: 20px; }
+.validation-banner li { margin: 2px 0; }
+
+/* --- Point-buy (distribute_points) UI --- */
+.distribute-section { margin-top: 14px; }
+.distribute-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; margin: 4px 0;
+  background: rgba(0,0,0,0.2); border-radius: 4px;
+}
+.distribute-row .distribute-label {
+  flex: 1; font-weight: bold;
+}
+.distribute-row .distribute-bounds {
+  color: var(--text-dim); font-size: 0.85em;
+}
+.distribute-row button {
+  width: 28px; height: 28px; padding: 0;
+  font-size: 1.1em; line-height: 1;
+}
+.distribute-row .distribute-value {
+  min-width: 32px; text-align: center; font-weight: bold; font-size: 1.1em;
+}
+.distribute-remaining {
+  margin: 10px 0; font-weight: bold;
+}
+.distribute-remaining.over { color: #ff8080; }
+.distribute-remaining.under { color: #ffd070; }
+.distribute-remaining.ok { color: #80ff80; }
+
 /* --- Stat Bar --- */
 .stat-bar {
   display: flex; flex-wrap: wrap; gap: 6px;
@@ -598,6 +645,12 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
   <!-- GAME SCREEN -->
   <div id="game-screen" class="screen">
+    <!-- Book-load validation banner. Populated by updateValidationBanner()
+         from state.warnings; hidden when the array is empty. Surfaces
+         structural encoding errors (undeclared attack_stat / health_stat,
+         declared-but-uninitialised stats) that would otherwise render as
+         opaque "—" values in the stat bar. See Rule 26 in gamebook_codex_v2.md. -->
+    <div class="validation-banner" id="validation-banner" style="display:none;"></div>
     <div class="stat-bar" id="stat-bar"></div>
     <div class="save-bar">
       <button onclick="saveGame()">Save</button>
@@ -637,7 +690,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.3.0';
+const CODEX_EMULATOR_VERSION = '3.4.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -650,7 +703,7 @@ const CODEX_EMULATOR_VERSION = '3.3.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '309164d';
+const CODEX_EMULATOR_COMMIT = '4d4d612';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -681,6 +734,11 @@ let state = {
   // Equipment map {slot -> item_id}. Schema v1.5+.
   equipment: {},
   flags: new Set(),
+  // Book-load validation warnings (Rule 26 / codex v2.12+). Populated by
+  // validateBookStructure() at book-load time and by the end-of-creation
+  // pass that flags declared-but-unpopulated stats. Surfaced to the
+  // player via updateValidationBanner(). Empty array = clean book.
+  warnings: [],
   abilities: [],
   // Per-ability remaining-uses counters, populated by set_ability_uses
   // character creation steps and by book scripts. Keyed by ability name.
@@ -1246,6 +1304,10 @@ function startCharacterCreation() {
   // rules.provisions.starting_amount when present. See Rule 21 for
   // the full story and the CLI emulator's startCharacterCreation
   // for the matching logic.
+  // Structural leg of book-load validation (Rule 26 / codex v2.12+): seed
+  // state.warnings with any undeclared attack_stat / health_stat so the
+  // banner is ready to render the moment the game screen appears.
+  const structuralWarnings = validateBookStructure(gameData);
   const startingProvisions =
     (typeof gameData?.rules?.provisions?.starting_amount === 'number' &&
      gameData.rules.provisions.starting_amount >= 0)
@@ -1257,6 +1319,9 @@ function startCharacterCreation() {
     inventory: [],
     equipment: {},
     flags: new Set(),
+    // Book-load validation warnings (Rule 26 / codex v2.12+). Seeded here
+    // at startGame and appended to by the end-of-creation runtime pass.
+    warnings: [...structuralWarnings],
     provisions: startingProvisions,
     gold: 0,
     meals: 0,
@@ -1362,6 +1427,15 @@ function startCharacterCreation() {
       interactiveSteps.push({ type: 'choose_one', step });
     } else if (step.action === 'choose_abilities') {
       interactiveSteps.push({ type: 'abilities', step });
+    } else if (step.action === 'distribute_points') {
+      // Schema v1.9+ / codex v2.12+. Point-buy stat generation (Rule 25).
+      // Defer to phase 2 so the UI can render ± buttons and a
+      // remaining-points counter; the emulator commits nothing to
+      // state.stats until the player confirms an allocation whose sum
+      // matches total_points and whose per-stat values sit within
+      // [min, max]. Canonical example: Windhammer's 50 points across
+      // Strength / Agility / Endurance / Luck / Intuition.
+      interactiveSteps.push({ type: 'distribute_points', step });
     } else if (step.action === 'add_item') {
       items.push(step.item);
     } else if (step.action === 'set_resource') {
@@ -1614,6 +1688,76 @@ function processCreationSteps(steps, items) {
       }
     }
     renderAbilities();
+  } else if (current.type === 'distribute_points') {
+    // Point-buy UI (Rule 25 / schema v1.9+). Each named stat gets a
+    // row with a − button, the current value, and a + button; the
+    // remaining-points counter updates on every change; the Confirm
+    // button enables only when sum === total_points and every value
+    // sits within its [min, max]. Initial allocation sets each stat to
+    // its declared min, which is the neutral starting point — if the
+    // sum of the mins already exceeds total_points the step is
+    // unplayable (a codex parse bug, not a runtime concern).
+    const dStep = current.step;
+    const boundsList = (dStep.stats || []).map(s => ({ name: s.name, min: s.min, max: s.max }));
+    const total = Number(dStep.total_points) || 0;
+    const values = Object.fromEntries(boundsList.map(s => [s.name, s.min]));
+
+    const section = document.createElement('div');
+    section.className = 'mt-2 distribute-section';
+    section.id = 'distribute-section';
+    rollContainer.parentNode.insertBefore(section, document.getElementById('equipment-section'));
+
+    function renderDistribute() {
+      const used = Object.values(values).reduce((a, b) => a + b, 0);
+      const remaining = total - used;
+      let remainingClass = 'ok';
+      if (remaining > 0) remainingClass = 'under';
+      else if (remaining < 0) remainingClass = 'over';
+      const inBounds = boundsList.every(s => values[s.name] >= s.min && values[s.name] <= s.max);
+      let html = `<h3>Distribute ${total} Points</h3>`;
+      html += `<div class="distribute-remaining ${remainingClass}">Remaining: ${remaining}</div>`;
+      for (const s of boundsList) {
+        const v = values[s.name];
+        html += `<div class="distribute-row">
+          <span class="distribute-label">${s.name}</span>
+          <span class="distribute-bounds">[${s.min}..${s.max}]</span>
+          <button type="button" class="btn btn-small" data-action="dec" data-stat="${s.name}" ${v <= s.min ? 'disabled' : ''}>−</button>
+          <span class="distribute-value">${v}</span>
+          <button type="button" class="btn btn-small" data-action="inc" data-stat="${s.name}" ${v >= s.max || remaining <= 0 ? 'disabled' : ''}>+</button>
+        </div>`;
+      }
+      const canConfirm = remaining === 0 && inBounds;
+      html += `<div class="center mt-1"><button class="btn" id="confirm-distribute-btn" ${canConfirm ? '' : 'disabled'}>Confirm</button></div>`;
+      section.innerHTML = html;
+      section.querySelectorAll('button[data-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const act = btn.dataset.action;
+          const name = btn.dataset.stat;
+          const bound = boundsList.find(s => s.name === name);
+          if (!bound) return;
+          if (act === 'inc' && values[name] < bound.max) {
+            if (Object.values(values).reduce((a, b) => a + b, 0) < total) values[name]++;
+          } else if (act === 'dec' && values[name] > bound.min) {
+            values[name]--;
+          }
+          renderDistribute();
+        });
+      });
+      const confirmBtn = section.querySelector('#confirm-distribute-btn');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+          const statDefs = gameData.rules?.stats || [];
+          for (const [name, v] of Object.entries(values)) {
+            state.stats[name] = v;
+            const sd = statDefs.find(d => d.name === name);
+            if (sd && sd.initial_is_max) state.initialStats[name] = v;
+          }
+          section.innerHTML = `<div class="event-msg gain">Allocated: ${Object.entries(values).map(([k, v]) => `${k}=${v}`).join(', ')}</div>`;
+          processCreationSteps(steps, items);
+        });
+      }
+    }
+    renderDistribute();
   }
 }
 
@@ -1695,6 +1839,11 @@ function showEquipmentAndBegin() {
 
 // ==================== BEGIN ADVENTURE ====================
 function beginAdventure() {
+  // Runtime leg of book-load validation (Rule 26 / codex v2.12+). Appends
+  // one warning per declared stat that character_creation.steps[] left
+  // undefined, so the validation banner above the stat bar surfaces the
+  // real diagnosis instead of silently rendering "—" slots.
+  appendUndefinedStatWarnings();
   showScreen('game-screen');
   updateReferenceButton();
   navigateTo('1');
@@ -1713,6 +1862,61 @@ function updateReferenceButton() {
   btn.style.display = refPages.length > 0 ? '' : 'none';
 }
 
+// ==================== BOOK-LOAD VALIDATION ====================
+// Codex v2.12+ / schema v1.9+ (Rule 26). The HTML mirror of the CLI
+// emulator's validateBookStructure + end-of-creation runtime pass. Two
+// legs:
+//   1. Structural: attack_stat / health_stat must name a stat declared
+//      in rules.stats[], or be null/absent. Runs at startGame.
+//   2. Runtime: every declared stat must be populated after
+//      character_creation.steps[] completes. Runs from beginAdventure.
+// Warnings are attached to state.warnings (array of strings). The
+// validation-banner DOM element renders them above the stat bar from
+// updateValidationBanner(), called on every stat-bar refresh so the
+// banner survives save/load and section transitions.
+function validateBookStructure(book) {
+  const warnings = [];
+  const declared = (book.rules?.stats || []).map(s => s && s.name).filter(n => typeof n === 'string');
+  const attackStat = book.rules?.attack_stat;
+  if (attackStat != null && typeof attackStat === 'string' && !declared.includes(attackStat)) {
+    warnings.push(`rules.attack_stat "${attackStat}" is not declared in rules.stats[] — combat lookups will resolve to 0 for the whole book`);
+  }
+  const healthStat = book.rules?.health_stat;
+  if (healthStat != null && typeof healthStat === 'string' && !declared.includes(healthStat)) {
+    warnings.push(`rules.health_stat "${healthStat}" is not declared in rules.stats[] — death-check and healing will resolve to 0`);
+  }
+  return warnings;
+}
+
+function appendUndefinedStatWarnings() {
+  const declared = (gameData.rules?.stats || []).map(s => s && s.name).filter(n => typeof n === 'string');
+  if (!Array.isArray(state.warnings)) state.warnings = [];
+  for (const name of declared) {
+    if (state.stats[name] === undefined) {
+      const w = `declared stat "${name}" is undefined after character_creation.steps[] — no roll_stat / set_resource / distribute_points populates it`;
+      if (!state.warnings.includes(w)) state.warnings.push(w);
+    }
+  }
+}
+
+function updateValidationBanner() {
+  const el = document.getElementById('validation-banner');
+  if (!el) return;
+  const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+  if (warnings.length === 0) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  let html = `<div class="validation-banner-heading">WARNING — book-load validation found ${warnings.length} issue(s)</div><ul>`;
+  for (const w of warnings) {
+    html += `<li>${w.replace(/</g, '&lt;')}</li>`;
+  }
+  html += '</ul>';
+  el.innerHTML = html;
+}
+
 // ==================== STAT BAR ====================
 function updateStatBar() {
   const bar = document.getElementById('stat-bar');
@@ -1723,9 +1927,18 @@ function updateStatBar() {
   // COMBAT SKILL / ENDURANCE, FF SKILL / STAMINA / LUCK) and unprofiled
   // series that may declare additional stats like EXPERIENCE, HONOUR,
   // MAGIC, LIFE POINTS, or their own currency-as-a-stat.
+  //
+  // Harmonised undefined-stat rendering (Rule 26 / codex v2.12+). Pre-v3.4
+  // HTML rendered `state.stats[name] || 0` which hid unpopulated stats
+  // behind a cosmetic zero — the CLI pre-v3.4 printed the literal string
+  // "undefined" in the same slot. Both now render "—" so the surface
+  // symptom matches the root cause (pointed at by the validation banner
+  // above).
   for (const sd of statDefs) {
-    const val = state.stats[sd.name] || 0;
-    const initial = state.initialStats[sd.name] || val;
+    const rawVal = state.stats[sd.name];
+    const rawInit = state.initialStats[sd.name];
+    const val = rawVal === undefined ? '—' : rawVal;
+    const initial = rawInit === undefined ? (rawVal === undefined ? '—' : rawVal) : rawInit;
     html += `<div class="stat-item ${sd.name}">
       <span class="stat-label">${sd.name}</span>
       <span class="stat-val">${val}/${initial}</span>
@@ -1771,6 +1984,10 @@ function updateStatBar() {
   }
 
   bar.innerHTML = html;
+  // Refresh the validation banner alongside the stat bar so warnings
+  // stay visible across navigation, save/load, and creation -> play
+  // transitions. No-op when state.warnings is empty.
+  updateValidationBanner();
 }
 
 function updateInventory() {
