@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.8.0",
+  "title": "Gamebook Format (GBF) v1.9.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -813,6 +813,21 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Schema v1.5+. Free-form tag strings describing intrinsic properties of this item. Used by the `has_equipped_with_property` condition and by damage_interaction source-filtering (see the `damage_interaction` definition and Rule 18). The schema does not enumerate legal property names — books define their own vocabulary based on the mechanics they need to express. Common examples: `silver`, `blessed`, `magical`, `cold_iron`, `fire`, `cold`, `holy`, `poison`, `edged`, `blunt`, `piercing`, `ranged`, `two_handed`. A book's items_catalog declares which items have which properties, and the book's enemies_catalog (or per-encounter combat events) declares which interactions key on which properties. Tags are case-sensitive; use a consistent convention within a book. Default empty when absent."
+        },
+        "consume": {
+          "type": "object",
+          "description": "Schema v1.9+ (Rule 25). Declares this item as a named consumable whose effects fire when the player chooses to consume it. Currently the only exposed trigger is `satisfies_eat_meal`: if true, the item appears as an additional action during any `eat_meal` pause where the player holds at least one of it, alongside the standard `eat` (generic provision) and `skip` actions. Selecting the named-consumable action removes one of the item from inventory (auto-unequipping if currently equipped, per the usual remove_item semantics), dispatches every event in `effects` synchronously through the event handler, and satisfies the `eat_meal` prompt without decrementing `state.provisions` — named consumables are a substitute for generic provisions, not a supplement that also burns one. Pausing events inside `effects` are not supported: if a sub-event returns 'pause' (nested combat, eat_meal, stat_test, input_number, etc.), the remaining effects are skipped with a warning; encode pause-requiring shapes as section-level events with a player-facing choice instead. Typical shape for LW-family healing herbs is a single `modify_stat` with the book's health stat and a positive delta, honouring the usual `initial_is_max` clamp via `modify_stat`'s own logic.",
+          "properties": {
+            "satisfies_eat_meal": {
+              "type": "boolean",
+              "description": "If true, the item is offered as an alternative in every `eat_meal` pause where the player holds at least one. Default false when absent (meaning the `consume` block is inert — reserved for future trigger types like unconditional `use_item` events)."
+            },
+            "effects": {
+              "type": "array",
+              "description": "Event list dispatched synchronously when the item is consumed. Every entry is a standard event (typically `modify_stat`, but any non-pausing event type is legal: `modify_stat`, `add_item`, `remove_item`, `set_flag`, `remove_inventory_category`, `script` that does not pause). Fires AFTER the item is removed from inventory and BEFORE the eat_meal pause is cleared, so `modify_stat` clamps (like `initial_is_max`) apply correctly. Do NOT include a `remove_item` for the consumed item itself — the emulator handles the removal automatically.",
+              "items": { "$ref": "#/definitions/event" }
+            }
+          }
         },
         "description": { "type": "string" }
       }

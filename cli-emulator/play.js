@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.3.0';
+const CODEX_EMULATOR_VERSION = '3.4.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.3.0';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '309164d';
+const CODEX_EMULATOR_COMMIT = '4d4d612';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -555,6 +555,26 @@ function autoUnequipOnRemove(state, itemId) {
   }
 }
 
+// Rule 25 (schema v1.9+). Return the list of inventory item ids whose
+// items_catalog entry declares consume.satisfies_eat_meal: true — these
+// appear as alternative actions during eat_meal pauses alongside the
+// generic 'eat' and 'skip' options. A named consumable is a substitute
+// for a generic provision, not a supplement, so selecting one removes
+// one copy of the item, runs its consume.effects, and satisfies the
+// eat_meal prompt WITHOUT decrementing state.provisions.
+function getNamedConsumables(state, book) {
+  const catalog = (book && book.items_catalog) || {};
+  const inv = Array.isArray(state.inventory) ? state.inventory : [];
+  const out = [];
+  for (const id of inv) {
+    const entry = catalog[id];
+    if (entry && entry.consume && entry.consume.satisfies_eat_meal === true) {
+      out.push(id);
+    }
+  }
+  return out;
+}
+
 // Handle the auto-equip side of an add_item. If the item is equippable
 // with auto_equip: true (default), AND the item's slot is currently
 // empty, move it into its slot. If the slot is already occupied by a
@@ -1043,7 +1063,13 @@ function handleEvent(event, state, book) {
       // pausing. Pre-v2.9 emulators silently swallowed this case (no
       // pause, no penalty, no log) — see LW1 section 235 entry in
       // known_issues.md.
-      const hasFood = state.provisions > 0 || state.meals > 0;
+      //
+      // Rule 25 (schema v1.9+) broadens the "has food" check to also
+      // include named consumables (items with consume.satisfies_eat_meal:
+      // true, e.g. Laumspur). The player who holds a Laumspur but zero
+      // generic Meals should pause and choose to eat the Laumspur — not
+      // auto-penalty.
+      const hasFood = state.provisions > 0 || state.meals > 0 || getNamedConsumables(state, book).length > 0;
       if (event.required && !hasFood) {
         const penStat = event.penalty_stat || book.rules?.provisions?.heal_stat || 'endurance';
         const penalty = (typeof event.penalty_amount === 'number') ? event.penalty_amount : 0;
@@ -1362,6 +1388,15 @@ function getAvailableActions(state, book) {
     case 'eat_meal':
       if (state.provisions > 0 || state.meals > 0) {
         actions.push({ name: 'eat', description: 'Eat a meal' });
+      }
+      // Rule 25 (schema v1.9+): named consumables with
+      // consume.satisfies_eat_meal: true appear as alternative eat
+      // actions. The action name is `eat_<itemId>` so the applyAction
+      // dispatcher can identify which item to consume.
+      for (const id of getNamedConsumables(state, book)) {
+        const entry = (book.items_catalog || {})[id];
+        const displayName = (entry && entry.name) || id;
+        actions.push({ name: `eat_${id}`, description: `Eat ${displayName} (named consumable)` });
       }
       if (!state.pause.event.required) {
         actions.push({ name: 'skip', description: 'Skip the meal' });
@@ -1782,6 +1817,42 @@ function applyAction(state, book, action, args) {
     case 'eat_meal': {
       const event = state.pause.event;
       const hasFood = state.provisions > 0 || state.meals > 0;
+      // Rule 25 (schema v1.9+): action `eat_<itemId>` consumes a named
+      // consumable whose items_catalog entry declares
+      // consume.satisfies_eat_meal: true. Remove one of the item (plus
+      // auto-unequip), dispatch consume.effects synchronously, and
+      // satisfy the eat_meal prompt WITHOUT decrementing provisions.
+      if (action.startsWith('eat_') && action !== 'eat') {
+        const itemId = action.slice(4);
+        const catalog = book.items_catalog || {};
+        const entry = catalog[itemId];
+        if (!entry || !entry.consume || entry.consume.satisfies_eat_meal !== true || !state.inventory.includes(itemId)) {
+          state.log.push(`Cannot consume ${itemId}: not a valid named consumable in inventory`);
+          return state;
+        }
+        const idx = state.inventory.indexOf(itemId);
+        if (idx >= 0) state.inventory.splice(idx, 1);
+        autoUnequipOnRemove(state, itemId);
+        state.log.push(`Consumed ${entry.name || itemId} as a meal`);
+        if (Array.isArray(entry.consume.effects)) {
+          for (const subEvent of entry.consume.effects) {
+            const subResult = handleEvent(subEvent, state, book);
+            if (subResult === 'pause') {
+              state.log.push('[Warning: consume.effects do not support pausing events; remaining effects skipped. Use section-level events for pause-requiring shapes per Rule 25.]');
+              break;
+            }
+            if (subResult === 'navigate') {
+              // Consume effects that navigate are unusual but legal; we
+              // let the navigate fire and stop processing further
+              // effects. The eat_meal pause is cleared either way.
+              state.pause = null;
+              return state;
+            }
+          }
+        }
+        state.pause = null;
+        return processNextEvent(state, book);
+      }
       if (action === 'eat' && hasFood) {
         // Normal eat path: decrement food, apply heal.
         const heal = event.heal_amount ?? book.rules?.provisions?.heal_amount ?? 4;

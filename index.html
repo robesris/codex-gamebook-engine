@@ -637,7 +637,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.3.0';
+const CODEX_EMULATOR_VERSION = '3.4.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -650,7 +650,7 @@ const CODEX_EMULATOR_VERSION = '3.3.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '309164d';
+const CODEX_EMULATOR_COMMIT = '4d4d612';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -3443,6 +3443,23 @@ function handleRollDice(event) {
 }
 
 // ==================== EAT MEAL ====================
+
+// Rule 25 (schema v1.9+). Return the list of inventory item ids whose
+// items_catalog entry declares consume.satisfies_eat_meal: true — these
+// appear as alternative eat actions during eat_meal pauses.
+function getNamedConsumables() {
+  const catalog = (gameData && gameData.items_catalog) || {};
+  const inv = Array.isArray(state.inventory) ? state.inventory : [];
+  const out = [];
+  for (const id of inv) {
+    const entry = catalog[id];
+    if (entry && entry.consume && entry.consume.satisfies_eat_meal === true) {
+      out.push(id);
+    }
+  }
+  return out;
+}
+
 function handleEatMeal(event) {
   const content = document.getElementById('game-content');
   const area = document.createElement('div');
@@ -3456,27 +3473,51 @@ function handleEatMeal(event) {
   const isRequired = event.required === true;
   const provLabel = provRules.display_name || 'Provisions';
 
-  if (state.provisions > 0) {
+  // Rule 25 (schema v1.9+). Named consumables — items whose catalog
+  // entry declares consume.satisfies_eat_meal: true — are additional
+  // options during any eat_meal pause. The Laumspur-style flow: player
+  // may hold 0 generic provisions but 1 Laumspur and still be able to
+  // satisfy a required eat_meal, so we must expose the named-consumable
+  // buttons whenever any are present in inventory, not only in the
+  // zero-provisions branch.
+  const namedConsumables = getNamedConsumables();
+  const catalog = gameData.items_catalog || {};
+
+  function renderNamedButtons() {
+    return namedConsumables.map(id => {
+      const entry = catalog[id] || {};
+      const safeId = String(id).replace(/'/g, "\\'");
+      const displayName = entry.name || id;
+      return `<button class="btn btn-success btn-small" onclick="doEatNamedConsumable('${safeId}')">Eat ${displayName}</button>`;
+    }).join(' ');
+  }
+
+  if (state.provisions > 0 || namedConsumables.length > 0) {
+    const hasGeneric = state.provisions > 0;
+    const genericBtn = hasGeneric
+      ? `<button class="btn btn-success btn-small" onclick="doEatMeal(${healAmount}, '${healStat}')">Eat ${provLabel}</button>`
+      : '';
     area.innerHTML = `
       <h3>Eat a Meal</h3>
-      <p>${isRequired ? 'You must eat a meal here.' : 'You may eat a meal'} to restore ${healAmount} ${healStat.toUpperCase()}.</p>
-      <p style="color:var(--text-dim)">${provLabel} remaining: ${state.provisions}</p>
+      <p>${isRequired ? 'You must eat a meal here.' : 'You may eat a meal.'}</p>
+      ${hasGeneric ? `<p style="color:var(--text-dim)">Eating a generic ${provLabel.replace(/s$/,'').toLowerCase()} restores ${healAmount} ${healStat.toUpperCase()}. ${provLabel} remaining: ${state.provisions}.</p>` : `<p style="color:var(--text-dim)">You have no generic ${provLabel.toLowerCase()} left, but a named consumable is available.</p>`}
       <div class="mt-1">
-        <button class="btn btn-success btn-small" onclick="doEatMeal(${healAmount}, '${healStat}')">Eat</button>
+        ${genericBtn}
+        ${renderNamedButtons()}
         ${isRequired ? '' : '<button class="btn btn-small" onclick="skipMeal()">Skip</button>'}
       </div>
     `;
   } else {
-    // Zero-provisions path (codex v2.9.0 / schema v1.6.0). Before
-    // v2.9.0 this branch silently displayed "You have no provisions
-    // to eat" and auto-proceeded — which was the documented LW1
-    // section 235 bug in known_issues.md: a required eat_meal with
-    // penalty_amount:-3 fired, no meal was deducted (there was none),
-    // and the penalty never applied. Fixed: if the event is required
-    // and a penalty is defined, apply the penalty here and log it.
-    // Rule 15's event-level `condition` field handles the exemption
-    // case (e.g. LW Hunting discipline): if the condition evaluates
-    // false at event dispatch, this handler is never called.
+    // Zero-food path (no generic provisions and no named consumables).
+    // Before v2.9.0 this branch silently displayed "You have no
+    // provisions to eat" and auto-proceeded — which was the documented
+    // LW1 section 235 bug in known_issues.md: a required eat_meal with
+    // penalty_amount:-3 fired, no meal was deducted, and the penalty
+    // never applied. Fixed: if the event is required and a penalty is
+    // defined, apply the penalty here and log it. Rule 15's event-
+    // level `condition` field handles the exemption case (e.g. LW
+    // Hunting discipline): if the condition evaluates false at event
+    // dispatch, this handler is never called.
     const penStat = event.penalty_stat || provRules.heal_stat || 'endurance';
     const penalty = (typeof event.penalty_amount === 'number') ? event.penalty_amount : 0;
     if (isRequired && penalty !== 0) {
@@ -3497,10 +3538,9 @@ function handleEatMeal(event) {
   }
 
   window.doEatMeal = function(heal, stat) {
-    // Defense in depth: the zero-provisions branch above returns
-    // early, so this code path is only reached when state.provisions
-    // > 0. Guarding the decrement just in case a future edit exposes
-    // the Eat button under different conditions.
+    // Defense in depth: the zero-food branch returns early, so this
+    // code path is only reached when generic provisions are available
+    // OR a named consumable is available. Guard the decrement anyway.
     if (state.provisions > 0) state.provisions--;
     const old = state.stats[stat] || 0;
     let newVal = old + heal;
@@ -3517,14 +3557,69 @@ function handleEatMeal(event) {
     processNextEvent();
   };
 
+  window.doEatNamedConsumable = function(itemId) {
+    // Rule 25: consume a named consumable as a Meal-substitute. Remove
+    // one of the item (auto-unequipping if equipped), dispatch the
+    // catalog entry's consume.effects synchronously through the normal
+    // event handlers, and satisfy the eat_meal pause WITHOUT
+    // decrementing state.provisions — this is a substitute, not a
+    // supplement.
+    const entry = (gameData.items_catalog || {})[itemId];
+    if (!entry || !entry.consume || entry.consume.satisfies_eat_meal !== true || !state.inventory.includes(itemId)) {
+      area.innerHTML = `<p style="color:var(--danger)">Cannot consume ${itemId}: not a valid named consumable in inventory</p>`;
+      setTimeout(() => processNextEvent(), 500);
+      return;
+    }
+    const idx = state.inventory.indexOf(itemId);
+    if (idx >= 0) state.inventory.splice(idx, 1);
+    if (state.equipment) {
+      for (const slot of Object.keys(state.equipment)) {
+        if (state.equipment[slot] === itemId) delete state.equipment[slot];
+      }
+    }
+    const displayName = entry.name || itemId;
+    let summary = `<p>You consume the ${displayName} as your meal.</p>`;
+    if (Array.isArray(entry.consume.effects)) {
+      for (const subEvent of entry.consume.effects) {
+        if (subEvent.condition && !evaluateCondition(subEvent.condition)) continue;
+        switch (subEvent.type) {
+          case 'modify_stat':
+            handleModifyStat(subEvent);
+            if (subEvent.stat && typeof subEvent.amount === 'number') {
+              summary += `<p><span style="color:var(--stat-provisions)">${subEvent.amount >= 0 ? '+' : ''}${subEvent.amount} ${String(subEvent.stat).toUpperCase()}</span></p>`;
+            }
+            break;
+          case 'add_item':
+            handleAddItem(subEvent);
+            break;
+          case 'remove_item':
+            handleRemoveItem(subEvent);
+            break;
+          case 'remove_inventory_category':
+            handleRemoveInventoryCategory(subEvent);
+            break;
+          case 'set_flag':
+            handleSetFlag(subEvent);
+            break;
+          default: {
+            summary += `<p class="event-msg info">[Warning: consume.effects do not support '${subEvent.type}' events. Use section-level events for pause-requiring shapes per Rule 25.]</p>`;
+          }
+        }
+      }
+    }
+    area.innerHTML = summary;
+    updateStatBar();
+    processNextEvent();
+  };
+
   window.skipMeal = function() {
     // The Skip button is only rendered when !isRequired, so an event
     // with `required: true` cannot reach this handler via the normal
-    // UI path. Required-meal penalties are applied in the
-    // zero-provisions branch above (when the player lacks food) or
-    // by the caller via Rule 15 event conditions (when the player
-    // has an exempting ability). This branch exists only for the
-    // optional-meal case.
+    // UI path. Required-meal penalties are applied in the zero-food
+    // branch above (when the player lacks all forms of food) or by
+    // the caller via Rule 15 event conditions (when the player has an
+    // exempting ability). This branch exists only for the optional-
+    // meal case.
     area.innerHTML = `<p style="color:var(--text-dim)">You decide not to eat.</p>`;
     processNextEvent();
   };

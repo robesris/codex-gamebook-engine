@@ -696,6 +696,132 @@ test('remove_inventory_category drops category items and unequips', () => {
 });
 
 // ============================================================
+// Test 15: Named-consumable `consume.satisfies_eat_meal` path
+//          (Rule 25 / schema v1.9).
+// ============================================================
+// MOTIVATED_BY: Rule 25 introduces `items_catalog[id].consume` so that
+// named magical consumables (Laumspur-family) can be offered as
+// alternatives during an eat_meal pause. Chat #11 sub-agent flagged
+// that LW1 laumspur had no machine-readable heal mechanic — Rule 21's
+// carve-out described when items_catalog entries are legal but did not
+// specify how their eating resolves. Rule 25 closes the gap.
+// END_TO_END_VERIFY: drive the CLI emulator to an eat_meal event with
+// both generic provisions and a named consumable in inventory; confirm
+// the named-consumable action appears, applies its consume.effects,
+// decrements the named item (not provisions), and satisfies the pause.
+test('named consumable satisfies eat_meal, runs effects, leaves provisions alone', () => {
+  const book = buildBook({
+    rules: {
+      stats: [
+        { name: 'TESTSTAT_HP', initial: 20, initial_is_max: true, min: 0 },
+      ],
+      provisions: { enabled: true, starting_amount: 2, heal_amount: 1, heal_stat: 'TESTSTAT_HP' },
+    },
+    items_catalog: {
+      test_consumable_alpha: {
+        name: 'Alpha Herb',
+        type: 'consumable',
+        inventory_category: 'backpack',
+        consume: {
+          satisfies_eat_meal: true,
+          effects: [
+            { type: 'modify_stat', stat: 'TESTSTAT_HP', amount: 5 },
+            { type: 'set_flag', flag: 'ate_alpha_herb' },
+          ],
+        },
+      },
+      test_item_plain: {
+        name: 'Plain Rock',
+        type: 'general',
+      },
+    },
+    sections: {
+      '1': {
+        text: 'Eat prompt',
+        events: [{ type: 'eat_meal', required: true }],
+        choices: [],
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.stats.TESTSTAT_HP = 10;
+  state.initialStats.TESTSTAT_HP = 20;
+  state.provisions = 2;
+  state.inventory = ['test_consumable_alpha', 'test_item_plain'];
+  state.pause = null;
+
+  play.navigateTo(state, book, '1');
+
+  // We should be paused on eat_meal with the named consumable available.
+  assertEqual(state.pause.type, 'eat_meal', 'paused on eat_meal');
+  const actions = play.getAvailableActions(state, book).map(a => a.name);
+  assertTrue(actions.includes('eat'), 'generic eat available');
+  assertTrue(actions.includes('eat_test_consumable_alpha'), 'named-consumable eat available');
+
+  play.applyAction(state, book, 'eat_test_consumable_alpha');
+
+  assertEqual(state.stats.TESTSTAT_HP, 15, 'named-consumable effects applied (10 + 5)');
+  assertEqual(state.provisions, 2, 'provisions untouched — named consumable is a substitute');
+  assertTrue(!state.inventory.includes('test_consumable_alpha'), 'consumed item removed from inventory');
+  assertTrue(state.inventory.includes('test_item_plain'), 'other inventory items untouched');
+  assertTrue(state.flags.includes('ate_alpha_herb'), 'consume.effects set_flag fired');
+  assertTrue(!state.pause || state.pause.type !== 'eat_meal', 'eat_meal pause cleared');
+});
+
+// ============================================================
+// Test 16: Named-consumable keeps a required eat_meal alive when
+//          generic provisions are zero but a consumable is available.
+// ============================================================
+// MOTIVATED_BY: Rule 25 broadens the eat_meal zero-food auto-penalty
+// check to consider named consumables — otherwise a player with 0
+// generic provisions but 1 Laumspur would eat the forced penalty even
+// though they have a legal meal option.
+// END_TO_END_VERIFY: set provisions to 0, hold a named consumable,
+// drive to a required eat_meal; confirm the pause opens (no
+// auto-penalty) and the named-consumable action is available.
+test('eat_meal does not auto-penalty when only a named consumable is available', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'TESTSTAT_HP', initial: 20, initial_is_max: true, min: 0 }],
+      provisions: { enabled: true, starting_amount: 0, heal_amount: 1, heal_stat: 'TESTSTAT_HP' },
+    },
+    items_catalog: {
+      test_consumable_beta: {
+        name: 'Beta Root',
+        type: 'consumable',
+        consume: {
+          satisfies_eat_meal: true,
+          effects: [{ type: 'modify_stat', stat: 'TESTSTAT_HP', amount: 3 }],
+        },
+      },
+    },
+    sections: {
+      '1': {
+        text: 'Forced meal',
+        events: [{ type: 'eat_meal', required: true, penalty_amount: -3, penalty_stat: 'TESTSTAT_HP' }],
+        choices: [],
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.stats.TESTSTAT_HP = 10;
+  state.initialStats.TESTSTAT_HP = 20;
+  state.provisions = 0;
+  state.meals = 0;
+  state.inventory = ['test_consumable_beta'];
+  state.pause = null;
+
+  play.navigateTo(state, book, '1');
+
+  assertEqual(state.pause.type, 'eat_meal', 'paused on eat_meal rather than auto-penalty');
+  assertEqual(state.stats.TESTSTAT_HP, 10, 'penalty not applied yet');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;
