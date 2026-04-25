@@ -90,8 +90,21 @@
             },
             "flagged_for_review": {
               "type": "array",
-              "items": { "type": "string" },
-              "description": "List of human-readable descriptions of issues found during parsing."
+              "items": {
+                "oneOf": [
+                  { "type": "string" },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "section": { "type": ["string", "integer"] },
+                      "issue": { "type": "string" },
+                      "note": { "type": "string" }
+                    },
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              "description": "List of issues found during parsing. Either a free-form string, or an object with at least {section, issue} (or {section, note}) for richer attribution."
             },
             "death_endings": {
               "type": "array",
