@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.14.0
+# THE GAMEBOOK CODEX v2.15.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -313,6 +313,9 @@ The table exists because the codex doc is read by an AI that does not search it 
 | You (a maintainer) found a data bug in a maintained book | Rule 16 | Improve the rule first, re-run the comprehensive review; never hand-patch outputs as the primary fix |
 | You (a maintainer) added a new rule to this document | "Codex doc evolution discipline" (DEV_PROCESS.md) | Same commit must add one row to this table AND one yes/no entry to the pre-output verification checklist in Section 10. Non-negotiable. |
 | Book is 400+ sections, or has a dense rules section, or the source is a scanned PDF | Section 9.9 (multi-chat parsing) | Plan chunk breakdown up front with the user: Chunk 1 = skeleton + rules + character_creation + round_script; Chunks 2..N = section ranges of ~100 each; Chunk N+1 = catalog reconciliation + checklist; Chunk N+2 = playability validation. Do NOT attempt a single-chat parse on a long book — the failure mode is mid-parse context overflow with no clean resume point. Step 2b's "Long books" paragraph has the up-front decision framing. |
+| You are emitting / merging the `death_endings` / `victory_endings` lists for a book — single-chat parse vs. multi-chunk accumulator | Section 2.1a (schema v1.11+) | TWO interchangeable placements, both schema-valid: (a) section-id arrays inside `metadata.confidence.{death,victory}_endings` (single-chat parses; matches LW1 / Warlock / GrailQuest / WWY); (b) section-id arrays at the **top level** (`book.death_endings`, `book.victory_endings`) with **integer counts** in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). Preserve whichever shape the accumulating book already uses — do not silently migrate mid-parse. Long-book fresh starts SHOULD use shape (b) so chunk merges append cleanly; single-chat fresh starts MAY use either. Verify every listed id has `is_ending: true` in `sections{}` with the matching `ending_type`. |
+| Rules section names a binary skill / talent / mastery / lore the player either has or doesn't (Brigandry, Lorecraft, Stealth, Bushcraft, Huntmastery, Strong Back, Second Sight, Animal Lore) — granted at character creation, gates conditions later | Rule 27 (`skill_` / `talent_` flag convention) | Encode as a flag with the `skill_` or `talent_` prefix (e.g. `skill_brigandry`, `talent_strong_back`). Set during character creation via `set_flag` (or via the relevant `choose_abilities` step's accept-handler). Gate downstream conditional choices and events with `has_flag: "skill_brigandry"` exactly as Rule 15 prescribes for any other binary capability. NO new top-level `rules.skills[]` field — the flag convention covers binary skills cleanly without schema sprawl. Distinguish from disciplines / abilities (Rule 15, `has_ability`) which are book-level catalog entries with their own UI panels — skills are lighter-weight binary flags whose only mechanical role is gating. |
+| Section text describes a per-fight bonus or penalty to the **derived combat stat** (Combat Value, Attack Strength, Hit Bonus) of a derived-stat book where `rules.attack_stat: null` — "add 2 to your CV for this fight," "deduct 1 from CV against this enemy" | Rules 14 + 17 + Section 7.5 (combat-modifier targets on derived-stat systems) | `combat_modifiers` on the combat event with `target` set to a field the round_script actually reads — typically a **generic accumulator slot** (`player.attack` / `enemy.attack`, even when `attack_stat: null`, when the round_script is written to read those fields as additive bonuses) or a **component field** (`player.strength`, `player.weapon_bonus`, etc.) when the bonus has a clear single-component attribution. NEVER `modify_stat` with `stat: "combat_value"` (or any derived-stat name) — the derived stat does NOT exist on the player table (it is computed inside Lua each round) so the event silently no-ops. Match the target name to what the round_script reads. |
 
 **How to use this table during a parse.** During Step 5 (Parse Rules and Character Creation), read the book's rules section once with this table open in your context. For every paragraph in the rules section, scan the left column for a matching trigger and note which rules apply to this book. Then during Step 6 (Parse Sections), as you encounter each section, scan the left column again — section-level triggers (combat modifiers, conditional choices, multi-event paragraphs) often only become apparent when you're looking at a specific section's text. The table is meant to be re-scanned, not memorised on a single read.
 
@@ -1133,6 +1136,64 @@ Both emulators present this as a point-buy UI. The CLI exposes a `distribute <st
 
 **Verification.** When the book's rules section says the player distributes a fixed total of points among declared stats — the phrases "distribute N points", "N points to spend across", "assign N points", "choose how to allocate" are reliable triggers — the `character_creation.steps[]` contains exactly one `distribute_points` entry whose `stats` array covers every point-distributed stat, each `name` matches a declared stat in `rules.stats[]`, each `{min, max}` comes straight from the rules text, and `total_points` is the book's stated total. No corresponding `roll_stat` entries exist for those stats (they share initialisation with the distribute step, not duplicate it). No `manual_set` workaround appears anywhere in Tier 3 playthrough scripts or in the book's data. If the codex sees a point-distribution rule in the source text and emits anything other than a `distribute_points` step, that's a Rule 26 miss — revise before shipping.
 
+### Rule 27: Skill / Talent Flags (`skill_` and `talent_` Prefix Convention)
+
+**The rule:** When the book's rules section names a *binary* skill, talent, mastery, or lore — a capability the player either has or doesn't, granted at character creation, used later as a gate on conditional choices and events — encode it as a **flag** with the `skill_` or `talent_` prefix (e.g. `skill_brigandry`, `skill_lorecraft`, `skill_stealth`, `skill_bushcraft`, `skill_huntmastery`, `talent_strong_back`, `talent_second_sight`). The flag is set during character creation (via `set_flag` in a `choose_abilities` step's accept-handler, or via a dedicated `set_flag` step) and gated downstream with `has_flag` exactly as Rule 15 prescribes for any other binary capability. **No new top-level `rules.skills[]` schema field** — the flag convention covers binary skills cleanly without schema sprawl.
+
+**Why a flag and not a stat or an ability.** Binary capabilities are not numeric — there is no "you have Brigandry 5" — so they don't fit `rules.stats[]`. They are also lighter-weight than disciplines / abilities (Rule 15, `has_ability`), which carry their own UI panel, optional uses-counter, and discipline-pick UX during character creation. A skill or talent in the Rule 27 sense is a one-bit flag whose only mechanical role is gating: "if you have this skill, succeed automatically / take this alternative path / reduce the test difficulty." The `has_flag` condition primitive already covers that perfectly, the emulator's flag display can list active skills the same way it lists any other narrative flag, and books gain a structural place to hang skill-gated logic without forcing a schema extension every time a new gamebook coins a new skill name.
+
+**The naming convention.** Two prefixes, picked by the source text's own framing:
+
+- **`skill_<name>`** when the book calls the capability a *skill*, *art*, *craft*, *mastery*, *lore*, or *training* — anything that suggests learned competence. Common Windhammer-family examples: `skill_brigandry` (rogue stealth/lockpicking), `skill_lorecraft` (knowledge tests), `skill_stealth`, `skill_bushcraft` (wilderness tests), `skill_huntmastery` (foraging exemption — the Lone Wolf Hunting analogue when the book uses different vocabulary).
+- **`talent_<name>`** when the book calls the capability a *talent*, *gift*, *trait*, or *innate ability* — anything that suggests intrinsic aptitude rather than learned training. Common examples: `talent_strong_back` (carry-capacity bonus), `talent_second_sight` (mystic-perception gate), `talent_animal_lore`.
+
+When the book uses neither word ("you may pick one of the following: Knife-fighting, Spell-craft, Whistle-magic"), default to `skill_<name>` — it's the more common framing and reads naturally as a list. The choice between `skill_` and `talent_` is a documentation aid for readers of the JSON; the emulator does not distinguish them mechanically (both are just flag-name prefixes), so consistency across a single book matters more than picking the canonically "correct" prefix when both could fit.
+
+**Granting a skill at character creation.** Two patterns, both legal:
+
+1. **Pick-N-from-a-list (the common case).** The book's character-creation rules say "pick any N skills from the following list of M." Encode as a `choose_abilities` step (or a `choose_items`-style step where the book treats them as picks rather than abilities) with each option's `accept` action setting the corresponding flag:
+
+   ```json
+   {
+     "action": "choose_abilities",
+     "prompt": "Pick three Skills from the following list:",
+     "max_picks": 3,
+     "options": [
+       { "id": "brigandry",  "name": "Brigandry",  "set_flag": "skill_brigandry" },
+       { "id": "lorecraft",  "name": "Lorecraft",  "set_flag": "skill_lorecraft" },
+       { "id": "stealth",    "name": "Stealth",    "set_flag": "skill_stealth" },
+       { "id": "huntmastery","name": "Huntmastery","set_flag": "skill_huntmastery" }
+     ]
+   }
+   ```
+
+2. **Class-grants-skill (the less common case).** The book grants specific skills to specific classes ("All Rangers receive Bushcraft and Huntmastery; all Brigands receive Brigandry and Stealth"). Encode as a series of `set_flag` steps, each conditional on the class pick:
+
+   ```json
+   { "action": "set_flag", "flag": "skill_bushcraft",   "condition": { "type": "has_flag", "flag": "class_ranger" } },
+   { "action": "set_flag", "flag": "skill_huntmastery", "condition": { "type": "has_flag", "flag": "class_ranger" } },
+   { "action": "set_flag", "flag": "skill_brigandry",   "condition": { "type": "has_flag", "flag": "class_brigand" } },
+   { "action": "set_flag", "flag": "skill_stealth",     "condition": { "type": "has_flag", "flag": "class_brigand" } }
+   ```
+
+   (`class_<name>` is itself a Rule 27-style flag, set by an earlier `choose_one` step.)
+
+**Gating on a skill later.** Use `has_flag` in any event-level or choice-level `condition`, exactly like any other Rule 15 condition:
+
+```json
+{
+  "text": "If you have the Skill of Brigandry, turn to 247.",
+  "condition": { "type": "has_flag", "flag": "skill_brigandry" },
+  "target": 247
+}
+```
+
+Compound and compound-not conditions ("if you have Bushcraft OR Huntmastery", "if you have Lorecraft and Strong Back") use the standard `or` / `and` / `not` condition combinators around the `has_flag` leaves.
+
+**Where Rule 27 stops and Rule 15 begins.** When the book treats the capability as a *true ability with its own UI surface* — a Lone Wolf Kai Discipline (eight to pick, named panel, lore page in frontmatter, `requires_roll` integration), a Fighting Fantasy spell (limited per-adventure uses, dispatched via a Spells action), an AD&D class power — that is a Rule 15 ability, not a Rule 27 skill. Use `rules.abilities[]` and `has_ability` per Rule 15 for those. The line: **abilities have their own UI panel and may have uses-counters; skills are bare flags with no UI beyond the flag display.** A Windhammer-family Brigandry / Lorecraft system is on the skill side of the line — there is no per-skill uses counter, no skill-specific UI, no skill-roll mechanic separate from the section's stat-test machinery. A Lone Wolf Kai Discipline is on the ability side. When in doubt, encode as a skill (lower-overhead) — promote to ability only if the book actually defines per-ability mechanical surface.
+
+**Verification.** When the book's rules section names a binary capability that gates conditional choices in section text and the rules text uses words like "Skill of …", "Skills:", "Talent:", "Mastery:", "Lore:", "the art of …", "trained in …", every named capability has a `skill_<name>` or `talent_<name>` flag set during character creation, the prefix matches the book's framing (skill / training / craft / lore / mastery → `skill_`; talent / gift / trait → `talent_`), and every conditional choice keyed on the capability uses `has_flag` (not a synthetic `has_ability` against a non-existent abilities-catalog entry). Skills are NOT declared in `rules.stats[]` and are NOT declared in `rules.abilities[]` — they live entirely as flags.
+
 ---
 
 ## TABLE OF CONTENTS
@@ -1324,10 +1385,22 @@ A page can be both, only one, or (rarely) neither. Use `show_at_start: false` fo
     "standard_navigation": "number — sections with simple turn-to-X choices",
     "conditional_navigation": "number — sections with if-you-have-item conditions",
     "computed_navigation": "number — sections requiring math or input",
-    "flagged_for_review": ["array of strings describing any issues"]
+    "flagged_for_review": ["array of strings or {section, issue|note} objects describing any issues"],
+    "death_endings": "array of section ids OR integer count — see Section 2.1a below",
+    "victory_endings": "array of section ids OR integer count — see Section 2.1a below"
   }
 }
 ```
+
+#### 2.1a Endings placement: `metadata.confidence` vs. top-level (schema v1.11+)
+
+Two interchangeable placements for `death_endings` / `victory_endings` are accepted. Both are canonical and the schema validates either shape — pick the one that matches how the file was assembled and stick with it for that book:
+
+- **Single-chat parses** (the common case for books under ~200 sections that fit in one chat per Section 9.9) emit the section-id arrays inside `metadata.confidence.death_endings` / `metadata.confidence.victory_endings`. Top-level `death_endings` / `victory_endings` are absent. This is the original shape and matches the four maintained books (LW1 / Warlock / GrailQuest / WWY).
+
+- **Multi-chunk accumulators** (Section 9.9 long-book parses) put the section-id arrays at the **top level** of the book — `book.death_endings` and `book.victory_endings` — so each chunk's contribution can append cleanly without re-walking every prior chunk's `metadata.confidence` block. The corresponding `metadata.confidence.death_endings` / `metadata.confidence.victory_endings` then carry the **count** (integer) rather than the full list, which keeps `metadata.confidence` proportional to the book's other counts (`sections_parsed`, `standard_navigation`, etc.) and avoids duplicating the list across two locations.
+
+Sub-agents and merge tooling preserve whichever shape the accumulating book already uses — never silently migrate from one to the other mid-parse, because that breaks tools that expect the same location across chunks. If you are starting a fresh long-book parse, prefer the top-level-arrays + integer-count form so multi-chunk merging is straightforward; if you are extending an existing single-chat book, leave the arrays where they already are. Verification: every section id listed in either placement also appears in `sections{}` and has `is_ending: true` plus an `ending_type` of `"death"` (for `death_endings`) or `"victory"` / `"continuation"` (for `victory_endings`); counts match list lengths when both shapes are present (which only happens transiently during a chunk merge).
 
 ### 2.2 rules
 
@@ -1900,7 +1973,43 @@ Key points:
 
 The same pattern generalises to any derived-stat combat system: the component stats live in `rules.stats[]` and are initialised in character creation, the derived value is computed inside Lua at the start of each round, and `rules.attack_stat` stays null. If the book also has equipment bonuses to the derived value (a weapon that adds +2 to CV, a skill that adds +1), encode them via `combat_modifiers` with `target: "player.weapon_bonus"` or similar — the round_script reads `player.weapon_bonus` and the modifier is applied at combat start as usual. Do not encode them as `target: "player.combat_value"`, because `combat_value` does not exist on the player table — the round_script computes it on the fly each round.
 
-**Combat-modifier targets on derived-stat systems.** Because the round_script is responsible for combining components, `combat_modifiers` should target the *component fields* the script reads, not the derived field. Common target names for derived-stat books include `player.strength`, `player.agility`, `player.weapon_bonus`, `player.skill_bonus`, `player.damage_bonus`, `enemy.combat_value`, `enemy.armor`. The emulator does not enforce a vocabulary — pick names that match what your round_script reads.
+**Combat-modifier targets on derived-stat systems.** Because the round_script is responsible for combining components, `combat_modifiers` should target a field the script actually reads — never the derived stat name itself, which doesn't exist on the player table. Two valid targeting strategies, both supported and idiomatic:
+
+1. **Component-field targeting.** Target the specific component the bonus modifies — `player.strength`, `player.agility`, `player.weapon_bonus`, `player.skill_bonus`, `player.damage_bonus`, `enemy.combat_value`, `enemy.armor`, etc. Use this when the bonus has a clear single-component attribution: a strength-enhancing potion targets `player.strength`, a weapon's intrinsic bonus targets `player.weapon_bonus`, a debuff that lowers an enemy's armour targets `enemy.armor`. The round_script reads each component as `player.strength + player.agility + player.weapon_bonus + ...` and the modifier flows to the right slot.
+
+2. **Generic accumulator-slot targeting.** Reserve `player.attack` / `enemy.attack` (even though `rules.attack_stat: null`) as **generic additive accumulators** that the round_script picks up alongside the components. Use this when the bonus does not have a clear single-component attribution — surprise-attack +1 CV that comes from initiative rather than any one stat, narrative debuffs ("dazzled by the magical light, deduct 2 from your CV for this fight"), generic weapon-skill bonuses on a book whose round_script does not split skill from weapon. The round_script reads `(player.strength or 0) + (player.agility or 0) + (player.attack or 0)` so any modifier with `target: "player.attack"` is added to the player's CV without committing to a specific component story; same for `enemy.attack` as an enemy-side accumulator.
+
+Both strategies are first-class — pick whichever matches the book's narrative attribution and your round_script's read order. The emulator does not enforce a vocabulary; what matters is that the `target` name matches a field the round_script actually reads. If your round_script does not currently read a field you want to target, extend the round_script (one line: `+ (player.<name> or 0)`) — the modifier delta is then applied at combat start exactly as for any other target.
+
+**Worked example — Windhammer-style accumulator.** A round_script for a derived-stat book where Combat Value = Strength + Agility + accumulated bonuses:
+
+```lua
+-- Player CV = strength + agility + accumulator slot for combat_modifiers.
+-- player.attack defaults to 0 because rules.attack_stat is null;
+-- it serves as the additive accumulator any combat_modifier with
+-- target: "player.attack" feeds into.
+local pcv = (player.strength or 0) + (player.agility or 0) + (player.attack or 0)
+local ecv = (enemy.combat_value or 0) + (enemy.attack or 0)
+-- ... rest of round logic uses pcv / ecv ...
+```
+
+A per-section combat encoding that grants +2 CV from a surprise attack:
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "giant_s89",
+  "win_to": 154,
+  "special_rules": "You catch the giant unawares — add 2 to your Combat Value for this fight.",
+  "combat_modifiers": [
+    { "target": "player.attack", "delta": 2, "reason": "Surprise attack" }
+  ]
+}
+```
+
+Because the round_script reads `player.attack` as part of the CV computation, the +2 lands on the player's CV every round of this fight without needing to hard-code anything about the section. A per-section debuff against the same enemy uses `delta: -2`; a per-section enemy buff uses `target: "enemy.attack"`.
+
+**Anti-pattern — `modify_stat` on the derived stat.** Do NOT encode a per-fight modifier as a `modify_stat` event with `stat: "<derived-name>"` (e.g. `stat: "combat_value"`, `stat: "attack_strength"`, `stat: "hit_bonus"`). The derived stat does not exist on the player table — it is computed each round inside Lua from its component stats — so `modify_stat` writes to a non-existent slot and the event silently no-ops. The bonus appears in the section text and in the JSON, but combat behaves as if the bonus were not there. This drift is invisible until a player notices the math is wrong. The fix is always one of: (a) `combat_modifiers` on the combat event with the right component or accumulator target (the canonical encoding for per-fight bonuses, per Rule 17); (b) a real `modify_stat` on a **component** stat (`stat: "strength"` etc.) when the bonus is a *persistent* stat change rather than a per-fight modifier — e.g. an ability-score boost that should outlast the encounter. Distinguish per-fight (`combat_modifiers`) from persistent (`modify_stat` on a component) by the source text: "for this fight" / "for the duration of this combat" / "while you fight this enemy" → `combat_modifiers`; "permanently" / "from now on" / no temporal qualifier on a non-combat stat change → `modify_stat` on the component.
 
 ### Round Script Contract
 
@@ -2809,7 +2918,11 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 26 (Point-distribution character creation).** If the book's rules section describes a point-buy stat generation ("you have N points to distribute among these M attributes, with each between A and B", "assign N points across your attributes", or any variant using "distribute", "spend", or "allocate" with a fixed total and per-stat bounds), I encoded it as a single `character_creation.steps[]` entry with `action: "distribute_points"`, `total_points` matching the book's stated total, and `stats: [{name, min, max}, ...]` covering every point-distributed stat with ranges taken verbatim from the rules text (schema v1.10+). Every `name` in the step's `stats` array also appears in `rules.stats[]`. I did NOT also emit `roll_stat` or scratch `roll_resource` entries for those stats (the step is the only initialiser), and I did NOT use `manual_set` anywhere in the book's data or any Tier 3 playthrough script to paper over the allocation.
 
-**Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised.
+**Rule 27 (Skill / talent flags).** Every binary skill, talent, mastery, or lore the book's rules section names — Brigandry, Lorecraft, Stealth, Bushcraft, Huntmastery, Strong Back, Second Sight, Animal Lore, etc. — is encoded as a flag with the `skill_` or `talent_` prefix (matching the book's framing: training/craft/lore/mastery → `skill_`; talent/gift/trait → `talent_`). The flag is set at character creation (via `choose_abilities` accept-handler or a `set_flag` step with appropriate gating). Every conditional choice or event keyed on the capability uses `has_flag: "<prefix>_<name>"`, NOT a synthetic `has_ability` against a non-existent abilities-catalog entry. Skills are NOT declared in `rules.stats[]` and NOT declared in `rules.abilities[]` — they live entirely as flags. Distinguishable from Rule 15 abilities by the rule of thumb: **abilities have their own UI panel and may have uses-counters; skills are bare flags with no UI beyond the flag display**.
+
+**Section 2.1a (Endings placement, schema v1.11+).** The book's `death_endings` and `victory_endings` lists are placed consistently — either both inside `metadata.confidence.{death,victory}_endings` as section-id arrays (single-chat parses, matching the four maintained books) OR both at the top level (`book.death_endings`, `book.victory_endings`) as section-id arrays with integer counts in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). I did NOT mix the two placements within one book (no array at top level AND a duplicating array in confidence), I did NOT silently migrate from one shape to the other mid-merge, and every section id listed in either placement also appears in `sections{}` with `is_ending: true` and the matching `ending_type` (`"death"` for death endings; `"victory"` or `"continuation"` for victory endings).
+
+**Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised. **Combat-modifier targets on derived-stat books:** every per-fight modifier on a derived-stat combat targets either a component field the round_script reads (`player.strength`, `player.weapon_bonus`, etc.) OR a generic accumulator slot the round_script reads as additive (`player.attack` / `enemy.attack`, even though `attack_stat: null`). NO `combat_modifier` entry targets the derived stat name itself (`player.combat_value`, `player.attack_strength`) — that field doesn't exist on the player table because the derived value is computed inside Lua each round. NO `modify_stat` event in any section uses the derived stat name as `stat:` — that event silently no-ops because the derived stat is not a real player-table slot. Per-fight modifiers on derived-stat books go in `combat_modifiers` on the combat event (Rule 17); persistent stat changes go in `modify_stat` on a real **component** stat (`stat: "strength"` etc.).
 
 **Section 7.2 (Stat completeness on unprofiled series).** Every stat declared in `rules.stats[]` has a generation formula AND an initialising `character_creation.steps[]` entry, so after character creation completes there are no `undefined` stats in `state.stats`. If the book uses point-distribution rather than rolling and the schema does not yet have a `distribute_points` step type, I stopped and reported the gap rather than leaving stats uninitialised.
 
@@ -2862,7 +2975,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.14.0 / GBF schema v1.10.0 / CLI emulator v3.5.0 / HTML emulator v3.5.0.**
+**Codex v2.15.0 / GBF schema v1.11.0 / CLI emulator v3.6.0 / HTML emulator v3.6.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

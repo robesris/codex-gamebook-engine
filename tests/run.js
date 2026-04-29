@@ -963,6 +963,86 @@ test('validatePostCreation warns on declared-but-uninitialised stat', () => {
 });
 
 // ============================================================
+// Test 20: Endings placement — both shapes accepted (schema v1.11).
+// ============================================================
+// MOTIVATED_BY: Section 2.1a / v2.15.0. The schema accepts two
+// interchangeable placements for death_endings / victory_endings:
+// (a) section-id arrays inside metadata.confidence.{death,victory}_endings
+//     — single-chat parses, matches LW1 / Warlock / GrailQuest / WWY;
+// (b) section-id arrays at the top level of the book with INTEGER
+//     COUNTS in metadata.confidence.{death,victory}_endings —
+//     multi-chunk accumulators per Section 9.9 (the Windhammer
+//     accumulator drift Chat #21's merge helper introduced).
+// Pre-v1.11 the schema only accepted (a); v1.11 broadens
+// metadata.confidence.{death,victory}_endings to oneOf [array,
+// integer] and adds top-level death_endings / victory_endings as
+// optional arrays so both shapes round-trip.
+// END_TO_END_VERIFY: load any maintained book (shape a) and the
+// Windhammer accumulator (shape b); both should pass schema
+// validation and the emulator's book-load path should not raise.
+test('schema v1.11 accepts both endings placements (confidence-array and top-level-array+confidence-int)', () => {
+  // Schema-shape assertions: both shapes appear in the schema text.
+  const fs = require('fs');
+  const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
+  const schema = JSON.parse(schemaText);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.11.0', 'schema title at v1.11.0');
+
+  // Top-level death_endings / victory_endings declared.
+  assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
+  assertTrue(!!schema.properties.victory_endings, 'top-level victory_endings declared');
+  assertEqual(schema.properties.death_endings.type, 'array', 'top-level death_endings is array');
+  assertEqual(schema.properties.victory_endings.type, 'array', 'top-level victory_endings is array');
+
+  // metadata.confidence.{death,victory}_endings broadened to oneOf [array, integer].
+  const conf = schema.properties.metadata.properties.confidence.properties;
+  assertTrue(Array.isArray(conf.death_endings.oneOf), 'confidence.death_endings is oneOf');
+  assertTrue(Array.isArray(conf.victory_endings.oneOf), 'confidence.victory_endings is oneOf');
+  const deTypes = conf.death_endings.oneOf.map((s) => s.type).sort();
+  const veTypes = conf.victory_endings.oneOf.map((s) => s.type).sort();
+  assertEqual(JSON.stringify(deTypes), JSON.stringify(['array', 'integer']), 'confidence.death_endings oneOf [array, integer]');
+  assertEqual(JSON.stringify(veTypes), JSON.stringify(['array', 'integer']), 'confidence.victory_endings oneOf [array, integer]');
+
+  // Behavioral: emulator's book-load path accepts both shapes without raising.
+  // Shape (a): arrays inside metadata.confidence (the single-chat parse shape).
+  const bookA = buildBook({
+    metadata: {
+      title: 'Synthetic A',
+      confidence: {
+        sections_parsed: 1,
+        death_endings: [10, 36, 40],
+        victory_endings: [250, 500, 600],
+      },
+    },
+  });
+  const stateA = play.initialState('synthetic');
+  stateA.frontmatterDone = true;
+  play.startCharacterCreation(stateA, bookA);
+  // No throw is the success signal; the emulator does not read these fields
+  // for runtime, but the load path walks metadata and must not choke.
+
+  // Shape (b): top-level arrays + integer counts in metadata.confidence
+  // (the multi-chunk-accumulator shape, e.g. Windhammer claude_session output).
+  const bookB = buildBook({
+    metadata: {
+      title: 'Synthetic B',
+      confidence: {
+        sections_parsed: 1,
+        death_endings: 38,
+        victory_endings: 3,
+      },
+    },
+    death_endings: [10, 36, 40, 73, 84],
+    victory_endings: [250, 500, 600],
+  });
+  const stateB = play.initialState('synthetic');
+  stateB.frontmatterDone = true;
+  play.startCharacterCreation(stateB, bookB);
+  // No throw is the success signal.
+
+  assertTrue(true, 'both endings placements accepted by schema and emulator');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.10.0",
+  "title": "Gamebook Format (GBF) v1.11.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -107,14 +107,34 @@
               "description": "List of issues found during parsing. Either a free-form string, or an object with at least {section, issue} (or {section, note}) for richer attribution."
             },
             "death_endings": {
-              "type": "array",
-              "items": { "type": ["integer", "string"] },
-              "description": "Section ids that are death endings. Integer or string."
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": { "type": ["integer", "string"] },
+                  "description": "Section ids that are death endings. Integer or string."
+                },
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Count of death endings. Used by long-book accumulators that carry the section-id list at the top level (`death_endings` outside `metadata`) and store only the count here so the count is a confidence-report figure rather than a duplicated list. The two shapes are interchangeable for schema purposes — pre-existing books emit the array; multi-chunk accumulators (Section 9.9) emit the integer."
+                }
+              ],
+              "description": "Section ids that are death endings (array form), OR the count of death endings (integer form for accumulators that store the list at top level). See top-level `death_endings` for the accumulator shape."
             },
             "victory_endings": {
-              "type": "array",
-              "items": { "type": ["integer", "string"] },
-              "description": "Section ids that are victory endings. Integer or string."
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": { "type": ["integer", "string"] },
+                  "description": "Section ids that are victory endings. Integer or string."
+                },
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Count of victory endings. Used by long-book accumulators that carry the section-id list at the top level (`victory_endings` outside `metadata`) and store only the count here. See `metadata.confidence.death_endings` for the same pattern."
+                }
+              ],
+              "description": "Section ids that are victory endings (array form), OR the count (integer form for accumulators that store the list at top level). See top-level `victory_endings` for the accumulator shape."
             },
             "total_enemies": {
               "type": "integer",
@@ -345,6 +365,18 @@
       "additionalProperties": {
         "$ref": "#/definitions/enemy"
       }
+    },
+
+    "death_endings": {
+      "type": "array",
+      "items": { "type": ["integer", "string"] },
+      "description": "Top-level array of section ids that are death endings. Optional. Long-book multi-chunk accumulators (Section 9.9) write the section-id list here so each chunk's contribution can append cleanly without re-walking every prior chunk's `metadata.confidence` block; the corresponding `metadata.confidence.death_endings` then carries the count rather than the full list. Pre-existing single-chat parses emit the array directly inside `metadata.confidence` and leave this top-level field absent. Both placements are canonical — sub-agents and merge tooling should preserve whichever shape the accumulating book already uses."
+    },
+
+    "victory_endings": {
+      "type": "array",
+      "items": { "type": ["integer", "string"] },
+      "description": "Top-level array of section ids that are victory endings. Optional. Same multi-chunk accumulator placement as `death_endings`."
     }
   },
 
