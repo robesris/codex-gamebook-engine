@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.15.3
+# THE GAMEBOOK CODEX v2.15.4
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -320,6 +320,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | Combat encounter where the source text says "if you lose, you die" / frames the loss inline as a death narrative / does NOT enumerate a numbered death section to navigate to on loss | Rule 29 | Encode the combat with `flee_to: null` (or absent — no flee allowed) and `lose_to` absent (no loss-navigation target); set `win_to` to the post-victory continuation. The emulator's existing combat-end mechanism triggers a death pause automatically when player health hits 0 inside a combat — no schema field, no synthetic death section, no parser-miss flag. Discriminating test: did the source text give a section ID to navigate to on loss? Yes → `lose_to: <id>`; no → omit `lose_to` and trust the emulator. Common in Windhammer (40 inventoried sites), AD&D Adventure Gamebooks, early Lone Wolf encounters. |
 | Section text describes a **permanent** stat change — "permanently reduce your STRENGTH by 3," "your INITIAL ENDURANCE is lowered by N," "for the rest of your adventure your COMBAT SKILL is reduced," "you cannot recover this loss" | Rule 30 | `modify_stat` event with `modify_initial: true` and the appropriate signed `amount`. Both `state.stats[stat]` and `state.initialStats[stat]` are adjusted by the delta, so `initial_is_max` clamping prevents healing from restoring beyond the new ceiling. Discriminating words: *permanently* / *forever* / *initial* / *for the rest of your adventure* / *cannot recover* — when present → `modify_initial: true`; when absent → omit the flag (transient loss). |
 | Section text describes a stat **cap** — "from now on your STRENGTH cannot exceed 11," "your maximum ENDURANCE is now N," any absolute-ceiling clause (rather than a delta change) | Rule 30 (script-event workaround) | `script` event whose Lua body clamps both `state.initialStats.<stat>` and `state.stats.<stat>` to the cap value. The current schema (v1.11.0) has no `modify_stat.set_initial_to` field — it is tracked as a v2.16.x backlog item. Until then the script-event encoding is canonical and mechanically correct. When the schema field ships, these sites migrate to a single `modify_stat` event. |
+| Compound stat test reducible by a skill / talent / item — "Roll 2d6, total ≤ both your STRENGTH and AGILITY (or AGILITY only if you have Strong Back)" | Section 7.6 → Pattern 7.6.11 | `script` event that reads the gating flag/item/ability ONCE before rolling, branches the comparison (single-stat if the gate passes, compound if not), rolls ONCE, sets `player.navigate_to`. Single roll, two possible compare conditions. Distinct from Pattern 7.6.2 (compound test with no reducibility) and from two `stat_test` events gated by `has_flag` (the wrong encoding — implies two rolls). |
 
 **How to use this table during a parse.** During Step 5 (Parse Rules and Character Creation), read the book's rules section once with this table open in your context. For every paragraph in the rules section, scan the left column for a matching trigger and note which rules apply to this book. Then during Step 6 (Parse Sections), as you encounter each section, scan the left column again — section-level triggers (combat modifiers, conditional choices, multi-event paragraphs) often only become apparent when you're looking at a specific section's text. The table is meant to be re-scanned, not memorised on a single read.
 
@@ -2576,6 +2577,68 @@ Use `custom` **only** if the mechanic meets all of the following:
 
 In every other case the correct answer is a structured event or a `script` event. `custom` is the escape hatch, not the default.
 
+### Pattern 7.6.11 — Compound stat-test reducible by skill / talent / item
+
+**Narrative trigger examples:**
+- "Roll 2d6. If the total is less than or equal to both your STRENGTH and your AGILITY, turn to 247. (If you have the talent of Strong Back, this test uses your AGILITY only.) Otherwise, turn to 312."
+- "Test your LUCK and STAMINA — roll 2d6 and the total must be less than or equal to both. If you have the Skill of Stealth, you may ignore the LUCK component."
+- "Roll 1d6. If the result is less than or equal to your SKILL + DEXTERITY, you succeed. (Spellcasters add half their MAGIC, rounded down, to one of the two stats of their choice.)"
+
+**Why not two `stat_test` events:** the test is *one* roll, the result of which is compared against either a compound condition or a single condition depending on player state. Two separate events would imply two rolls (or two opportunities for the player to consume Luck mid-test, etc.), which mis-encodes the source-text intent.
+
+**Why not Pattern 7.6.2 alone:** Pattern 7.6.2 covers the compound case (`if total ≤ both X and Y`) but not the conditional reduction. The reducibility lives in player state (a flag, an item, an ability), not in the roll.
+
+**Canonical `script` shape — flag-gated reducibility (the most common case):**
+
+```lua
+-- Compound stat-test of STRENGTH and AGILITY, reducible to AGILITY only
+-- when the player has talent_strong_back. Encoding pattern: read the
+-- gating flag/item/ability before rolling, branch the comparison
+-- accordingly, single roll, single navigation.
+local has_strong_back = false
+for _, f in ipairs(flags or {}) do
+  if f == 'talent_strong_back' then has_strong_back = true; break end
+end
+
+local r = roll('2d6')
+local pass
+if has_strong_back then
+  -- Reduced test: AGILITY only.
+  pass = r.total <= (game_state.agility or 0)
+  log('Strong Back: rolled [' .. r.text .. ']=' .. r.total ..
+      ' vs AGILITY ' .. tostring(game_state.agility))
+else
+  -- Full compound test: STRENGTH AND AGILITY.
+  pass = r.total <= (game_state.strength or 0)
+     and r.total <= (game_state.agility  or 0)
+  log('Compound test: rolled [' .. r.text .. ']=' .. r.total ..
+      ' vs STRENGTH ' .. tostring(game_state.strength) ..
+      ' / AGILITY ' .. tostring(game_state.agility))
+end
+
+if pass then
+  log('-- success')
+  player.navigate_to = 247
+else
+  log('-- failure')
+  player.navigate_to = 312
+end
+```
+
+**Variants.** The reducibility gate can be any condition the script can read:
+
+- **Skill / talent flag (Rule 27)** — `for _, f in ipairs(flags or {}) do if f == 'skill_brigandry' then ... end end`. The most common case in skill-based books (Windhammer-family).
+- **Inventory item** — `for _, id in ipairs(inventory or {}) do if id == 'lockpicks' then ... end end`. When the gating is an item the player carries.
+- **Ability (Rule 15)** — read the abilities table the same way; useful when the gating is a Lone Wolf-style discipline rather than a Rule 27 flag.
+
+The branch determines *which condition* the roll is compared against. The roll itself is one call to `roll()` regardless of which branch is taken — the source text always describes one roll, and the encoding preserves that.
+
+**Three Windhammer instances cited as motivating cases.** §352 (LUCK + AGILITY compound, no reducibility — pure Pattern 7.6.2); §485 (STRENGTH + INTUITION compound — also pure Pattern 7.6.2 unless intuition turns out to be reducible by a skill); §594 (STRENGTH + AGILITY compound, reducible to AGILITY only when the player has `talent_strong_back` — the canonical Pattern 7.6.11 case). Encoding §352 / §485 with Pattern 7.6.2 alone is correct; §594 needs Pattern 7.6.11 because the reducibility is genuine player-state-dependent branching.
+
+**Anti-pattern — two stat_test events gated by `has_flag`.** Splitting §594 into two `stat_test` events (one with `condition: has_flag talent_strong_back`, one with `condition: not has_flag talent_strong_back`) implies two rolls and lets the player test Luck on the failure of either — the source text describes one roll. Always one `script` event for the reducible case, branching internally on player state.
+
+**When not to use Pattern 7.6.11.** If the source text explicitly describes the reduction as a *separate* check ("first test STRENGTH; if you fail, then test AGILITY with Strong Back as a second chance"), the encoding is two sequential `stat_test` events with appropriate `target` chaining, not one compound script. The Pattern 7.6.11 case is specifically *one* roll compared against *one or the other* condition based on player state — the reducibility is in the comparison, not in the roll structure.
+
 ---
 
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
@@ -3066,7 +3129,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.15.3 / GBF schema v1.11.0 / CLI emulator v3.6.0 / HTML emulator v3.6.0.**
+**Codex v2.15.4 / GBF schema v1.11.0 / CLI emulator v3.6.0 / HTML emulator v3.6.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
