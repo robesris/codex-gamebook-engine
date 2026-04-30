@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.7.0';
+const CODEX_EMULATOR_VERSION = '3.8.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1367,6 +1367,10 @@ function startCombat(event, state, book) {
     winTo: event.win_to,
     fleeTo: event.flee_to,
     specialRules: event.special_rules,
+    // Schema v1.13+ (Rule 31): non-defeat win condition. When set,
+    // checkCombatEnd ends the fight in victory once combat.round
+    // reaches this threshold, regardless of remaining enemy health.
+    winAfterRounds: event.win_after_rounds,
     // Frozen, condition-evaluated modifier list for this combat.
     appliedModifiers,
     // Frozen, condition-evaluated damage_interactions list for this combat.
@@ -2495,6 +2499,21 @@ function checkCombatEnd(state, book) {
     state.combat = null;
     state.pause = { type: 'ending', ending_type: 'death', text: 'You have been slain in combat.' };
     return state;
+  }
+
+  // Schema v1.13+ / Rule 31: survive-N-rounds win condition. If the
+  // combat carries win_after_rounds, the player wins once combat.round
+  // reaches the threshold (i.e. that many rounds have completed with
+  // the player still alive). Player-death takes priority above; this
+  // check runs before the enemy-defeat-by-health check so a fight
+  // configured as both "endurance OR damage" wins on whichever fires
+  // first.
+  if (combat.winAfterRounds !== undefined && combat.winAfterRounds !== null && combat.round >= combat.winAfterRounds) {
+    state.log.push(`Survived ${combat.round} rounds — combat ends in victory.`);
+    const winTo = combat.winTo;
+    state.combat = null;
+    if (winTo) return navigateTo(state, book, winTo);
+    return processNextEvent(state, book);
   }
 
   if (enemy.currentHealth <= 0) {

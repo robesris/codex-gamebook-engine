@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.12.0', 'schema title at v1.12.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.13.0', 'schema title at v1.13.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,10 +1112,95 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.12.0', 'schema title at v1.12.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.13.0', 'schema title at v1.13.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
+});
+
+// ============================================================
+// Test 22: combat.win_after_rounds ends combat in victory once
+//          the round counter reaches the threshold (Rule 31,
+//          schema v1.13+).
+// ============================================================
+// MOTIVATED_BY: Codex v2.17.0 Rule 31. Pre-v1.13 endurance-framed
+// combats ("hold the gate for three rounds" — Windhammer §516)
+// had no clean encoding; workarounds inflated enemy health (which
+// silently re-encodes the win condition as "deal enough damage")
+// or used a script event with a manual round counter. v1.13 adds
+// `combat.win_after_rounds` as a non-defeat win condition the
+// emulator's checkCombatEnd consults after each round. This test
+// drives a synthetic combat through three no-damage rounds and
+// asserts the emulator ends combat in victory exactly at the
+// threshold and navigates to win_to.
+// END_TO_END_VERIFY: drive the CLI emulator through Windhammer
+// §516 once that section is migrated from the manual-counter
+// workaround to win_after_rounds; confirm combat ends in victory
+// after surviving the stated number of rounds and navigates to
+// the post-survive section.
+test('combat.win_after_rounds ends combat in victory at the round threshold', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: {
+        // No-damage round_script — both sides report 0 damage so
+        // health stays unchanged and only the round counter advances.
+        round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0',
+      },
+    },
+    sections: {
+      '1': {
+        text: 'survive three rounds',
+        events: [{
+          type: 'combat',
+          enemy_ref: 'test_enemy_01',
+          win_to: '2',
+          win_after_rounds: 3,
+          flee_to: null,
+        }],
+        choices: [],
+      },
+      '2': { text: 'survived', events: [], choices: [] },
+    },
+    enemies_catalog: {
+      test_enemy_01: { name: 'Test Enemy', HEALTH: 100 },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { HEALTH: 20 };
+  state.inventory = [];
+  state.equipment = {};
+
+  play.navigateTo(state, book, '1');
+  assertTrue(state.combat, 'combat started');
+  assertEqual(state.combat.winAfterRounds, 3, 'winAfterRounds passed through to combat state');
+
+  // Round 1
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(state.combat, 'combat still active after round 1');
+  assertEqual(state.combat.round, 1, 'round counter at 1');
+
+  // Round 2
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(state.combat, 'combat still active after round 2');
+  assertEqual(state.combat.round, 2, 'round counter at 2');
+
+  // Round 3 — should trigger the survive-N-rounds win and navigate to '2'.
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(!state.combat, 'combat ended after round 3 reaches threshold');
+  assertEqual(state.currentSection, '2', 'navigated to win_to after surviving 3 rounds');
+
+  // Schema-shape assertion: win_after_rounds declared on event properties.
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  const eventProps = schema.definitions.event.properties;
+  assertTrue(!!eventProps.win_after_rounds, 'event.win_after_rounds declared');
+  assertEqual(eventProps.win_after_rounds.type, 'integer', 'event.win_after_rounds is integer');
+  assertEqual(eventProps.win_after_rounds.minimum, 1, 'event.win_after_rounds minimum is 1');
 });
 
 // ============================================================

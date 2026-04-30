@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.7.0';
+const CODEX_EMULATOR_VERSION = '3.8.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2720,6 +2720,11 @@ function handleCombat(event) {
   const winTo = event.win_to;
   const fleeTo = event.flee_to || null;
   const specialRules = event.special_rules || null;
+  // Schema v1.13+ (Rule 31): non-defeat win condition. When set,
+  // checkCombatEnd ends the fight in victory once roundNum reaches
+  // this threshold. Player-death takes priority; enemy-defeat-by-
+  // health continues to also win.
+  const winAfterRounds = event.win_after_rounds;
 
   // Sum the deltas of every applied combat_modifier whose dot-path target
   // matches the given string (e.g. "player.attack") AND which is active
@@ -2966,7 +2971,7 @@ function handleCombat(event) {
 
   // Store combat state for callbacks — all mutable state lives here
   window._combat = {
-    enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules,
+    enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules, winAfterRounds,
     // Frozen, condition-evaluated list of active modifiers for this
     // combat's duration. See comment above for why this is
     // snapshotted at combat start rather than re-evaluated each round.
@@ -3322,6 +3327,19 @@ function handleCombat(event) {
       setTimeout(() => {
         showEnding({ text: 'You have fallen in combat. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
       }, 1000);
+      return;
+    }
+
+    // Schema v1.13+ / Rule 31: survive-N-rounds win condition. Player
+    // wins once roundNum reaches the threshold (the player has just
+    // survived that many rounds). Player-death takes priority above;
+    // the enemy-defeat check follows below so endurance-or-damage
+    // combats win on whichever fires first.
+    if (c.winAfterRounds !== undefined && c.winAfterRounds !== null && c.roundNum >= c.winAfterRounds) {
+      c.combatLog.push(`<span class="lucky">You survived ${c.roundNum} rounds — combat ends in victory.</span>`);
+      c.combatOver = true;
+      c.combatEndTarget = c.winTo;
+      c.renderCombat();
       return;
     }
 

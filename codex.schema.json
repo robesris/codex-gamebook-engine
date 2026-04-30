@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.12.0",
+  "title": "Gamebook Format (GBF) v1.13.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -717,6 +717,7 @@
         },
         "win_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to on victory. Integer or string (see codex 7.6.8 for string sub-section ids)." },
         "flee_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to when fleeing. Null = cannot flee." },
+        "win_after_rounds": { "type": "integer", "minimum": 1, "description": "combat: Schema v1.12+. Non-defeat win condition — combat ends in victory after the player has survived this many rounds without being defeated, even if the enemy still has health. Use for source-text combats whose win condition is endurance rather than damage ('hold the gate for three rounds,' 'survive five rounds and the cavalry arrives,' 'last out the storm'). When set, the emulator runs the standard round flow (modifiers, round_script, damage_interactions, post_round) and after each round checks the round counter against this threshold; once `combat.round >= win_after_rounds` the emulator ends combat as a victory and navigates to `win_to`. Player-death and player-flee paths take priority over the rounds-survived check; enemy-defeat-by-health continues to win as well (the field is an ADDITIONAL win condition, not a replacement). Canonical use is Windhammer §516-style 'survive N rounds.' For combats that should END (regardless of who's winning) after N rounds without a victory state, use a different mechanism — this field is specifically the survive-to-win semantic. See codex Rule 31 for the full specification." },
         "special_rules": { "type": ["string", "null"], "description": "combat: per-encounter special rules in plain English. Purely informational — the emulator displays this text above the combat panel but does not interpret it. For mechanically-enforced modifiers, use the structured `combat_modifiers` field alongside this one; the two can coexist (the string documents the rule in the book's narrative language, the structured field encodes the math)." },
         "combat_modifiers": {
           "type": "array",
