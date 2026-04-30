@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.6.0';
+const CODEX_EMULATOR_VERSION = '3.7.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2262,6 +2262,19 @@ function handleModifyStat(event) {
     state.initialStats[stat] = (state.initialStats[stat] || 0) + (event.modify_initial_amount || amount);
     // Also apply to current
     state.stats[stat] = (state.stats[stat] || 0) + (event.modify_initial_amount || 0);
+  }
+
+  // set_initial_to (schema v1.12+): absolute-ceiling cap. Assign
+  // initialStats[stat] to the supplied value and clamp current down
+  // if above the new ceiling. Cap-only — leaves a current value
+  // already below the new ceiling unchanged (raising the ceiling
+  // does not auto-heal). Excluded for resource slots. See codex
+  // Rule 30 and cli-emulator/play.js for parity.
+  if (event.set_initial_to !== undefined && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+    state.initialStats[stat] = event.set_initial_to;
+    if ((state.stats[stat] || 0) > event.set_initial_to) {
+      state.stats[stat] = event.set_initial_to;
+    }
   }
 
   const msg = document.createElement('div');

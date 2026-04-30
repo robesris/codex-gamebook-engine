@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.11.0', 'schema title at v1.11.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.12.0', 'schema title at v1.12.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1040,6 +1040,82 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   // No throw is the success signal.
 
   assertTrue(true, 'both endings placements accepted by schema and emulator');
+});
+
+// ============================================================
+// Test 21: modify_stat.set_initial_to caps initialStats at an
+//          absolute value and clamps current down when above it
+//          (schema v1.12+ / Rule 30 cap-pattern first-class encoding).
+// ============================================================
+// MOTIVATED_BY: Codex v2.16.0 Rule 30 update. Pre-v1.12 the
+// canonical encoding for an absolute ceiling cap ("from now on
+// your STRENGTH cannot exceed 11" — Windhammer §440) was a
+// `script` event clamping both state.initialStats and state.stats
+// via the Lua sandbox. v1.12 adds `modify_stat.set_initial_to`
+// as a single-event encoding. This test locks in the three
+// behaviors a future regression must preserve: (a) initialStats
+// is assigned the absolute value, (b) current is clamped down
+// when above the new ceiling, (c) current is left alone when
+// already at or below the new ceiling (raising a ceiling does
+// not auto-heal).
+// END_TO_END_VERIFY: drive the CLI emulator through Windhammer
+// §440 / §533 once those sections are migrated from the Rule 30
+// script-event workaround to set_initial_to; confirm the player's
+// initial STRENGTH/ENDURANCE drops to the cap value and current
+// is clamped down if it was previously above it.
+test('modify_stat.set_initial_to caps initialStats and clamps current when above', () => {
+  const book = buildBook({
+    rules: { stats: [{ name: 'TESTSTAT_STR', initial_is_max: true }] },
+    sections: {
+      '1': {
+        text: 'cap STR at 11',
+        events: [{ type: 'modify_stat', stat: 'TESTSTAT_STR', set_initial_to: 11, reason: 'cap' }],
+        choices: [],
+      },
+    },
+  });
+
+  // Case (a): current ABOVE the cap — both ceiling and current drop.
+  const stateA = play.initialState('synthetic');
+  stateA.frontmatterDone = true;
+  stateA.creationDone = true;
+  stateA.pause = null;
+  stateA.stats = { TESTSTAT_STR: 13 };
+  stateA.initialStats = { TESTSTAT_STR: 13 };
+  play.navigateTo(stateA, book, '1');
+  assertEqual(stateA.initialStats.TESTSTAT_STR, 11, '(a) initial assigned to 11');
+  assertEqual(stateA.stats.TESTSTAT_STR, 11, '(a) current clamped from 13 to 11');
+
+  // Case (b): current AT the cap — ceiling assigned, current unchanged.
+  const stateB = play.initialState('synthetic');
+  stateB.frontmatterDone = true;
+  stateB.creationDone = true;
+  stateB.pause = null;
+  stateB.stats = { TESTSTAT_STR: 11 };
+  stateB.initialStats = { TESTSTAT_STR: 13 };
+  play.navigateTo(stateB, book, '1');
+  assertEqual(stateB.initialStats.TESTSTAT_STR, 11, '(b) initial assigned to 11');
+  assertEqual(stateB.stats.TESTSTAT_STR, 11, '(b) current unchanged at 11');
+
+  // Case (c): current BELOW the cap — ceiling assigned, current unchanged.
+  const stateC = play.initialState('synthetic');
+  stateC.frontmatterDone = true;
+  stateC.creationDone = true;
+  stateC.pause = null;
+  stateC.stats = { TESTSTAT_STR: 8 };
+  stateC.initialStats = { TESTSTAT_STR: 13 };
+  play.navigateTo(stateC, book, '1');
+  assertEqual(stateC.initialStats.TESTSTAT_STR, 11, '(c) initial assigned to 11');
+  assertEqual(stateC.stats.TESTSTAT_STR, 8, '(c) current unchanged at 8 (no auto-heal)');
+
+  // Schema-shape assertion: set_initial_to declared on event properties,
+  // schema title at v1.12.0.
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.12.0', 'schema title at v1.12.0');
+  const eventProps = schema.definitions.event.properties;
+  assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
+  assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
 });
 
 // ============================================================

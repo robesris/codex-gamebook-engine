@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.6.0';
+const CODEX_EMULATOR_VERSION = '3.7.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1072,7 +1072,21 @@ function handleEvent(event, state, book) {
         }
         state.stats[stat] = newVal;
       }
-      state.log.push(`${stat} ${amount >= 0 ? '+' : ''}${amount}${event.modify_initial ? ' (permanent, initial updated)' : ''}${event.reason ? ' (' + event.reason + ')' : ''}`);
+      // set_initial_to (schema v1.12+): absolute-ceiling cap. Assign
+      // initialStats[stat] to the supplied value and clamp current
+      // stats[stat] down if currently above the new ceiling. Applied
+      // AFTER the amount delta so a single event combining a heal +
+      // permanent cap (rare) lands on the new ceiling. Excluded for
+      // resource slots (provisions/gold/meals) which don't have an
+      // initial-stats ceiling. See codex Rule 30.
+      if (event.set_initial_to !== undefined && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+        state.initialStats[stat] = event.set_initial_to;
+        if ((state.stats[stat] || 0) > event.set_initial_to) {
+          state.stats[stat] = event.set_initial_to;
+        }
+      }
+      const setNote = event.set_initial_to !== undefined ? ` (initial set to ${event.set_initial_to})` : '';
+      state.log.push(`${stat} ${amount >= 0 ? '+' : ''}${amount}${event.modify_initial ? ' (permanent, initial updated)' : ''}${setNote}${event.reason ? ' (' + event.reason + ')' : ''}`);
       return 'continue';
     }
     case 'add_item':
