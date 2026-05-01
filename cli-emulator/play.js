@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.8.0';
+const CODEX_EMULATOR_VERSION = '3.9.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.8.0';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '7dd7501';
+const CODEX_EMULATOR_COMMIT = '20cc6a4';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -715,6 +715,16 @@ function modifierAppliesAtRound(mod, round) {
   return true;
 }
 
+// Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): a modifier with
+// removedAfterConsecutiveLosses set is excluded from the active list once
+// the per-fight player-loss streak counter has reached its threshold.
+// One-way: the modifier does not come back if the streak later resets.
+function modifierExpiredByLossStreak(mod, consecutiveLosses) {
+  const t = mod && mod.removedAfterConsecutiveLosses;
+  if (typeof t !== 'number' || t < 1) return false;
+  return (consecutiveLosses || 0) >= t;
+}
+
 // return the summed scaled damage. Interactions are filtered by direction
 // (incoming / outgoing), then by source tags per-component. Matching
 // interactions' multipliers compose multiplicatively on a component.
@@ -1324,7 +1334,20 @@ function startCombat(event, state, book) {
     // Schema v1.7+ honors the duration field. Preserve it on the frozen
     // list so runCombatRound and the status-bar display can filter per
     // round. Absent duration is treated as 'fight' (backward compatible).
-    appliedModifiers.push({ target, delta, reason: mod.reason || null, duration: mod.duration || 'fight' });
+    // Schema v1.14+ optional per-fight expiry: drop the modifier after N
+    // consecutive player-loss rounds. Preserve the threshold on the frozen
+    // entry; the activeThisRound filter checks it against
+    // state.combat.consecutiveLosses.
+    const removedAfter = (typeof mod.removed_after_consecutive_losses === 'number'
+      && Number.isInteger(mod.removed_after_consecutive_losses)
+      && mod.removed_after_consecutive_losses >= 1)
+      ? mod.removed_after_consecutive_losses : null;
+    appliedModifiers.push({
+      target, delta,
+      reason: mod.reason || null,
+      duration: mod.duration || 'fight',
+      removedAfterConsecutiveLosses: removedAfter,
+    });
   }
 
   // Evaluate damage_interactions (schema v1.5) once at combat start, the
@@ -1379,6 +1402,12 @@ function startCombat(event, state, book) {
     round: 0,
     lastRoundResult: null,
     awaitingPostRound: false,
+    // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): per-fight
+    // counter, incremented post-round when the player took more damage
+    // than the enemy, reset on any other outcome (tie, player win, or
+    // no-damage round). Used to gate combat_modifiers carrying a
+    // `removed_after_consecutive_losses` threshold.
+    consecutiveLosses: 0,
   };
   state.pause = { type: 'combat' };
   return 'pause';
@@ -2282,7 +2311,10 @@ function runCombatRound(forcedRollsArg, state, book) {
   // at combat start; duration just selects among the frozen list per
   // round.
   const applied = combat.appliedModifiers || [];
-  const activeThisRound = applied.filter(m => modifierAppliesAtRound(m, combat.round));
+  const consecutiveLosses = combat.consecutiveLosses || 0;
+  const activeThisRound = applied.filter(m =>
+    modifierAppliesAtRound(m, combat.round) && !modifierExpiredByLossStreak(m, consecutiveLosses)
+  );
   for (const mod of activeThisRound) {
     const target = mod.target;
     const delta = mod.delta;
@@ -2413,6 +2445,31 @@ function runCombatRound(forcedRollsArg, state, book) {
 
   combat.lastRoundResult = result.combat?.last_result;
   combat.lastDamage = result.combat?.last_damage || 0;
+
+  // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): update the
+  // per-fight player-loss streak counter using post-interaction damage
+  // totals. A round counts as a player loss when the player took strictly
+  // more damage than the enemy this round; ties (including 0-vs-0
+  // no-damage rounds) and player-victory rounds reset the streak.
+  const prevStreak = combat.consecutiveLosses || 0;
+  if (playerTotal > enemyTotal) {
+    combat.consecutiveLosses = prevStreak + 1;
+  } else {
+    combat.consecutiveLosses = 0;
+  }
+  // Log any modifier that just expired due to the streak update so the
+  // player sees a discrete event ("Modifier removed: ...") at the moment
+  // it falls off, mirroring the "Combat modifier: ..." line that fires
+  // when one becomes active.
+  const newStreak = combat.consecutiveLosses;
+  for (const m of (combat.appliedModifiers || [])) {
+    const t = m.removedAfterConsecutiveLosses;
+    if (typeof t !== 'number' || t < 1) continue;
+    if (prevStreak < t && newStreak >= t) {
+      const sign = m.delta >= 0 ? '+' : '';
+      state.log.push(`Combat modifier removed: ${m.target} ${sign}${m.delta}${m.reason ? ' (' + m.reason + ')' : ''} — ${t} consecutive losses`);
+    }
+  }
 
   // Check post-round availability
   const postScript = cs.post_round_script;
@@ -2698,7 +2755,10 @@ function summarize(state, book) {
     // duration-aware filtering.
     const applied = state.combat.appliedModifiers || [];
     const displayRound = state.combat.round === 0 ? 1 : state.combat.round;
-    const activeForDisplay = applied.filter(m => modifierAppliesAtRound(m, displayRound));
+    const displayStreak = state.combat.consecutiveLosses || 0;
+    const activeForDisplay = applied.filter(m =>
+      modifierAppliesAtRound(m, displayRound) && !modifierExpiredByLossStreak(m, displayStreak)
+    );
     const playerAtkDelta = activeForDisplay
       .filter(m => m && m.target === 'player.attack' && typeof m.delta === 'number')
       .reduce((s, m) => s + m.delta, 0);

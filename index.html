@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.8.0';
+const CODEX_EMULATOR_VERSION = '3.9.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -686,7 +686,7 @@ const CODEX_EMULATOR_VERSION = '3.8.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '7dd7501';
+const CODEX_EMULATOR_COMMIT = '20cc6a4';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -799,6 +799,16 @@ function modifierAppliesAtRound(mod, round) {
   if (dur === 'first_round') return round === 1;
   if (dur === 'after_first_round') return round >= 2;
   return true;
+}
+
+// Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): a modifier with
+// removedAfterConsecutiveLosses set is excluded from the active list once
+// the per-fight player-loss streak counter has reached its threshold.
+// One-way: the modifier does not come back if the streak later resets.
+function modifierExpiredByLossStreak(mod, consecutiveLosses) {
+  const t = mod && mod.removedAfterConsecutiveLosses;
+  if (typeof t !== 'number' || t < 1) return false;
+  return (consecutiveLosses || 0) >= t;
 }
 
 // Resolve combat stat names from the game data's rules.attack_stat and rules.health_stat
@@ -2738,9 +2748,12 @@ function handleCombat(event) {
   // stat bar previews what the upcoming round will use.
   function sumAppliedModifiersForTarget(appliedModifiers, target, round) {
     if (!Array.isArray(appliedModifiers) || appliedModifiers.length === 0) return 0;
+    const streak = (window._combat && window._combat.consecutiveLosses) || 0;
     let sum = 0;
     for (const m of appliedModifiers) {
-      if (m && m.target === target && typeof m.delta === 'number' && modifierAppliesAtRound(m, round)) sum += m.delta;
+      if (m && m.target === target && typeof m.delta === 'number'
+        && modifierAppliesAtRound(m, round)
+        && !modifierExpiredByLossStreak(m, streak)) sum += m.delta;
     }
     return sum;
   }
@@ -2820,9 +2833,15 @@ function handleCombat(event) {
         const durTag = m.duration === 'first_round' ? ' <span style="color:var(--text-dim);font-size:0.85em">[round 1]</span>'
           : m.duration === 'after_first_round' ? ' <span style="color:var(--text-dim);font-size:0.85em">[round 2+]</span>'
           : '';
-        const active = modifierAppliesAtRound(m, displayRound);
+        const expired = modifierExpiredByLossStreak(m, c.consecutiveLosses || 0);
+        const active = modifierAppliesAtRound(m, displayRound) && !expired;
         const style = active ? '' : ' style="opacity:0.5"';
-        return `<div${style}>${m.target} ${sign}${m.delta}${durTag}${reason}</div>`;
+        const expiredTag = expired
+          ? ` <span style="color:var(--danger);font-size:0.85em">[expired after ${m.removedAfterConsecutiveLosses} losses]</span>`
+          : (typeof m.removedAfterConsecutiveLosses === 'number'
+              ? ` <span style="color:var(--text-dim);font-size:0.85em">[removed after ${m.removedAfterConsecutiveLosses} losses]</span>`
+              : '');
+        return `<div${style}>${m.target} ${sign}${m.delta}${durTag}${expiredTag}${reason}</div>`;
       }).join('');
       html += `<div class="special-rules-box"><strong>Modifiers:</strong>${rows}</div>`;
     }
@@ -2939,7 +2958,20 @@ function handleCombat(event) {
     // Schema v1.7+ honors the duration field. Preserve it on the frozen
     // list so combatAttack and the modifier-panel display can filter per
     // round. Absent duration defaults to 'fight' (backward compatible).
-    appliedModifiers.push({ target, delta, reason: mod.reason || null, duration: mod.duration || 'fight' });
+    // Schema v1.14+ optional per-fight expiry: drop the modifier after N
+    // consecutive player-loss rounds. Preserve the threshold on the frozen
+    // entry; the activeThisRound filter checks it against
+    // window._combat.consecutiveLosses.
+    const removedAfter = (typeof mod.removed_after_consecutive_losses === 'number'
+      && Number.isInteger(mod.removed_after_consecutive_losses)
+      && mod.removed_after_consecutive_losses >= 1)
+      ? mod.removed_after_consecutive_losses : null;
+    appliedModifiers.push({
+      target, delta,
+      reason: mod.reason || null,
+      duration: mod.duration || 'fight',
+      removedAfterConsecutiveLosses: removedAfter,
+    });
   }
 
   // Evaluate damage_interactions (schema v1.5) the same way combat_modifiers
@@ -2980,6 +3012,12 @@ function handleCombat(event) {
     appliedDamageInteractions,
     roundNum: 0, combatLog: [], waitingForLuckChoice: false,
     combatOver: false,
+    // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): per-fight
+    // counter, incremented post-round when the player took more damage
+    // than the enemy, reset on any other outcome. Used to gate
+    // combat_modifiers carrying a `removed_after_consecutive_losses`
+    // threshold.
+    consecutiveLosses: 0,
     // When combat ends (victory or flee), this holds the section id
     // the Continue button should navigate to. If null, Continue falls
     // through to processNextEvent() instead.
@@ -3107,7 +3145,11 @@ function handleCombat(event) {
     // participates in: 'fight' (default) every round, 'first_round' only
     // round 1, 'after_first_round' only rounds 2+, 'round' reserved and
     // currently treated as 'fight'.
-    const activeThisRound = (c.appliedModifiers || []).filter(m => modifierAppliesAtRound(m, c.roundNum));
+    const consecutiveLossesAtRoundStart = c.consecutiveLosses || 0;
+    const activeThisRound = (c.appliedModifiers || []).filter(m =>
+      modifierAppliesAtRound(m, c.roundNum)
+      && !modifierExpiredByLossStreak(m, consecutiveLossesAtRoundStart)
+    );
     for (const mod of activeThisRound) {
       const target = mod.target;
       const delta = mod.delta;
@@ -3214,6 +3256,27 @@ function handleCombat(event) {
     }
     if (playerTotal !== 0) {
       setPlayerHealth(Math.max(0, getPlayerHealth() - playerTotal));
+    }
+
+    // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): update the
+    // per-fight player-loss streak counter using post-interaction damage
+    // totals. A round counts as a player loss when the player took strictly
+    // more damage than the enemy this round; ties (including 0-vs-0
+    // no-damage rounds) and player-victory rounds reset the streak.
+    const prevStreak = c.consecutiveLosses || 0;
+    if (playerTotal > enemyTotal) {
+      c.consecutiveLosses = prevStreak + 1;
+    } else {
+      c.consecutiveLosses = 0;
+    }
+    const newStreak = c.consecutiveLosses;
+    for (const m of (c.appliedModifiers || [])) {
+      const t = m.removedAfterConsecutiveLosses;
+      if (typeof t !== 'number' || t < 1) continue;
+      if (prevStreak < t && newStreak >= t) {
+        const sign = m.delta >= 0 ? '+' : '';
+        c.combatLog.push(`<span class="hit">Modifier removed: ${m.target} ${sign}${m.delta}${m.reason ? ' (' + m.reason + ')' : ''} — ${t} consecutive losses</span>`);
+      }
     }
 
     // Add logs

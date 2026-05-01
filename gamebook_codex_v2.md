@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.17.0
+# THE GAMEBOOK CODEX v2.18.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -275,6 +275,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Compound damage" — a single attack that deals physical + elemental, or two damage types interacting differently with the enemy | Rule 18 | Round_script emits `combat.damage_to_enemy` as a list of `{amount, sources}` components; each flows through the interaction filter independently |
 | "Add N to your COMBAT SKILL for the duration of this fight" / "deduct N from Attack Strength" / "for this combat only" / surprise attacks / torch penalties | Rules 14 + 17 | BOTH the narrative `special_rules` text (Rule 14, for display) AND the structured `combat_modifiers` entry on the combat event (Rule 17, for enforcement) — coexist, never one alone |
 | "Vordak / Helghast / Wraith trait that always applies to this enemy type" | Rule 17 | `intrinsic_modifiers` on the enemies_catalog entry (NOT per-section `combat_modifiers`) so the trait travels across every section the enemy appears in |
+| "If you lose three combat rounds in a row the torch is knocked from your grasp / your CV must be returned to its normal level" / a held-item combat bonus that comes off mid-fight after N consecutive losses (NOT a combat-end clause) | Rule 17 (modifier-expiry-on-loss-streak, schema v1.14+) | `combat_modifiers[i].removed_after_consecutive_losses: <N>` on the affected modifier; the emulator filters the modifier out of the active list once the per-fight loss streak (`damage_to_player > damage_to_enemy` rounds in a row) reaches the threshold. Combat continues at the base value; this is NOT `combat.win_after_rounds` (Rule 31, which ENDS the fight) |
 | "If you have the Hunting Discipline, you do not need to eat" / "the Ranger is exempt from" / "the bearer is immune to" / "you automatically succeed at" / "you may bypass" / "you may ignore" | Rule 15 | Event-level `condition` field gating the affected event (`eat_meal`, `stat_test`, `modify_stat`, etc.) using `not has_ability "Hunting"` or analogous |
 | "If you have the lantern, continue safely; otherwise lose 2 STAMINA" / "if your backpack has room, take the extra meal" / one-time flag-gated bonuses | Rule 15 | Event-level `condition` on the conditional event |
 | "If Weaponskill is chosen, pick R10 to determine weapon type" / "Paladins also roll for starting prayer count" / any rule that gates a *character-creation roll or prompt* on an earlier creation step's outcome (a discipline pick, an earlier rolled value, a flag set during creation) | Rule 15 (char-creation steps extension, schema v1.6+) | `character_creation.steps[]` entry carries a `condition` using the same union as event/choice conditions — usually `has_ability` for discipline gates, `stat_gte` / `stat_lte` for roll-outcome gates, `has_flag` for book-specific creation flags |
@@ -703,6 +704,30 @@ The modifier lives on the combat event because that is where the section text de
 **Ability-bonus suppression (narrow scope).** A specific case not yet covered by either Rule 17 or Rule 18: an enemy that suppresses a player-side ability bonus without affecting damage scaling (e.g., a section's text says "this creature is immune to Mindblast," meaning the +2 Kai-Discipline bonus does not apply for this fight). This is currently handled imperatively inside the round_script (the Lua script reads the player's disciplines and conditionally omits the bonus). Document the rule in the combat event's `special_rules` text so the player sees it, and let the round_script handle the enforcement. A future schema version may introduce a structured `suppress_abilities` field once a second book demonstrates the need for it. Do not try to fake ability-bonus suppression via a negative `combat_modifier` that cancels the bonus — it works numerically but the UI will show both a +2 Mindblast modifier and a -2 suppression, which is confusing and narratively wrong.
 
 **Rule of thumb:** if the rule adds or subtracts a number from a field the round_script reads as input, use `combat_modifiers`. If the rule scales damage the round_script produces as output (including zeroing it for immunities), use `damage_interactions` (Rule 18). If the rule requires per-round dynamic decision-making, encode it in the round_script directly.
+
+**Modifier expiry on a player-loss streak (schema v1.14+).** Some books describe a per-fight bonus that comes off mid-combat when the player loses too many rounds in a row — typically a held-item bonus where the item is "knocked out of your grasp" after N consecutive losing exchanges. The canonical example is Windhammer §446: *"Whilst you keep your torch in your hand you should increase your Combat Value by 4 points. If you lose three combat rounds in a row the torch will have been knocked out of your grasp and your CV must be returned to its normal level."* This is **not** a combat-end clause (combat continues at base CV) and **not** a duration-narrowing clause (the modifier is on for an unknown number of rounds, then off for the rest of the fight) — it is a per-modifier expiry triggered by a loss-streak counter.
+
+Encoding: add an optional `removed_after_consecutive_losses: <integer ≥ 1>` field to the modifier. The emulator maintains `state.combat.consecutiveLosses` per fight: it starts at 0 at combat start, increments after any round whose post-interaction `damage_to_player > damage_to_enemy`, and resets to 0 after any other outcome (tie, player win, no-damage round). Once the counter is at or above the modifier's threshold, the modifier is filtered out of the active list for the remainder of the fight; expiry is one-way (the modifier does not return if the streak later resets). The encoding for §446's torch is:
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "arachnari_queen_s446",
+  "win_to": 471,
+  "special_rules": "Whilst you keep your torch in your hand you should increase your Combat Value by 4. If you lose three combat rounds in a row the torch is knocked from your grasp and your CV must be returned to its normal level.",
+  "combat_modifiers": [
+    {
+      "target": "player.attack",
+      "delta": 4,
+      "condition": { "type": "has_item", "item": "torch" },
+      "reason": "Torch dazzles night-sensitive enemy",
+      "removed_after_consecutive_losses": 3
+    }
+  ]
+}
+```
+
+The `condition` gates whether the modifier ever entered the frozen list (no torch in inventory → no bonus from round 1). The `removed_after_consecutive_losses` then runs alongside the `duration` filter: a modifier survives this round if BOTH (a) duration is currently active AND (b) the loss-streak counter is below the threshold. The counter snapshots at round start, so a modifier expiring on round N still applies during round N's math; from round N+1 onward it is excluded from the active list and its delta is no longer applied. The emulator emits a "Combat modifier removed" log line at the moment of expiry so the player sees a discrete event ("torch knocked from grasp") rather than a silent stat change. **What this is NOT:** a combat-end clause (Rule 31's `win_after_rounds` is the encoding for "lose three in a row → combat ends"); a permanent-inventory effect (the torch item is not removed from `state.inventory` — only the bonus's contribution is lost; whether the book describes the item as physically lost is a separate decision the encoding does not need to make); or a substitute for `duration` (which narrows by round number, not by outcome).
 
 ---
 
@@ -3081,7 +3106,7 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 16 (Codex maintainer discipline).** *(Only applies if I am editing the codex doc itself, not parsing a book.)* When I shipped a doc commit that changed a rule, the same commit added a row to the topical decision table at the top of the Critical Rules section AND added one entry to this checklist for the new rule. The codex's job is to produce correct output by default; output patches do not compound.
 
-**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. All modifiers are per-section on the combat event — even when the same enemy type appears in multiple sections with the same rule, the modifier belongs on each combat event independently because gamebook encounters are self-contained.
+**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. All modifiers are per-section on the combat event — even when the same enemy type appears in multiple sections with the same rule, the modifier belongs on each combat event independently because gamebook encounters are self-contained. **Modifier-expiry-on-loss-streak (schema v1.14+).** If the source text says a per-fight bonus comes off mid-combat after the player loses N rounds in a row (canonical: Windhammer §446 — "If you lose three combat rounds in a row the torch will have been knocked out of your grasp and your CV must be returned to its normal level"), the modifier carries `removed_after_consecutive_losses: <N>` matching the source-text count. Combat does NOT end at the threshold; that is Rule 31's `win_after_rounds`. The emulator drops the modifier from the active list once the per-fight loss-streak counter reaches the threshold, and the modifier's inventory item (e.g., the torch) is NOT removed by the field — only the bonus is lost.
 
 **Rule 18 (Damage interactions).** For every immunity, resistance, or weakness the book describes that scales damage rather than adding to a stat input ("immune to non-silver weapons," "takes half damage from blunt," "double damage from fire"), I encoded it as a `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) entry — not as a large negative `combat_modifier`. The round_script reports damage as `combat.damage_to_enemy` / `combat.damage_to_player` (not by mutating `*.health` directly), and uses the full `{amount, sources}` component-list form for any attack that deals more than one damage type in one swing.
 
@@ -3166,7 +3191,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.17.0 / GBF schema v1.13.0 / CLI emulator v3.8.0 / HTML emulator v3.8.0.**
+**Codex v2.18.0 / GBF schema v1.14.0 / CLI emulator v3.9.0 / HTML emulator v3.9.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

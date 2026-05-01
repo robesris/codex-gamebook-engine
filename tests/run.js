@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.13.0', 'schema title at v1.13.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.14.0', 'schema title at v1.14.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.13.0', 'schema title at v1.13.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.14.0', 'schema title at v1.14.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1201,6 +1201,191 @@ test('combat.win_after_rounds ends combat in victory at the round threshold', ()
   assertTrue(!!eventProps.win_after_rounds, 'event.win_after_rounds declared');
   assertEqual(eventProps.win_after_rounds.type, 'integer', 'event.win_after_rounds is integer');
   assertEqual(eventProps.win_after_rounds.minimum, 1, 'event.win_after_rounds minimum is 1');
+});
+
+// ============================================================
+// Test 23: combat_modifier.removed_after_consecutive_losses
+//          drops a modifier from the active list after the
+//          player-loss streak reaches its threshold (Rule 17,
+//          schema v1.14+).
+// ============================================================
+// MOTIVATED_BY: Codex v2.18.0 Rule 17 modifier-expiry-on-loss-
+// streak subsection. Pre-v1.14 there was no clean encoding for
+// the Windhammer §446 mechanic ("torch grants +4 CV while held;
+// lose three rounds in a row and the torch is knocked from grasp,
+// CV returns to its normal level"). v1.14 adds an optional
+// per-modifier `removed_after_consecutive_losses: <int>` field.
+// Semantics: `state.combat.consecutiveLosses` increments after
+// any round where post-interaction `damage_to_player > damage_to_enemy`,
+// resets to 0 on any other outcome (tie, player win, no-damage),
+// and a modifier whose threshold has been reached is filtered out
+// of the active list for the remainder of the fight.
+// END_TO_END_VERIFY: drive Windhammer §446 once it is migrated
+// from the non-canonical `player_cv_modifier` shape to a
+// canonical Rule 17 entry with `has_item: torch` and
+// `removed_after_consecutive_losses: 3`; confirm the +4 bonus
+// disappears from the active list after the third consecutive
+// player-loss round and is logged as "Combat modifier removed".
+test('removed_after_consecutive_losses drops modifier after threshold streak', () => {
+  // Round_script: damage_to_player = 1, damage_to_enemy = 0 unless
+  // combat.no_loss_this_round is set (in which case both sides 0).
+  // The test mutates a flag on the combat event's special_rules-style
+  // hook by re-running navigateTo with a different book. Simpler:
+  // every round is a player loss; we check the streak threshold.
+  function buildBookWithModifier(threshold) {
+    return buildBook({
+      rules: {
+        stats: [{ name: 'HEALTH' }],
+        health_stat: 'HEALTH',
+        combat_system: {
+          // Player loses every round: takes 1 damage, deals 0.
+          round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 1',
+        },
+      },
+      sections: {
+        '1': {
+          text: 'torch fight',
+          events: [{
+            type: 'combat',
+            enemy_ref: 'test_enemy_torch',
+            win_to: '2',
+            flee_to: null,
+            combat_modifiers: [{
+              target: 'player.attack',
+              delta: 4,
+              reason: 'Torch dazzles night-sensitive enemy',
+              removed_after_consecutive_losses: threshold,
+            }],
+          }],
+          choices: [],
+        },
+        '2': { text: 'survived', events: [], choices: [] },
+      },
+      enemies_catalog: {
+        test_enemy_torch: { name: 'Test Enemy', HEALTH: 100 },
+      },
+    });
+  }
+
+  // Case A: 3 consecutive losses with threshold 3 → modifier expires.
+  {
+    const book = buildBookWithModifier(3);
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+    assertTrue(state.combat, 'combat started');
+    assertEqual(state.combat.consecutiveLosses, 0, 'streak starts at 0');
+    assertEqual(state.combat.appliedModifiers.length, 1, 'one frozen modifier');
+    assertEqual(
+      state.combat.appliedModifiers[0].removedAfterConsecutiveLosses,
+      3,
+      'threshold preserved on frozen modifier'
+    );
+
+    // Round 1 — player takes 1, enemy 0. Streak → 1 (below threshold).
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(state.combat.consecutiveLosses, 1, 'streak=1 after round 1');
+
+    // Round 2 — Streak → 2 (still below threshold).
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(state.combat.consecutiveLosses, 2, 'streak=2 after round 2');
+
+    // Round 3 — Streak → 3 (reaches threshold → modifier expires this round-end).
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(state.combat.consecutiveLosses, 3, 'streak=3 after round 3');
+
+    // Expiry log line emitted.
+    const expiredLog = state.log.find(l => /Combat modifier removed.*3 consecutive losses/.test(l));
+    assertTrue(!!expiredLog, 'expiry log line emitted at threshold');
+  }
+
+  // Case B: streak resets on a non-loss round, modifier survives.
+  {
+    const book = buildBook({
+      rules: {
+        stats: [{ name: 'HEALTH' }],
+        health_stat: 'HEALTH',
+        combat_system: {
+          // Round 1, 2: player loses (1 vs 0). Round 3: tie (0 vs 0
+          // resets streak). Round 4, 5: player loses again. Streak
+          // hits 2 after round 5, never reaches threshold of 3.
+          round_script:
+            'if combat.round == 3 then\n' +
+            '  combat.damage_to_enemy = 0\n' +
+            '  combat.damage_to_player = 0\n' +
+            'else\n' +
+            '  combat.damage_to_enemy = 0\n' +
+            '  combat.damage_to_player = 1\n' +
+            'end',
+        },
+      },
+      sections: {
+        '1': {
+          text: 'torch fight reset',
+          events: [{
+            type: 'combat',
+            enemy_ref: 'test_enemy_torch_b',
+            win_to: '2',
+            flee_to: null,
+            combat_modifiers: [{
+              target: 'player.attack',
+              delta: 4,
+              reason: 'Torch',
+              removed_after_consecutive_losses: 3,
+            }],
+          }],
+          choices: [],
+        },
+        '2': { text: 'survived', events: [], choices: [] },
+      },
+      enemies_catalog: {
+        test_enemy_torch_b: { name: 'Test Enemy B', HEALTH: 100 },
+      },
+    });
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+
+    // Rounds 1-2 (loss): streak 1, 2.
+    play.applyAction(state, book, 'attack', []);
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(state.combat.consecutiveLosses, 2, 'streak=2 after two losses');
+
+    // Round 3 (tie / no-damage): streak resets to 0.
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(state.combat.consecutiveLosses, 0, 'streak resets after non-loss round');
+
+    // Rounds 4-5 (loss): streak 1, 2 — still below threshold.
+    play.applyAction(state, book, 'attack', []);
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(state.combat.consecutiveLosses, 2, 'streak=2 after two more losses post-reset');
+
+    const expiredLog = state.log.find(l => /Combat modifier removed/.test(l));
+    assertTrue(!expiredLog, 'no expiry log emitted because streak never reached threshold');
+  }
+
+  // Schema-shape assertion: removed_after_consecutive_losses declared
+  // on combat_modifier.properties with the right type and minimum.
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  const cmProps = schema.definitions.combat_modifier.properties;
+  assertTrue(!!cmProps.removed_after_consecutive_losses, 'combat_modifier.removed_after_consecutive_losses declared');
+  assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
+  assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
+  // Schema title bumped to v1.14.0.
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.14.0', 'schema title bumped to v1.14.0');
 });
 
 // ============================================================

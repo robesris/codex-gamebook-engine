@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.13.0",
+  "title": "Gamebook Format (GBF) v1.14.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -957,6 +957,11 @@
           "type": "string",
           "enum": ["fight", "first_round", "after_first_round", "round"],
           "description": "How long the modifier applies within a combat. `fight` (default when absent): applies every round of the fight. `first_round`: applies only in round 1, then drops off. `after_first_round` (schema v1.7+): applies in round 2 and every subsequent round, but NOT in round 1 — used for section-specific rules like 'add 2 to COMBAT SKILL for the first round only (surprise), then deduct 2 from COMBAT SKILL for the second and subsequent rounds' where the penalty is explicitly scoped to rounds after the first. `round` is reserved for a future per-round dynamic semantic and is currently treated as `fight` by the emulators. Schema v1.7.0 / emulators v3.2.0 honor `first_round` and `after_first_round`; earlier versions treated all values as `fight`. Conditions are still snapshotted at combat start (a modifier gated on an ability the player expends mid-fight stays in effect until the fight ends) — duration narrows WHICH ROUNDS the frozen modifier participates in, not whether the condition is re-evaluated."
+        },
+        "removed_after_consecutive_losses": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Schema v1.14+. Optional per-fight expiry: drop this modifier from the active list after the player loses N combat rounds in a row. Canonical use is Windhammer §446: the player's torch grants +4 CV while held, but `If you lose three combat rounds in a row the torch will have been knocked out of your grasp and your CV must be returned to its normal level` — encoded as `{target: 'player.attack', delta: 4, condition: {type: 'has_item', item: 'torch'}, removed_after_consecutive_losses: 3}`. Semantics: the emulator maintains a per-fight counter `state.combat.consecutiveLosses` that starts at 0 at combat start, increments after any round where the round_script reports `damage_to_player > damage_to_enemy` (post-interaction), and resets to 0 after any other outcome (tie, player win, or no-damage round). Once the counter is at or above this modifier's threshold, the modifier is excluded from the round's active list — the delta is no longer applied — for the remainder of the fight. The modifier does not re-activate if the streak later resets; expiry is one-way and per-fight only. Composes with `condition` (gates whether the modifier ever entered the frozen list) and `duration` (gates which rounds it participates in among the rounds where it has not yet expired). Setting this to 0 is invalid; the minimum is 1, but a threshold of 1 means 'one player loss removes the modifier' which is rarely what books describe."
         }
       }
     },
