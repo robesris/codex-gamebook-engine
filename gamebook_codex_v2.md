@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.18.1
+# THE GAMEBOOK CODEX v2.19.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -277,6 +277,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Vordak / Helghast / Wraith trait that always applies to this enemy type" | Rule 17 | `intrinsic_modifiers` on the enemies_catalog entry (NOT per-section `combat_modifiers`) so the trait travels across every section the enemy appears in |
 | "If you lose three combat rounds in a row the torch is knocked from your grasp / your CV must be returned to its normal level" / a held-item combat bonus that comes off mid-fight after N consecutive losses (NOT a combat-end clause) | Rule 17 (modifier-expiry-on-loss-streak, schema v1.14+) | `combat_modifiers[i].removed_after_consecutive_losses: <N>` on the affected modifier; the emulator filters the modifier out of the active list once the per-fight loss streak (`damage_to_player > damage_to_enemy` rounds in a row) reaches the threshold. Combat continues at the base value; this is NOT `combat.win_after_rounds` (Rule 31, which ENDS the fight) |
 | "Add five points to your combat value for each one held" / "an additional N if you also have Y" / "+M for the X and +N for the Y" / multiple discrete per-item bonuses on the same combat with explicit per-item attribution | Rule 17 (stacked / compound-condition modifiers — no schema change) | One `combat_modifiers[]` entry per discrete bonus, each carrying its own `has_item` (or compound `and`/`or`) `condition`. Stacking is the natural sum across all entries whose conditions pass; compound conditions handle paired-item gates and flag-gated item state ("if the sword is undamaged" → `not has_flag: <item>_damaged`). NEVER a single entry whose `delta` is summed at runtime from inventory count |
+| "Any damage caused by X in each battle round will be limited to N points" / "no more than N damage per round" / "cannot deal more than N per round" / absolute upper bound on the per-round damage total (NOT scaling per-component, NOT additive on inputs) | Rule 32 (per-round damage caps, schema v1.15+) | `damage_caps` array on the combat event (or `intrinsic_damage_caps` on the enemies_catalog entry) with entries of shape `{max, direction?, condition?, reason?}`. Caps clamp the post-interaction per-direction TOTAL at `min(total, max)` after Rule 17 deltas and Rule 18 multipliers have run. Distinct from Rule 17 (additive on inputs) and Rule 18 (multiplicative on components) |
 | "If you have the Hunting Discipline, you do not need to eat" / "the Ranger is exempt from" / "the bearer is immune to" / "you automatically succeed at" / "you may bypass" / "you may ignore" | Rule 15 | Event-level `condition` field gating the affected event (`eat_meal`, `stat_test`, `modify_stat`, etc.) using `not has_ability "Hunting"` or analogous |
 | "If you have the lantern, continue safely; otherwise lose 2 STAMINA" / "if your backpack has room, take the extra meal" / one-time flag-gated bonuses | Rule 15 | Event-level `condition` on the conditional event |
 | "If Weaponskill is chosen, pick R10 to determine weapon type" / "Paladins also roll for starting prayer count" / any rule that gates a *character-creation roll or prompt* on an earlier creation step's outcome (a discipline pick, an earlier rolled value, a flag set during creation) | Rule 15 (char-creation steps extension, schema v1.6+) | `character_creation.steps[]` entry carries a `condition` using the same union as event/choice conditions — usually `has_ability` for discipline gates, `stat_gte` / `stat_lte` for roll-outcome gates, `has_flag` for book-specific creation flags |
@@ -1382,6 +1383,89 @@ After this combat starts: each round the round_script and damage_interactions ru
 **Anti-pattern — using `win_after_rounds` for "combat ends after N rounds (no winner)."** Some books describe combats that simply terminate after N rounds without producing a victory state — both sides withdraw, or the section continues regardless of who's "winning." That's a different mechanic and is not what `win_after_rounds` encodes; this field always navigates to `win_to` on the rounds-survived trigger. For "combat ends, no winner" semantics, encode the section without a combat event at all (use a `roll_dice` or narrative resolution) or flag the case for review — `win_after_rounds` is specifically the survive-to-win semantic.
 
 **Verification.** For every combat event in the book, check the source text for endurance-framed victory language ("hold for N rounds," "survive N rounds," "last out the fight"). If present, the combat carries `win_after_rounds: <N>` matching the source text's count, plus `win_to` set to the post-survive section. NO combat event with endurance-framed source text encodes the win-condition via enemy-health inflation; NO combat event with damage-framed source text carries `win_after_rounds` (the field would silently end fights early and produce victories the book doesn't describe).
+
+---
+
+### Rule 32: Per-Round Damage Caps — Absolute Bounds on Post-Interaction Damage Totals (`damage_caps`)
+
+**The rule:** When a combat has a mechanical rule that **bounds the total damage flowing in a given direction in each round** (rather than scaling individual components or adding to a stat input), encode it as a structured `damage_caps` entry on the combat event (per-encounter situational rules) or as an `intrinsic_damage_caps` entry on the enemy's catalog entry (for traits that travel with the enemy type). The cap is an absolute upper bound: after damage_interactions have scaled per-component damage and the components have summed into a per-direction total, the cap clamps the total at `min(total, cap.max)`. Multiple caps in the same direction compose by taking the minimum (the tightest cap wins).
+
+The canonical example is Windhammer §564 Words of Protection: *"If you have a book titled 'Words of Protection' there is one word within that can help you now. Utter the Word noted previously on your character sheet and any damage caused by Windhammer in each battle round will be limited to two endurance points."* This is **not** a Rule 17 modifier (those are additive deltas on round_script *inputs* — they could change the player's effective COMBAT VALUE going into the round, not the damage taken coming out), and it is **not** a Rule 18 damage_interaction (those are *multiplicative* per-component scalings — a "halved damage" rule, not an absolute "no more than 2 per round" rule, and source filters apply per-component rather than to the total). It is a per-round absolute cap on the post-interaction total, which is its own primitive.
+
+`damage_cap` entries have the following shape:
+
+```json
+{
+  "max": 2,
+  "direction": "outgoing",
+  "condition": {
+    "type": "and",
+    "conditions": [
+      { "type": "has_item", "item": "words_of_protection" },
+      { "type": "has_flag", "flag": "words_of_protection_uttered" }
+    ]
+  },
+  "reason": "Words of Protection limits Windhammer's damage to 2 per round"
+}
+```
+
+**Key fields:**
+
+- **`max` (required, ≥ 0).** The absolute cap value. A cap of 0 zeroes the affected damage flow for the round (semantically similar to a Rule 18 immunity, but applied to the total rather than per-component); a positive value allows partial damage up to that maximum.
+- **`direction`** (default `"outgoing"`). `"outgoing"` caps `damage_to_player`; `"incoming"` caps `damage_to_enemy`. The default matches the canonical use case (protection-style rules limiting incoming-from-enemy damage).
+- **`condition`** (optional). Frozen at combat start, same `and`/`or`/`not`/`has_*` union as combat_modifiers and damage_interactions. Compound conditions are first-class; the canonical Words-of-Protection case requires both the book in inventory AND the recorded-Word flag set. Null or absent → the cap always applies.
+- **`reason`** (optional). Human-readable display string shown in the combat UI's damage-caps panel and written to the playthrough log when the cap fires.
+
+**Composition with Rule 17 and Rule 18.** The three combat-shaping primitives form a layered pipeline:
+
+1. **Rule 17 (`combat_modifiers`)** — additive deltas on `playerData` / `enemyData` BEFORE the round_script runs. The script sees modified `player.attack`, `enemy.armor`, etc.
+2. **Rule 18 (`damage_interactions`)** — multiplicative scaling on each damage component AFTER the script reports `combat.damage_to_enemy` / `combat.damage_to_player`. Component-level filtering by source tags (silver, fire, etc.) happens here.
+3. **Rule 32 (`damage_caps`)** — absolute cap on the per-direction TOTAL, applied AFTER interactions have summed components. No source filtering at this layer; the cap clamps the final number.
+
+A single combat can use all three layers; they don't conflict because they operate at different stages of the damage pipeline. An §564-shaped fight uses Rule 17 (5+ combat_modifiers entries for the stacked weapon bonuses) plus Rule 32 (one damage_cap for Words of Protection), with no Rule 18 interactions needed because no per-component scaling applies.
+
+**Composing with the loss-streak counter (Rule 17 modifier-expiry).** The loss-streak counter measures `damage_to_player > damage_to_enemy` using POST-cap totals — a round whose damage is fully negated by a cap of 0 does NOT count as a player loss for the streak. This matters for fights that combine a cap with a Rule 17 modifier carrying `removed_after_consecutive_losses`: a "fully protected" round resets the streak the same way a no-damage round does.
+
+**Worked example — Windhammer §564 endgame setpiece** (combining Rule 17 stacked modifiers with Rule 32 cap):
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "windhammer_dragon",
+  "win_to": 586,
+  "special_rules": "Stacked weapon bonuses; Words-of-Protection caps damage at 2/round.",
+  "combat_modifiers": [
+    { "target": "player.attack", "delta": 5,
+      "condition": { "type": "has_item", "item": "dragonseye" },
+      "reason": "Dragonseye" }
+    /* ... other stacked entries omitted for brevity, see Rule 17 § "Stacked / compound-condition modifiers" ... */
+  ],
+  "damage_caps": [
+    {
+      "max": 2,
+      "direction": "outgoing",
+      "condition": {
+        "type": "and",
+        "conditions": [
+          { "type": "has_item", "item": "words_of_protection" },
+          { "type": "has_flag", "flag": "words_of_protection_uttered" }
+        ]
+      },
+      "reason": "Words of Protection limits Windhammer's damage to 2 per round"
+    }
+  ]
+}
+```
+
+If the player has neither the book nor the flag set, the cap's condition fails and it's not frozen — full damage flows. If both are present, the cap is frozen and the per-round outgoing-to-player total is bounded at 2. Combat-modifier stacking on the inputs and damage capping on the output run independently.
+
+**Anti-pattern — encoding a cap as a large negative `combat_modifier`.** A modifier of `{target: "player.damage_taken", delta: -3}` doesn't bound the total — modifiers are additive deltas on inputs, not output bounds, and the round_script may not even read a `player.damage_taken` field. A cap is a different kind of object than a modifier; use `damage_caps`.
+
+**Anti-pattern — encoding a cap as a `damage_interaction` with `kind: resistance, multiplier: 0`.** That zeros every component (an immunity), not the total. A 5-damage hit gets multiplied to 0; a 2-damage hit ALSO gets multiplied to 0. The Words-of-Protection rule is "no more than 2 per round" — a 1-damage hit should still deal 1, not 0. Capping is genuinely different from scaling; use `damage_caps`.
+
+**Anti-pattern — encoding per-component caps as a single Rule 32 entry.** Rule 32 caps operate on the post-interaction TOTAL across all components — no source filters, no per-component bounds. If a book has a per-component cap (e.g., "fire damage capped at 2 per round but other types uncapped"), that's a future schema extension or a Rule 18 interaction with a custom multiplier; Rule 32 in v1.15 is the total-cap form.
+
+**Verification.** For every combat event in the book, check the source text for absolute-bounding language on per-round damage totals: *"limited to N points," "no more than N damage," "cannot deal more than N per round," "all damage capped at N," "the cursed sword can only do N damage per round to its wielder."* If present, encode as a `damage_caps` entry with the matching `max` and the direction the source text describes. NO bounding rule is encoded as a Rule 17 modifier or a Rule 18 interaction — those layers do not bound totals.
 
 ---
 
@@ -3179,6 +3263,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 31 (Combat win condition — survive N rounds).** For every combat event in the book I checked the source text's victory framing. If the text describes a combat whose win condition is endurance ("hold the gate for three rounds," "survive five rounds," "last out the storm") rather than enemy defeat, the combat carries `win_after_rounds: <N>` matching the source text's stated count plus `win_to` set to the post-survive section. The emulator's checkCombatEnd ends the fight in victory once `combat.round >= win_after_rounds` with the player still alive; player-death takes priority and enemy-defeat-by-health still wins in parallel. NO combat event with endurance-framed source text encodes the win-condition via inflated enemy health (that mis-encodes the win condition as damage and lets a lucky round produce an early kill the source text doesn't describe); NO combat event with standard damage-framed source text carries `win_after_rounds` (the field would silently end fights early and produce victories the book doesn't describe). For forced-endurance combats with no flee path, `flee_to: null` (or absent).
 
+**Rule 32 (Per-round damage caps).** For every combat event in the book I checked the source text for absolute-bounding language on per-round damage totals ("limited to N points," "no more than N damage," "cannot deal more than N per round," "all damage capped at N"). If present, the rule is encoded as a `damage_caps` entry on the combat event (or `intrinsic_damage_caps` on the enemy's catalog entry) with `max` matching the source-text value and `direction` matching the source text's framing (`outgoing` for "limit damage taken by player," `incoming` for "limit damage dealt by player"). Compound `and` / `or` / `not` conditions handle predicates like "if you have the book AND uttered the Word." NO bounding rule is encoded as a Rule 17 modifier (those are additive deltas on round_script INPUTS, they do not bound output totals) or as a Rule 18 damage_interaction (those are multiplicative scalings per component, they cannot express an absolute total cap). The three combat-shaping primitives operate at different stages: Rule 17 on inputs, Rule 18 on components, Rule 32 on totals — pick the layer that matches the source-text semantic.
+
 **Section 2.1a (Endings placement, schema v1.11+).** The book's `death_endings` and `victory_endings` lists are placed consistently — either both inside `metadata.confidence.{death,victory}_endings` as section-id arrays (single-chat parses, matching the four maintained books) OR both at the top level (`book.death_endings`, `book.victory_endings`) as section-id arrays with integer counts in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). I did NOT mix the two placements within one book (no array at top level AND a duplicating array in confidence), I did NOT silently migrate from one shape to the other mid-merge, and every section id listed in either placement also appears in `sections{}` with `is_ending: true` and the matching `ending_type` (`"death"` for death endings; `"victory"` or `"continuation"` for victory endings).
 
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised. **Combat-modifier targets on derived-stat books:** every per-fight modifier on a derived-stat combat targets either a component field the round_script reads (`player.strength`, `player.weapon_bonus`, etc.) OR a generic accumulator slot the round_script reads as additive (`player.attack` / `enemy.attack`, even though `attack_stat: null`). NO `combat_modifier` entry targets the derived stat name itself (`player.combat_value`, `player.attack_strength`) — that field doesn't exist on the player table because the derived value is computed inside Lua each round. NO `modify_stat` event in any section uses the derived stat name as `stat:` — that event silently no-ops because the derived stat is not a real player-table slot. Per-fight modifiers on derived-stat books go in `combat_modifiers` on the combat event (Rule 17); persistent stat changes go in `modify_stat` on a real **component** stat (`stat: "strength"` etc.).
@@ -3234,7 +3320,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.18.1 / GBF schema v1.14.0 / CLI emulator v3.9.0 / HTML emulator v3.9.0.**
+**Codex v2.19.0 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

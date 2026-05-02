@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.14.0', 'schema title at v1.14.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title at v1.15.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.14.0', 'schema title at v1.14.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title at v1.15.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1384,8 +1384,199 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertTrue(!!cmProps.removed_after_consecutive_losses, 'combat_modifier.removed_after_consecutive_losses declared');
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
-  // Schema title bumped to v1.14.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.14.0', 'schema title bumped to v1.14.0');
+  // Schema title bumped to v1.15.0.
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title bumped to v1.15.0');
+});
+
+// ============================================================
+// Test 24: damage_caps bound the post-interaction per-round
+//          damage total in the cap's direction (Rule 32, schema
+//          v1.15+).
+// ============================================================
+// MOTIVATED_BY: Codex v2.19.0 Rule 32 (per-round damage caps).
+// Pre-v1.15 there was no clean encoding for the Windhammer §564
+// Words of Protection mechanic ("any damage caused by Windhammer
+// in each battle round will be limited to two endurance points").
+// `damage_interactions` (Rule 18) handle multiplicative scaling
+// per component but cannot express an absolute per-round total
+// cap; `combat_modifiers` (Rule 17) are additive deltas on
+// round_script INPUTS, not output bounds. v1.15 adds a parallel
+// `damage_caps` structure on combat events (and
+// `intrinsic_damage_caps` on enemies_catalog entries) bounding
+// the post-interaction per-round damage total in a given
+// direction at `min(total, cap.max)`.
+// END_TO_END_VERIFY: drive Windhammer §564 once it is migrated
+// from the non-canonical chunk1 shape to a canonical Rule 17 +
+// Rule 32 encoding with `combat_modifiers` for the stacked +5/+8/+2
+// bonuses and `damage_caps` for the Words-of-Protection per-round
+// cap; confirm the player takes at most 2 damage per round when
+// the book + flag are both present.
+test('damage_caps bound post-interaction per-round damage total', () => {
+  // Case A: outgoing cap of 2 with round_script reporting damage_to_player=5
+  //         → player takes 2, not 5.
+  {
+    const book = buildBook({
+      rules: {
+        stats: [{ name: 'HEALTH' }],
+        health_stat: 'HEALTH',
+        combat_system: {
+          // Player takes 5 damage / deals 0 every round. With a cap of 2,
+          // the post-cap player total is 2.
+          round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 5',
+        },
+      },
+      sections: {
+        '1': {
+          text: 'protected fight',
+          events: [{
+            type: 'combat',
+            enemy_ref: 'test_enemy_cap',
+            win_to: '2',
+            flee_to: null,
+            damage_caps: [{
+              max: 2,
+              direction: 'outgoing',
+              reason: 'Words of Protection',
+            }],
+          }],
+          choices: [],
+        },
+        '2': { text: 'survived', events: [], choices: [] },
+      },
+      enemies_catalog: {
+        test_enemy_cap: { name: 'Test Enemy Cap', HEALTH: 100 },
+      },
+    });
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+    assertTrue(state.combat, 'combat started');
+    assertEqual(state.combat.appliedDamageCaps.length, 1, 'one frozen cap');
+    assertEqual(state.combat.appliedDamageCaps[0].max, 2, 'cap max preserved');
+    assertEqual(state.combat.appliedDamageCaps[0].direction, 'outgoing', 'direction preserved');
+
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    const hpAfter = state.stats.HEALTH;
+    assertEqual(hpBefore - hpAfter, 2, 'player took 2 damage (capped from 5)');
+
+    const capLog = state.log.find(l => /Damage cap: damage_to_player 5 .* 2/.test(l));
+    assertTrue(!!capLog, 'cap log line emitted with pre→post values');
+  }
+
+  // Case B: cap is condition-gated; condition false → cap not applied,
+  //         player takes the full 5.
+  {
+    const book = buildBook({
+      rules: {
+        stats: [{ name: 'HEALTH' }],
+        health_stat: 'HEALTH',
+        combat_system: {
+          round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 5',
+        },
+      },
+      sections: {
+        '1': {
+          text: 'no-protection fight',
+          events: [{
+            type: 'combat',
+            enemy_ref: 'test_enemy_cap_b',
+            win_to: '2',
+            flee_to: null,
+            damage_caps: [{
+              max: 2,
+              direction: 'outgoing',
+              condition: { type: 'has_item', item: 'words_of_protection' },
+              reason: 'Words of Protection (gated)',
+            }],
+          }],
+          choices: [],
+        },
+        '2': { text: 'survived', events: [], choices: [] },
+      },
+      enemies_catalog: {
+        test_enemy_cap_b: { name: 'Test Enemy Cap B', HEALTH: 100 },
+      },
+    });
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = []; // no words_of_protection — condition fails
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+    assertEqual(state.combat.appliedDamageCaps.length, 0, 'cap filtered out by failing condition');
+
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 5, 'player took full 5 damage (cap not applied)');
+  }
+
+  // Case C: cap of 0 negates damage entirely; the round counts as a
+  //         non-loss because post-cap playerTotal = 0 = enemyTotal.
+  {
+    const book = buildBook({
+      rules: {
+        stats: [{ name: 'HEALTH' }],
+        health_stat: 'HEALTH',
+        combat_system: {
+          round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 5',
+        },
+      },
+      sections: {
+        '1': {
+          text: 'fully protected fight',
+          events: [{
+            type: 'combat',
+            enemy_ref: 'test_enemy_cap_c',
+            win_to: '2',
+            flee_to: null,
+            damage_caps: [{ max: 0, direction: 'outgoing', reason: 'Full protection' }],
+          }],
+          choices: [],
+        },
+        '2': { text: 'survived', events: [], choices: [] },
+      },
+      enemies_catalog: {
+        test_enemy_cap_c: { name: 'Test Enemy Cap C', HEALTH: 100 },
+      },
+    });
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 0, 'player took 0 damage (cap of 0)');
+    assertEqual(state.combat.consecutiveLosses, 0, 'streak does not increment on a fully-capped round');
+  }
+
+  // Schema-shape assertions.
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title at v1.15.0');
+  const eventProps = schema.definitions.event.properties;
+  assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
+  assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
+  assertTrue(!!schema.definitions.damage_cap, 'damage_cap definition declared');
+  const dcProps = schema.definitions.damage_cap.properties;
+  assertEqual(dcProps.max.type, 'number', 'damage_cap.max is number');
+  assertEqual(dcProps.max.minimum, 0, 'damage_cap.max minimum is 0');
+  assertTrue(Array.isArray(schema.definitions.damage_cap.required) && schema.definitions.damage_cap.required.includes('max'), 'max is required');
+  assertEqual(dcProps.direction.enum.join(','), 'incoming,outgoing', 'direction enum is incoming|outgoing');
 });
 
 // ============================================================

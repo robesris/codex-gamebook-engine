@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.9.0';
+const CODEX_EMULATOR_VERSION = '3.10.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.9.0';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '20cc6a4';
+const CODEX_EMULATOR_COMMIT = '4ac2758';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -1383,6 +1383,34 @@ function startCombat(event, state, book) {
     });
   }
 
+  // Evaluate damage_caps (schema v1.15+, Rule 32) once at combat start, the
+  // same way damage_interactions are frozen. Merge the combat event's
+  // `damage_caps` with each enemy's `intrinsic_damage_caps`, evaluate each
+  // entry's optional condition, and freeze passing entries on
+  // state.combat.appliedDamageCaps. Each round, after interactions scale
+  // per-component damage and components sum into per-direction totals,
+  // matching caps bound the totals at min(total, cap.max). Distinguished
+  // from damage_interactions (multiplicative on components) — caps are
+  // absolute bounds on the post-interaction TOTAL.
+  const eventCaps = Array.isArray(event.damage_caps) ? event.damage_caps : [];
+  const intrinsicCaps = [];
+  for (const en of enemies) {
+    const cat = en.data || {};
+    if (Array.isArray(cat.intrinsic_damage_caps)) {
+      intrinsicCaps.push(...cat.intrinsic_damage_caps);
+    }
+  }
+  const appliedDamageCaps = [];
+  for (const cap of [...eventCaps, ...intrinsicCaps]) {
+    if (cap.condition && !evalCondition(cap.condition, state, book)) continue;
+    if (typeof cap.max !== 'number' || cap.max < 0) continue;
+    appliedDamageCaps.push({
+      max: cap.max,
+      direction: cap.direction || 'outgoing',
+      reason: cap.reason || null,
+    });
+  }
+
   state.combat = {
     enemies,
     currentEnemyIdx: 0,
@@ -1399,6 +1427,9 @@ function startCombat(event, state, book) {
     // Frozen, condition-evaluated damage_interactions list for this combat.
     // Source filtering happens per-round per-component in runCombatRound.
     appliedDamageInteractions,
+    // Schema v1.15+ (Rule 32): frozen, condition-evaluated damage_caps
+    // bounding the post-interaction per-round damage total per direction.
+    appliedDamageCaps,
     round: 0,
     lastRoundResult: null,
     awaitingPostRound: false,
@@ -2427,8 +2458,32 @@ function runCombatRound(forcedRollsArg, state, book) {
   // Apply damage_interactions (scale each component per interaction
   // filters) then sum into a final scalar damage-to-apply for each side.
   const interactions = combat.appliedDamageInteractions || [];
-  const enemyTotal = applyDamageInteractions(enemyComponents, interactions, 'incoming', state, book, combat.round);
-  const playerTotal = applyDamageInteractions(playerComponents, interactions, 'outgoing', state, book, combat.round);
+  let enemyTotal = applyDamageInteractions(enemyComponents, interactions, 'incoming', state, book, combat.round);
+  let playerTotal = applyDamageInteractions(playerComponents, interactions, 'outgoing', state, book, combat.round);
+
+  // Apply damage_caps (schema v1.15+, Rule 32) post-interaction. For each
+  // direction, the tightest matching cap bounds the per-round total.
+  // Healing (negative totals) bypasses caps — caps only bound positive
+  // damage; a damage cap should not flip a heal into nothing.
+  const caps = combat.appliedDamageCaps || [];
+  if (caps.length > 0) {
+    if (enemyTotal > 0) {
+      for (const c of caps) {
+        if (c.direction === 'incoming' && enemyTotal > c.max) {
+          state.log.push(`Damage cap: damage_to_enemy ${enemyTotal} → ${c.max}${c.reason ? ' (' + c.reason + ')' : ''}`);
+          enemyTotal = c.max;
+        }
+      }
+    }
+    if (playerTotal > 0) {
+      for (const c of caps) {
+        if ((c.direction || 'outgoing') === 'outgoing' && playerTotal > c.max) {
+          state.log.push(`Damage cap: damage_to_player ${playerTotal} → ${c.max}${c.reason ? ' (' + c.reason + ')' : ''}`);
+          playerTotal = c.max;
+        }
+      }
+    }
+  }
 
   // Subtract damage from health. Negative damage = healing; clamp to 0
   // on the damage side. Healing is applied directly and can exceed

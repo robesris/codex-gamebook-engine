@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.14.0",
+  "title": "Gamebook Format (GBF) v1.15.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -729,6 +729,11 @@
           "description": "combat: Schema v1.5+. An ordered list of per-encounter damage_interactions — immunities, resistances, and weaknesses that scale the damage flowing through the combat. Each entry has a `kind` (immunity/resistance/weakness), an optional `multiplier` override, an optional `direction` (incoming/outgoing), optional source filters (`source_has_any`/`source_lacks_all`), an optional `condition` gating the interaction on player state, and an optional human-readable `reason`. The emulator evaluates each entry's `condition` at combat start (frozen for the fight), then applies the passing entries to each damage component reported by the round_script, multiplying damage by the appropriate factor (0 for immunity, 0.5 for resistance, 2.0 for weakness, or whatever `multiplier` overrides). Use per-encounter `damage_interactions` for situational rules that apply only to this specific fight (e.g., 'in this chamber, fire damage is doubled'); for traits that belong to the enemy type itself, use the enemy's `intrinsic_damage_interactions` field instead. See Rule 18 for the full specification.",
           "items": { "$ref": "#/definitions/damage_interaction" }
         },
+        "damage_caps": {
+          "type": "array",
+          "description": "combat: Schema v1.15+. An ordered list of per-encounter damage_caps — absolute upper bounds on the post-interaction per-round damage total in a given direction (incoming = damage to enemy, outgoing = damage to player). Each entry has a required `max` (the cap value), an optional `direction` (default `outgoing`), an optional `condition` gating the cap on player state, and an optional human-readable `reason`. The emulator evaluates each entry's `condition` once at combat start (frozen for the fight) and freezes the passing entries on `state.combat.appliedDamageCaps`. Each round, after damage_interactions have scaled per-component damage and the components have summed into a per-direction total, every active cap matching that direction is applied as `total = min(total, cap.max)`; multiple matching caps compose by taking the smallest (the tightest cap wins). Use per-encounter `damage_caps` for situational rules that apply only to this specific fight — the canonical example is Windhammer §564's Words of Protection (\"any damage caused by Windhammer in each battle round will be limited to two endurance points\" → `{max: 2, direction: 'outgoing', condition: {type: 'and', conditions: [{type: 'has_item', item: 'words_of_protection'}, {type: 'has_flag', flag: 'words_of_protection_uttered'}]}}`). For traits that belong to the enemy type itself (e.g., a creature whose attacks always scale to a maximum), use the enemy's `intrinsic_damage_caps` field instead. Distinguished from Rule 17 `combat_modifiers` (additive deltas on round_script INPUTS) and Rule 18 `damage_interactions` (multiplicative scaling on each damage COMPONENT) — caps are absolute bounds on the damage TOTAL after both prior layers run. See Rule 32.",
+          "items": { "$ref": "#/definitions/damage_cap" }
+        },
         "interrupt_on_first_player_hit": { "type": "boolean", "description": "combat: if true, redirect after player's first successful wound." },
 
         "method": { "type": "string", "description": "stat_test: test method (e.g., '2d6_under')." },
@@ -921,6 +926,11 @@
           "type": "array",
           "description": "Schema v1.5+. Per-enemy damage_interactions (immunities, resistances, weaknesses) that travel with this enemy type across every section it appears in. Canonical example: Helghast in Lone Wolf 2 are immune to any weapon that is not silver, blessed, or the Sommerswerd — encoded as `{kind: 'immunity', source_lacks_all: ['silver', 'blessed', 'sommerswerd'], reason: 'Helghast are harmed only by silvered or blessed weapons'}`. Other examples: a fire elemental resisting blunt damage and taking double from cold (two separate entries), an undead creature immune to poison damage, a golem taking half damage from edged weapons. The emulator merges intrinsic_damage_interactions from every enemy in the combat with any per-section damage_interactions on the combat event itself, evaluates the optional conditions once at combat start, and applies the surviving entries to each damage component the round_script reports. Source filtering (`source_has_any` / `source_lacks_all`) happens per-component per-round because the source set depends on what the round_script emits that round. See codex doc Rule 18 for the full specification and worked examples.",
           "items": { "$ref": "#/definitions/damage_interaction" }
+        },
+        "intrinsic_damage_caps": {
+          "type": "array",
+          "description": "Schema v1.15+. Per-enemy damage_caps that travel with this enemy type across every section it appears in. Same shape as the per-encounter `damage_caps` field on combat events: each entry is a `{max, direction, condition, reason}` object bounding the post-interaction per-round damage total in the given direction. Use intrinsic_damage_caps for traits that are properties of the enemy type rather than of one specific encounter — e.g., a guardian whose attacks are always non-lethal (capped at N damage per round wherever the player meets it). The emulator merges intrinsic_damage_caps from every enemy in the combat with any per-section damage_caps on the combat event itself, evaluates each entry's condition once at combat start, and freezes the passing entries on `state.combat.appliedDamageCaps`. See codex doc Rule 32 for the full specification.",
+          "items": { "$ref": "#/definitions/damage_cap" }
         }
       },
       "additionalProperties": {
@@ -1005,6 +1015,35 @@
         "reason": {
           "type": "string",
           "description": "Human-readable explanation of why the interaction applies. Shown in the combat UI's damage interactions panel so the player knows what's in effect, and written to the playthrough log when the interaction fires. Not interpreted by the emulator; purely for display and debugging. Examples: 'Helghast are harmed only by silvered or blessed weapons', 'Fire elemental is disrupted by cold', 'Skeleton is immune to poison', 'Undead take double damage from holy attacks'."
+        }
+      }
+    },
+
+    "damage_cap": {
+      "type": "object",
+      "required": ["max"],
+      "description": "Schema v1.15+. A single per-encounter damage cap — an absolute upper bound on the post-interaction per-round damage total in a given direction. Caps live in two places: `damage_caps` on combat events (per-section situational rules) and `intrinsic_damage_caps` on enemies_catalog entries (rules that travel with the enemy type). Both use this same shape. The emulator evaluates each entry's optional `condition` once at combat start and freezes the passing entries; each round, after damage_interactions have scaled per-component damage and the components have summed into a per-direction total, every active cap matching that direction is applied as `total = min(total, cap.max)` (multiple matching caps compose by taking the smallest). Distinguished from `combat_modifier` (Rule 17 — additive deltas on round_script INPUTS) and `damage_interaction` (Rule 18 — multiplicative scaling on each damage COMPONENT) — caps are absolute bounds on the damage TOTAL after both prior layers run. Canonical example: Windhammer §564 Words of Protection (`any damage caused by Windhammer in each battle round will be limited to two endurance points` → `{max: 2, direction: 'outgoing', condition: {type: 'and', conditions: [{type: 'has_item', item: 'words_of_protection'}, {type: 'has_flag', flag: 'words_of_protection_uttered'}]}}`). See codex doc Rule 32 for the full specification.",
+      "properties": {
+        "max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Required. The absolute cap value applied to the post-interaction per-round damage total in the cap's direction. Must be ≥ 0. A cap of 0 zeroes the affected damage flow for the round (semantically similar to a `damage_interaction` of `kind: immunity` but applied to the total rather than per-component); a positive cap allows partial damage up to that maximum."
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["incoming", "outgoing"],
+          "description": "Which damage flow the cap bounds. `outgoing` (default when absent) means damage dealt BY the enemy TO the player — the common case, used for protection-style rules like Windhammer §564 Words of Protection. `incoming` means damage dealt TO the enemy BY the player — used for rare cases where a fight has a cap on how much damage the player can deal per round (e.g., a sub-creature stage of a multi-form boss that takes at most N damage per round regardless of the player's roll). The emulator caps `damage_to_player` against `outgoing` caps and `damage_to_enemy` against `incoming` caps."
+        },
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Optional gate evaluated once at combat start. Same condition union as combat_modifiers and damage_interactions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`). Condition filtering gates the entire cap on player/world state. Frozen at combat start; mid-combat state changes do not re-evaluate. Null or absent means the cap is not condition-gated and always applies for the fight's duration. Compound `and` / `or` / `not` conditions are first-class (canonical: §564 Words of Protection requires both the book in inventory AND the recorded-Word flag set)."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of why the cap applies. Shown in the combat UI's damage caps panel so the player knows what's in effect, and written to the playthrough log when the cap fires. Not interpreted by the emulator; purely for display and debugging. Examples: 'Words of Protection limits Windhammer's damage to 2 per round', 'Lich's curse: max 3 damage per round'."
         }
       }
     }

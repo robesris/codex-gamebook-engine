@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.9.0';
+const CODEX_EMULATOR_VERSION = '3.10.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -686,7 +686,7 @@ const CODEX_EMULATOR_VERSION = '3.9.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '20cc6a4';
+const CODEX_EMULATOR_COMMIT = '4ac2758';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -3001,6 +3001,28 @@ function handleCombat(event) {
     });
   }
 
+  // Evaluate damage_caps (schema v1.15+, Rule 32) once at combat start, the
+  // same way damage_interactions are frozen. See CLI emulator startCombat()
+  // for the reference shape and Rule 32 for the full specification.
+  const eventCaps = Array.isArray(event.damage_caps) ? event.damage_caps : [];
+  const intrinsicCaps = [];
+  for (const en of enemies) {
+    const cat = getEnemy(en.ref) || {};
+    if (Array.isArray(cat.intrinsic_damage_caps)) {
+      intrinsicCaps.push(...cat.intrinsic_damage_caps);
+    }
+  }
+  const appliedDamageCaps = [];
+  for (const cap of [...eventCaps, ...intrinsicCaps]) {
+    if (cap.condition && !evaluateCondition(cap.condition)) continue;
+    if (typeof cap.max !== 'number' || cap.max < 0) continue;
+    appliedDamageCaps.push({
+      max: cap.max,
+      direction: cap.direction || 'outgoing',
+      reason: cap.reason || null,
+    });
+  }
+
   // Store combat state for callbacks — all mutable state lives here
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules, winAfterRounds,
@@ -3010,6 +3032,9 @@ function handleCombat(event) {
     appliedModifiers,
     // Frozen damage_interactions — scale damage at round end.
     appliedDamageInteractions,
+    // Frozen damage_caps (schema v1.15+, Rule 32) — bound post-interaction
+    // per-round damage totals per direction.
+    appliedDamageCaps,
     roundNum: 0, combatLog: [], waitingForLuckChoice: false,
     combatOver: false,
     // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): per-fight
@@ -3248,8 +3273,34 @@ function handleCombat(event) {
     const enemyComponents = normalizeDamage(result.combat?.damage_to_enemy);
     const playerComponents = normalizeDamage(result.combat?.damage_to_player);
     const interactions = c.appliedDamageInteractions || [];
-    const enemyTotal = applyDamageInteractions(enemyComponents, interactions, 'incoming', c.combatLog, c.roundNum);
-    const playerTotal = applyDamageInteractions(playerComponents, interactions, 'outgoing', c.combatLog, c.roundNum);
+    let enemyTotal = applyDamageInteractions(enemyComponents, interactions, 'incoming', c.combatLog, c.roundNum);
+    let playerTotal = applyDamageInteractions(playerComponents, interactions, 'outgoing', c.combatLog, c.roundNum);
+
+    // Apply damage_caps (schema v1.15+, Rule 32) post-interaction. The
+    // tightest matching cap bounds the per-round total per direction.
+    // Healing (negative totals) bypasses caps — caps only bound positive
+    // damage. The post-cap totals are also what the loss-streak counter
+    // (Rule 17 expiry) measures, so a cap that fully negates a hit (e.g.,
+    // max: 0) does NOT count as a player loss.
+    const caps = c.appliedDamageCaps || [];
+    if (caps.length > 0) {
+      if (enemyTotal > 0) {
+        for (const cap of caps) {
+          if (cap.direction === 'incoming' && enemyTotal > cap.max) {
+            c.combatLog.push(`<span class="hit">Damage cap: damage_to_enemy ${enemyTotal} → ${cap.max}${cap.reason ? ' (' + cap.reason + ')' : ''}</span>`);
+            enemyTotal = cap.max;
+          }
+        }
+      }
+      if (playerTotal > 0) {
+        for (const cap of caps) {
+          if ((cap.direction || 'outgoing') === 'outgoing' && playerTotal > cap.max) {
+            c.combatLog.push(`<span class="hit">Damage cap: damage_to_player ${playerTotal} → ${cap.max}${cap.reason ? ' (' + cap.reason + ')' : ''}</span>`);
+            playerTotal = cap.max;
+          }
+        }
+      }
+    }
 
     if (enemyTotal !== 0) {
       enemy.currentHealth = Math.max(0, enemy.currentHealth - enemyTotal);
