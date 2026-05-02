@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.18.0
+# THE GAMEBOOK CODEX v2.18.1
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -276,6 +276,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Add N to your COMBAT SKILL for the duration of this fight" / "deduct N from Attack Strength" / "for this combat only" / surprise attacks / torch penalties | Rules 14 + 17 | BOTH the narrative `special_rules` text (Rule 14, for display) AND the structured `combat_modifiers` entry on the combat event (Rule 17, for enforcement) — coexist, never one alone |
 | "Vordak / Helghast / Wraith trait that always applies to this enemy type" | Rule 17 | `intrinsic_modifiers` on the enemies_catalog entry (NOT per-section `combat_modifiers`) so the trait travels across every section the enemy appears in |
 | "If you lose three combat rounds in a row the torch is knocked from your grasp / your CV must be returned to its normal level" / a held-item combat bonus that comes off mid-fight after N consecutive losses (NOT a combat-end clause) | Rule 17 (modifier-expiry-on-loss-streak, schema v1.14+) | `combat_modifiers[i].removed_after_consecutive_losses: <N>` on the affected modifier; the emulator filters the modifier out of the active list once the per-fight loss streak (`damage_to_player > damage_to_enemy` rounds in a row) reaches the threshold. Combat continues at the base value; this is NOT `combat.win_after_rounds` (Rule 31, which ENDS the fight) |
+| "Add five points to your combat value for each one held" / "an additional N if you also have Y" / "+M for the X and +N for the Y" / multiple discrete per-item bonuses on the same combat with explicit per-item attribution | Rule 17 (stacked / compound-condition modifiers — no schema change) | One `combat_modifiers[]` entry per discrete bonus, each carrying its own `has_item` (or compound `and`/`or`) `condition`. Stacking is the natural sum across all entries whose conditions pass; compound conditions handle paired-item gates and flag-gated item state ("if the sword is undamaged" → `not has_flag: <item>_damaged`). NEVER a single entry whose `delta` is summed at runtime from inventory count |
 | "If you have the Hunting Discipline, you do not need to eat" / "the Ranger is exempt from" / "the bearer is immune to" / "you automatically succeed at" / "you may bypass" / "you may ignore" | Rule 15 | Event-level `condition` field gating the affected event (`eat_meal`, `stat_test`, `modify_stat`, etc.) using `not has_ability "Hunting"` or analogous |
 | "If you have the lantern, continue safely; otherwise lose 2 STAMINA" / "if your backpack has room, take the extra meal" / one-time flag-gated bonuses | Rule 15 | Event-level `condition` on the conditional event |
 | "If Weaponskill is chosen, pick R10 to determine weapon type" / "Paladins also roll for starting prayer count" / any rule that gates a *character-creation roll or prompt* on an earlier creation step's outcome (a discipline pick, an earlier rolled value, a flag set during creation) | Rule 15 (char-creation steps extension, schema v1.6+) | `character_creation.steps[]` entry carries a `condition` using the same union as event/choice conditions — usually `has_ability` for discipline gates, `stat_gte` / `stat_lte` for roll-outcome gates, `has_flag` for book-specific creation flags |
@@ -728,6 +729,48 @@ Encoding: add an optional `removed_after_consecutive_losses: <integer ≥ 1>` fi
 ```
 
 The `condition` gates whether the modifier ever entered the frozen list (no torch in inventory → no bonus from round 1). The `removed_after_consecutive_losses` then runs alongside the `duration` filter: a modifier survives this round if BOTH (a) duration is currently active AND (b) the loss-streak counter is below the threshold. The counter snapshots at round start, so a modifier expiring on round N still applies during round N's math; from round N+1 onward it is excluded from the active list and its delta is no longer applied. The emulator emits a "Combat modifier removed" log line at the moment of expiry so the player sees a discrete event ("torch knocked from grasp") rather than a silent stat change. **What this is NOT:** a combat-end clause (Rule 31's `win_after_rounds` is the encoding for "lose three in a row → combat ends"); a permanent-inventory effect (the torch item is not removed from `state.inventory` — only the bonus's contribution is lost; whether the book describes the item as physically lost is a separate decision the encoding does not need to make); or a substitute for `duration` (which narrows by round number, not by outcome).
+
+**Stacked / compound-condition modifiers: encoding multiple per-item bonuses on a single combat (no schema change).** Some sections — typically endgame setpiece battles — describe multiple discrete combat bonuses that *all* apply when their respective conditions are met, with the source text often stating an explicit per-item stacking rule. The canonical example is Windhammer §564 (the Windhammer endgame): *"If you have the Dragonseye, Dragonclaw or Morgen's Spear mentioned in the previous section in your possession **add five points to your combat value for each one held**. … If you have previously obtained a suit of Dwarvendim Dragon-armour and a bone-tipped lance you may add an additional eight points to your combat value. … Than'durion. If you have come through this quest with the great sword undamaged it will give you a small benefit of two additional points to your combat rating."* The discriminating phrase is **"for each one held"** (or "for each one you have," "for every," "an additional N if you also have") — the source text is *explicitly* additive, not max-take.
+
+The canonical encoding is **one `combat_modifiers[]` entry per discrete bonus**, with each entry's `condition` mirroring the predicate the source text states for that bonus. Stacking is the natural sum across all entries whose conditions evaluate true at combat start — the emulator already merges every passing entry into the frozen list and applies every delta, so additive stacking is the default behavior of Rule 17 as long as one entry per bonus is emitted. Encoding for §564:
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "windhammer_dragon",
+  "win_to": 586,
+  "special_rules": "Add 5 CV for each of: Dragonseye, Dragonclaw, Morgen's Spear (in possession). +8 CV if you have BOTH Dwarvendim Dragon-armour AND the bone-tipped lance. +2 CV if Than'durion is undamaged.",
+  "combat_modifiers": [
+    { "target": "player.attack", "delta": 5,
+      "condition": { "type": "has_item", "item": "dragonseye" },
+      "reason": "Dragonseye" },
+    { "target": "player.attack", "delta": 5,
+      "condition": { "type": "has_item", "item": "dragonclaw" },
+      "reason": "Dragonclaw" },
+    { "target": "player.attack", "delta": 5,
+      "condition": { "type": "has_item", "item": "morgens_spear" },
+      "reason": "Morgen's Spear" },
+    { "target": "player.attack", "delta": 8,
+      "condition": { "type": "and", "conditions": [
+        { "type": "has_item", "item": "dwarvendim_dragon_armour" },
+        { "type": "has_item", "item": "bone_tipped_lance" }
+      ]},
+      "reason": "Dwarvendim Dragon-armour + bone-tipped lance pair" },
+    { "target": "player.attack", "delta": 2,
+      "condition": { "type": "and", "conditions": [
+        { "type": "has_item", "item": "thandurion" },
+        { "type": "not", "condition": { "type": "has_flag", "flag": "thandurion_damaged" } }
+      ]},
+      "reason": "Than'durion (undamaged)" }
+  ]
+}
+```
+
+**Three things to notice.** (1) The 3× +5 bonuses are **three separate entries with independent `has_item` conditions** — not a single entry with a runtime sum, because the source text attributes each +5 to a specific named item and the player may hold any subset (zero, one, two, or all three). The sum is decided per-fight by the player's actual inventory, not by an emulator-side count loop. (2) Compound `{type: "and", conditions: [...]}` (and the matching `or` / `not`) is the canonical encoding for **paired-item gates** ("the +8 only fires if you have both") and **flag-gated item state** ("the +2 only fires if the sword is undamaged"). The schema's `condition` definition has supported `and`/`or` since the original v1 release; both reference emulators have implemented compound conditions correctly the whole time. (3) The "undamaged" predicate uses a **negative-form flag** (`not has_flag: thandurion_damaged`) rather than a positive-form one (`has_flag: thandurion_undamaged`) so the default state of an unset flag matches the default state of an undamaged item — sections elsewhere in the book that damage the sword set the flag with a `set_flag` event; sections that grant the sword do not need to set anything.
+
+**Verification check (additive stacking).** For every section whose source text describes multiple discrete combat bonuses with explicit per-item attribution ("for each one held," "an additional N if you also have," "+M for the X, +N for the Y"), the combat event carries one `combat_modifiers[]` entry per bonus, each with the predicate that bonus depends on. NO single entry attempts to sum bonuses at runtime via a `script` or a magnitude that depends on inventory count — that loses both the source attribution and the per-item conditional gating. NO bonus is silently dropped because "the player can't have all of them at once" — every condition that COULD pass at combat start gets its own entry; the emulator filters them down to the actually-passing set automatically.
+
+**What this is NOT.** Not a Rule 19 (`stat_modifier`) item-intrinsic bonus — those are *always-on* item-level modifiers that travel with the item across every section it is held; the §564-style bonuses are scoped to one specific encounter (the source text states "for this combat" / "in the battle to come" framing), so they belong on the combat event, not on the items_catalog entry. Not a Rule 23 (`standing_modifiers`) book-wide bonus — those apply to every combat in the book; §564 applies only to the final fight. Not a Rule 18 (`damage_interactions`) damage-scaling effect — Rule 18 is multiplicative on damage outputs; §564's bonuses are additive on attack inputs. The pattern is purely Rule 17 with multiple entries; no new rule, no new schema field, no emulator change.
 
 ---
 
@@ -3106,7 +3149,7 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 16 (Codex maintainer discipline).** *(Only applies if I am editing the codex doc itself, not parsing a book.)* When I shipped a doc commit that changed a rule, the same commit added a row to the topical decision table at the top of the Critical Rules section AND added one entry to this checklist for the new rule. The codex's job is to produce correct output by default; output patches do not compound.
 
-**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. All modifiers are per-section on the combat event — even when the same enemy type appears in multiple sections with the same rule, the modifier belongs on each combat event independently because gamebook encounters are self-contained. **Modifier-expiry-on-loss-streak (schema v1.14+).** If the source text says a per-fight bonus comes off mid-combat after the player loses N rounds in a row (canonical: Windhammer §446 — "If you lose three combat rounds in a row the torch will have been knocked out of your grasp and your CV must be returned to its normal level"), the modifier carries `removed_after_consecutive_losses: <N>` matching the source-text count. Combat does NOT end at the threshold; that is Rule 31's `win_after_rounds`. The emulator drops the modifier from the active list once the per-fight loss-streak counter reaches the threshold, and the modifier's inventory item (e.g., the torch) is NOT removed by the field — only the bonus is lost.
+**Rule 17 (Combat modifiers structurally).** For every combat with a mechanical modifier (a per-fight bonus or penalty I extracted under Rule 14), I encoded it BOTH as `special_rules` text (display) AND as a structured `combat_modifiers` entry on the combat event with a dot-path `target`, signed `delta`, optional `condition`, and `reason`. All modifiers are per-section on the combat event — even when the same enemy type appears in multiple sections with the same rule, the modifier belongs on each combat event independently because gamebook encounters are self-contained. **Modifier-expiry-on-loss-streak (schema v1.14+).** If the source text says a per-fight bonus comes off mid-combat after the player loses N rounds in a row (canonical: Windhammer §446 — "If you lose three combat rounds in a row the torch will have been knocked out of your grasp and your CV must be returned to its normal level"), the modifier carries `removed_after_consecutive_losses: <N>` matching the source-text count. Combat does NOT end at the threshold; that is Rule 31's `win_after_rounds`. The emulator drops the modifier from the active list once the per-fight loss-streak counter reaches the threshold, and the modifier's inventory item (e.g., the torch) is NOT removed by the field — only the bonus is lost. **Stacked / compound-condition modifiers.** For every section whose source text describes multiple discrete combat bonuses with explicit per-item attribution ("for each one held," "an additional N if you also have," "+M for the X, +N for the Y" — canonical: Windhammer §564 endgame), the combat event carries one `combat_modifiers[]` entry per discrete bonus, each with the predicate that bonus depends on. Compound `and` / `or` / `not` conditions handle paired-item gates ("+8 if you have BOTH X AND Y") and flag-gated item state ("the sword's bonus only applies if undamaged" → `not has_flag: <item>_damaged`). NO single entry attempts to sum bonuses at runtime via a `script` or via a `delta` magnitude that depends on inventory count — the source attribution and the per-item conditional gating are both lost in that shape. Stacking is the natural additive sum across all entries whose conditions pass at combat start.
 
 **Rule 18 (Damage interactions).** For every immunity, resistance, or weakness the book describes that scales damage rather than adding to a stat input ("immune to non-silver weapons," "takes half damage from blunt," "double damage from fire"), I encoded it as a `damage_interactions` (per-encounter) or `intrinsic_damage_interactions` (per-enemy-type) entry — not as a large negative `combat_modifier`. The round_script reports damage as `combat.damage_to_enemy` / `combat.damage_to_player` (not by mutating `*.health` directly), and uses the full `{amount, sources}` component-list form for any attack that deals more than one damage type in one swing.
 
@@ -3191,7 +3234,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.18.0 / GBF schema v1.14.0 / CLI emulator v3.9.0 / HTML emulator v3.9.0.**
+**Codex v2.18.1 / GBF schema v1.14.0 / CLI emulator v3.9.0 / HTML emulator v3.9.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
