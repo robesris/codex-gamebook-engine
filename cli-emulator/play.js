@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.11.0';
+const CODEX_EMULATOR_VERSION = '3.12.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1168,6 +1168,16 @@ function handleEvent(event, state, book) {
       if (!state.flags.includes(event.flag)) state.flags.push(event.flag);
       state.log.push(`Flag set: ${event.flag}`);
       return 'continue';
+    case 'clear_flag': {
+      const idx = state.flags.indexOf(event.flag);
+      if (idx >= 0) {
+        state.flags.splice(idx, 1);
+        state.log.push(`Flag cleared: ${event.flag}${event.reason ? ' (' + event.reason + ')' : ''}`);
+      } else {
+        state.log.push(`Flag clear no-op: ${event.flag} was not set${event.reason ? ' (' + event.reason + ')' : ''}`);
+      }
+      return 'continue';
+    }
     case 'combat':
       return startCombat(event, state, book);
     case 'stat_test':

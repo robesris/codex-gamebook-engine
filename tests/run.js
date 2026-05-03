@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title at v1.16.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title at v1.17.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title at v1.16.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title at v1.17.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title bumped to v1.16.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title bumped to v1.17.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title at v1.16.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title at v1.17.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1688,6 +1688,79 @@ test('modify_initial_only reduces initial without touching current and respects 
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.modify_initial_only, 'event.modify_initial_only declared');
   assertEqual(eventProps.modify_initial_only.type, 'boolean', 'event.modify_initial_only is boolean');
+});
+
+// ============================================================
+// Test 26: clear_flag removes a flag from state.flags; no-op
+//          on absent flags; emits a discrete log entry either
+//          way (schema v1.17+ / Rule 33 reversible-state
+//          sub-pattern).
+// ============================================================
+// MOTIVATED_BY: Codex v2.22.0 / schema v1.17.0 Rule 33
+// extension. Source-text discovery: Windhammer §89 sets
+// jotun_shoulder_wound with the explicit clearing trigger
+// "until you next can rest and take food." Pre-v1.17 the
+// schema lacked a clear_flag event — the workaround was a
+// script event mutating state.flags. v1.17 adds clear_flag
+// as a parallel to set_flag. Locks in the three behaviors
+// a future regression must preserve: (a) clear_flag on a
+// present flag removes it from state.flags; (b) clear_flag
+// on an absent flag is a no-op (state unchanged); (c) both
+// outcomes emit a log entry distinguishable from the
+// other case so playthrough debugging can tell which case
+// fired.
+// END_TO_END_VERIFY: drive both emulators through Windhammer
+// §89 → eat_meal section once the book-side migration lands;
+// confirm jotun_shoulder_wound is set after §89, the standing
+// modifier's -2 CV penalty applies in any combat between §89
+// and the next eat_meal, and the flag clears at the eat_meal
+// such that combats afterward run at full CV.
+test('clear_flag removes a present flag and no-ops on an absent flag', () => {
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'set the wound flag',
+        events: [{ type: 'set_flag', flag: 'TEST_WOUND_FLAG' }],
+        choices: [],
+      },
+      '2': {
+        text: 'rest and clear',
+        events: [{ type: 'clear_flag', flag: 'TEST_WOUND_FLAG', reason: 'rest' }],
+        choices: [],
+      },
+      '3': {
+        text: 'rest again (no-op on already-clear flag)',
+        events: [{ type: 'clear_flag', flag: 'TEST_WOUND_FLAG', reason: 'rest again' }],
+        choices: [],
+      },
+    },
+  });
+
+  // Case (a): flag is set, then cleared. After case (a) the flag
+  // should be absent.
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  play.navigateTo(state, book, '1');
+  assertTrue(state.flags.includes('TEST_WOUND_FLAG'), '(a-pre) flag set after §1');
+  play.navigateTo(state, book, '2');
+  assertTrue(!state.flags.includes('TEST_WOUND_FLAG'), '(a-post) flag cleared after §2');
+  const cleared = state.log.some(line => line.includes('Flag cleared: TEST_WOUND_FLAG'));
+  assertTrue(cleared, '(a-log) clear emitted distinct log line');
+
+  // Case (b): flag already absent; clear is a no-op. State unchanged;
+  // log carries the no-op variant.
+  play.navigateTo(state, book, '3');
+  assertTrue(!state.flags.includes('TEST_WOUND_FLAG'), '(b-state) flag still absent after §3');
+  const noop = state.log.some(line => line.includes('Flag clear no-op: TEST_WOUND_FLAG'));
+  assertTrue(noop, '(b-log) no-op clear emitted distinct log line');
+
+  // Schema-shape assertion: clear_flag in event.type enum.
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  const eventTypes = schema.definitions.event.properties.type.enum;
+  assertTrue(eventTypes.includes('clear_flag'), 'clear_flag in event.type enum');
 });
 
 // ============================================================

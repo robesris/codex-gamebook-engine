@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.11.0';
+const CODEX_EMULATOR_VERSION = '3.12.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2196,6 +2196,10 @@ function processNextEvent() {
       handleSetFlag(event);
       processNextEvent();
       break;
+    case 'clear_flag':
+      handleClearFlag(event);
+      processNextEvent();
+      break;
     case 'combat':
       handleCombat(event);
       break;
@@ -2433,6 +2437,27 @@ function handleSetFlag(event) {
   const msg = document.createElement('div');
   msg.className = 'event-msg info';
   msg.textContent = `\u2691 ${event.flag.replace(/_/g, ' ')}`;
+  content.appendChild(msg);
+}
+
+// --- Clear Flag ---
+// Schema v1.17+. Removes the flag from state.flags if present;
+// no-op (with a debug log line) if absent. Mirrors the CLI
+// emulator's handler. Uses Set.prototype.delete semantics
+// (returns true if the value was present, false otherwise) but
+// surfaces a UI message either way for parity with set_flag's
+// banner.
+function handleClearFlag(event) {
+  const wasPresent = state.flags.has(event.flag);
+  state.flags.delete(event.flag);
+  const content = document.getElementById('game-content');
+  const msg = document.createElement('div');
+  msg.className = 'event-msg info';
+  if (wasPresent) {
+    msg.textContent = `\u2691 cleared: ${event.flag.replace(/_/g, ' ')}`;
+  } else {
+    msg.textContent = `\u2691 (no-op) ${event.flag.replace(/_/g, ' ')} was not set`;
+  }
   content.appendChild(msg);
 }
 
