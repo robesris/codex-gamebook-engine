@@ -292,6 +292,16 @@ validate(book);
 
 The cost of running the comparison is bounded — even a 600-section accumulator validates in well under 10 seconds — so there is no scenario in which it is too expensive to run on every Wave. Skipping it is a net loss every time.
 
+### Avoid full-file `JSON.stringify` / `json.dump` round-trips for additive edits (Chat #28 lesson)
+
+Sub-agents performing additive edits (e.g., appending one event to a section's `events` array, adding one new catalog entry, replacing a single condition) should NOT round-trip the entire book file through `JSON.parse → JSON.stringify` (or the Python equivalent `json.load → json.dump`) and write the re-serialized output back. Round-tripping introduces collateral cosmetic changes — unicode escape unwinding, single-line dicts reformatted to multi-line, key reordering, whitespace shifts — that pollute the commit diff with noise unrelated to the intended edits. The Chat #28 LW1 §147 sub-agent's first attempt produced exactly this pattern and had to be reverted; the recovery was to apply the three intended edits as **targeted byte-level string replacements on the pristine baseline** (i.e., search-and-replace with enough surrounding context to make each match unique), which produces a clean diff with zero collateral.
+
+Two practical patterns for additive edits:
+- **For small, well-localised edits** (1-3 changes touching adjacent lines): use the Edit tool with `old_string` / `new_string` carrying enough surrounding context. Each Edit call modifies bytes in place; no re-serialization happens.
+- **For larger but still mechanical edits** (e.g., appending an event to N sections): build a Node script that reads the file as text, applies regex-based substitutions, and writes the modified text back. The text is never parsed/re-serialized as JSON. Verify the result is still valid JSON via a quick `JSON.parse` after the substitutions, and ALSO run `scripts/validate-book.js` to confirm schema validity.
+
+Only use full-file `JSON.stringify` round-trips when the edits are sweeping enough that bytes-in-place wouldn't be tractable (e.g., a Wave 5-style normalization touching dozens of sections with mechanical pattern transforms). In that case, document the cosmetic-noise tradeoff in the commit message and consider whether the change should land as a separate "cosmetic reformat" commit ahead of the substantive edit commit so the substance stays reviewable.
+
 ## Playbook regression harness
 
 Each first-party book has a set of `*.script` playbooks under `plans/playthroughs/` (gitignored — these live on disk only) that exercise different paths through the book. The naming convention is:
