@@ -2282,22 +2282,13 @@ function handleModifyStat(event) {
     state.stats[stat] = newVal;
   }
 
-  // Check for special: set to value instead of delta
-  if (event.set_to !== undefined) {
-    if (stat === 'provisions') state.provisions = event.set_to;
-    else if (stat === 'gold') state.gold = event.set_to;
-    else state.stats[stat] = event.set_to;
-  }
-
   // Check for modify_initial. Exclude the three resource slots
   // (provisions, gold, meals) since those don't have a meaningful
   // "initial ceiling" — they're tracked on state directly, not via
   // state.initialStats, and the CLI emulator matches this behavior
   // (see cli-emulator/play.js).
   if (event.modify_initial && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
-    state.initialStats[stat] = (state.initialStats[stat] || 0) + (event.modify_initial_amount || amount);
-    // Also apply to current
-    state.stats[stat] = (state.stats[stat] || 0) + (event.modify_initial_amount || 0);
+    state.initialStats[stat] = (state.initialStats[stat] || 0) + amount;
   }
 
   // set_initial_to (schema v1.12+): absolute-ceiling cap. Assign
