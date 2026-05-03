@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.12.0';
+const CODEX_EMULATOR_VERSION = '3.13.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -686,7 +686,7 @@ const CODEX_EMULATOR_VERSION = '3.12.0';
 // emulator in a browser can see exactly which known-good release
 // their binary was built on top of. Displayed in the Codex Emulator
 // header on the load screen next to the version string.
-const CODEX_EMULATOR_COMMIT = '4ac2758';
+const CODEX_EMULATOR_COMMIT = '9e39253';
 
 // Populate the load-screen version badge from the two constants above
 // so the machine-readable constants stay the single source of truth.
@@ -718,6 +718,10 @@ let state = {
   equipment: {},
   flags: new Set(),
   abilities: [],
+  // Schema v1.18+. List of talent names confirmed via choose_talents
+  // chargen step. Parallel to `abilities`; empty when the book has no
+  // rules.talents block or hasn't reached the step yet.
+  talents: [],
   // Per-ability remaining-uses counters, populated by set_ability_uses
   // character creation steps and by book scripts. Keyed by ability name.
   // Empty by default; absent when no ability needs use tracking.
@@ -1309,6 +1313,7 @@ function startCharacterCreation() {
     potion: null,
     potionDoses: 0,
     abilities: [],
+    talents: [],
     currentSection: null,
     visitedSections: new Set(),
     // Book-shape + post-creation validation warnings (schema v1.10+ /
@@ -1432,6 +1437,13 @@ function startCharacterCreation() {
       interactiveSteps.push({ type: 'choose_one', step });
     } else if (step.action === 'choose_abilities') {
       interactiveSteps.push({ type: 'abilities', step });
+    } else if (step.action === 'choose_talents') {
+      // Schema v1.18+ / codex Rule 35. Parallel to choose_abilities;
+      // reads candidates from rules.talents.available and writes the
+      // player's picks to state.talents. Per-talent `effects[]`
+      // auto-apply at confirm time (mirrors choose_abilities) and
+      // `exclusive_with` is enforced before any state mutation.
+      interactiveSteps.push({ type: 'talents', step });
     } else if (step.action === 'distribute_points') {
       // Schema v1.10+ / codex v2.13+ (Rule 26). Point-buy character
       // creation — player distributes a fixed total of points across
@@ -1743,9 +1755,42 @@ function processCreationSteps(steps, items) {
       const confirmBtn = section.querySelector('#confirm-abilities-btn');
       if (confirmBtn) {
         confirmBtn.addEventListener('click', () => {
+          // Schema v1.18+ / codex Rule 35. Enforce exclusive_with before
+          // any state mutation: collect every violation, refuse the
+          // submission if any exists, and surface them inline so the
+          // player can re-select. Mirrors the CLI emulator.
+          const byName = {};
+          for (const a of available) byName[a.name] = a;
+          const violations = [];
+          for (const pick of selected) {
+            const entry = byName[pick];
+            if (!entry || !Array.isArray(entry.exclusive_with)) continue;
+            for (const other of selected) {
+              if (other === pick) continue;
+              if (entry.exclusive_with.includes(other)) {
+                violations.push(`${pick} is mutually exclusive with ${other}`);
+              }
+            }
+          }
+          if (violations.length) {
+            const errEl = document.createElement('div');
+            errEl.className = 'event-msg loss';
+            errEl.textContent = violations.join(' / ');
+            section.appendChild(errEl);
+            return;
+          }
           state.abilities = [...selected];
           for (const name of selected) {
             state.flags.add('ability_' + name.toLowerCase().replace(/ /g, '_'));
+          }
+          // Auto-apply per-ability effects[] arrays at confirm time.
+          // Schema v1.18+ / codex Rule 35.
+          for (const pick of selected) {
+            const entry = byName[pick];
+            if (!entry || !Array.isArray(entry.effects)) continue;
+            for (const ev of entry.effects) {
+              applyChargenEffect(ev);
+            }
           }
 
           // Check if any selected abilities require a roll
@@ -1760,6 +1805,172 @@ function processCreationSteps(steps, items) {
       }
     }
     renderAbilities();
+  } else if (current.type === 'talents') {
+    // Schema v1.18+ / codex Rule 35. Mirror of the abilities branch
+    // above, against rules.talents.available[]. Same exclusive_with
+    // validation, same effects-application loop. Picks land in
+    // state.talents (parallel to state.abilities) plus a
+    // `talent_<canonical>` flag for has_talent condition lookups.
+    const tlStep = current.step;
+    const tlRules = gameData.rules.talents || {};
+    const available = tlRules.available || [];
+    const count = tlStep.count || tlRules.choose_count || 2;
+    const selected = new Set();
+
+    const section = document.createElement('div');
+    section.className = 'mt-2';
+    section.id = 'talents-section';
+    rollContainer.parentNode.insertBefore(section, document.getElementById('equipment-section'));
+
+    function renderTalents() {
+      let html = `<h3>Choose ${count} Talents</h3>`;
+      html += `<div class="choose-items-count">Selected: ${selected.size} / ${count}</div>`;
+      html += `<div class="choose-items-grid">`;
+      for (const tl of available) {
+        const isSel = selected.has(tl.name);
+        html += `<div class="choose-item-btn ${isSel ? 'selected' : ''}" data-talent="${tl.name}">
+          <strong>${tl.name}</strong>
+          <div class="item-desc">${tl.description || ''}${tl.mechanical_effect ? ' (' + tl.mechanical_effect + ')' : ''}</div>
+        </div>`;
+      }
+      html += `</div>`;
+      if (selected.size === count) {
+        html += `<div class="center mt-1"><button class="btn" id="confirm-talents-btn">Confirm Talents</button></div>`;
+      }
+      section.innerHTML = html;
+
+      section.querySelectorAll('.choose-item-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const name = btn.dataset.talent;
+          if (selected.has(name)) {
+            selected.delete(name);
+          } else if (selected.size < count) {
+            selected.add(name);
+          }
+          renderTalents();
+        });
+      });
+      const confirmBtn = section.querySelector('#confirm-talents-btn');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+          const byName = {};
+          for (const t of available) byName[t.name] = t;
+          const violations = [];
+          for (const pick of selected) {
+            const entry = byName[pick];
+            if (!entry || !Array.isArray(entry.exclusive_with)) continue;
+            for (const other of selected) {
+              if (other === pick) continue;
+              if (entry.exclusive_with.includes(other)) {
+                violations.push(`${pick} is mutually exclusive with ${other}`);
+              }
+            }
+          }
+          if (violations.length) {
+            const errEl = document.createElement('div');
+            errEl.className = 'event-msg loss';
+            errEl.textContent = violations.join(' / ');
+            section.appendChild(errEl);
+            return;
+          }
+          state.talents = [...selected];
+          for (const name of selected) {
+            state.flags.add('talent_' + name.toLowerCase().replace(/ /g, '_'));
+          }
+          for (const pick of selected) {
+            const entry = byName[pick];
+            if (!entry || !Array.isArray(entry.effects)) continue;
+            for (const ev of entry.effects) {
+              applyChargenEffect(ev);
+            }
+          }
+          section.innerHTML = `<div class="event-msg gain">Talents: ${[...selected].join(', ')}</div>`;
+          processCreationSteps(steps, items);
+        });
+      }
+    }
+    renderTalents();
+  }
+}
+
+// Schema v1.18+ / codex Rule 35. Apply a single event from an
+// ability/talent's effects[] array to chargen-time state. Touches state
+// directly without writing to the game-content DOM (the chargen UI
+// renders its own ability/talent summaries when the step confirms).
+// Handles the event types reasonably expressible at chargen — modify_stat
+// with optional modify_initial / modify_initial_only / set_initial_to,
+// set_flag, clear_flag, add_item, set_resource, and script — and logs
+// any unsupported type to the console without throwing. Mirrors the CLI
+// emulator's applyEvent for the chargen subset; bigger-scope events
+// (combat, eat_meal, choose_items, stat_test, etc.) are deliberately
+// not allowed here because they require player interaction or a fight
+// loop that the chargen flow doesn't have.
+function applyChargenEffect(event) {
+  if (!event || !event.type) return;
+  switch (event.type) {
+    case 'modify_stat': {
+      const stat = event.stat;
+      const amount = event.amount || 0;
+      if (event.modify_initial_only && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+        state.initialStats[stat] = (state.initialStats[stat] || 0) + amount;
+        if (event.set_initial_to !== undefined) {
+          state.initialStats[stat] = event.set_initial_to;
+          if ((state.stats[stat] || 0) > event.set_initial_to) state.stats[stat] = event.set_initial_to;
+        }
+        return;
+      }
+      if (stat === 'provisions') {
+        state.provisions = Math.max(0, state.provisions + amount);
+      } else if (stat === 'gold') {
+        state.gold = Math.max(0, state.gold + amount);
+      } else if (stat === 'meals') {
+        state.meals = Math.max(0, state.meals + amount);
+      } else {
+        const old = state.stats[stat] || 0;
+        let newVal = old + amount;
+        const statDef = (gameData.rules.stats || []).find(s => s.name === stat);
+        if (statDef?.initial_is_max && state.initialStats[stat] !== undefined) {
+          newVal = Math.min(newVal, state.initialStats[stat]);
+        }
+        if (statDef?.min !== undefined && statDef?.min !== null) {
+          newVal = Math.max(newVal, statDef.min);
+        }
+        state.stats[stat] = newVal;
+      }
+      if (event.modify_initial && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+        state.initialStats[stat] = (state.initialStats[stat] || 0) + amount;
+      }
+      if (event.set_initial_to !== undefined && stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+        state.initialStats[stat] = event.set_initial_to;
+        if ((state.stats[stat] || 0) > event.set_initial_to) state.stats[stat] = event.set_initial_to;
+      }
+      return;
+    }
+    case 'set_flag':
+      if (event.flag) state.flags.add(event.flag);
+      return;
+    case 'clear_flag':
+      if (event.flag) state.flags.delete(event.flag);
+      return;
+    case 'add_item':
+      if (event.item && !state.inventory.includes(event.item)) state.inventory.push(event.item);
+      return;
+    case 'set_resource': {
+      const r = event.resource;
+      if (r === 'provisions') state.provisions = event.amount;
+      else if (r === 'gold') state.gold = event.amount;
+      else if (r === 'meals') state.meals = event.amount;
+      else {
+        const statDef = (gameData.rules.stats || []).find(s => s.name === r);
+        if (statDef) {
+          state.stats[r] = event.amount;
+          if (statDef.initial_is_max) state.initialStats[r] = event.amount;
+        }
+      }
+      return;
+    }
+    default:
+      console.warn('applyChargenEffect: unsupported event type at chargen: ' + event.type);
   }
 }
 
@@ -4175,6 +4386,16 @@ function evaluateCondition(cond) {
       return (state.abilities || []).some(a => a.toLowerCase().replace(/ /g, '_') === abName.toLowerCase().replace(/ /g, '_') || a === abName) ||
              state.flags.has(abName) || state.flags.has('ability_' + abName.toLowerCase().replace(/ /g, '_'));
     }
+    case 'has_talent': {
+      // Schema v1.18+. Mirror of has_ability against state.talents.
+      // Same canonicalisation (case-insensitive, whitespace → underscore)
+      // and the talent_<canonical> flag fallback so a book that has
+      // already set the flag without populating state.talents still
+      // resolves correctly.
+      const tlName = cond.talent;
+      return (state.talents || []).some(t => t.toLowerCase().replace(/ /g, '_') === tlName.toLowerCase().replace(/ /g, '_') || t === tlName) ||
+             state.flags.has(tlName) || state.flags.has('talent_' + tlName.toLowerCase().replace(/ /g, '_'));
+    }
     case 'not':
       return !evaluateCondition(cond.condition);
     case 'and':
@@ -4229,6 +4450,8 @@ function describeCondition(cond) {
       return `Requires: ${cond.stat.toUpperCase()} \u2264 ${cond.value}`;
     case 'has_ability':
       return `Requires ability: ${cond.ability}`;
+    case 'has_talent':
+      return `Requires talent: ${cond.talent}`;
     case 'not':
       return `Must NOT: ${describeCondition(cond.condition)}`;
     case 'and':
@@ -4505,6 +4728,7 @@ function playAgain() {
     potion: null,
     potionDoses: 0,
     abilities: [],
+    talents: [],
     currentSection: null,
     previousSection: null,
     visitedSections: new Set(),
@@ -4784,6 +5008,7 @@ function _debugSerializeState() {
     potion: state.potion,
     potionDoses: state.potionDoses,
     abilities: [...(state.abilities || [])],
+    talents: [...(state.talents || [])],
     inventory: [...state.inventory],
     flags: [...state.flags],
     visitedSections: [...(state.visitedSections || [])],
@@ -4827,6 +5052,7 @@ function serializeState() {
     potion: state.potion,
     potionDoses: state.potionDoses,
     abilities: [...(state.abilities || [])],
+    talents: [...(state.talents || [])],
     meals: state.meals ?? 0,
     currentSection: state.currentSection,
     previousSection: state.previousSection ?? null,
@@ -4850,6 +5076,7 @@ function deserializeState(obj) {
   state.potion = obj.potion || null;
   state.potionDoses = obj.potionDoses ?? 0;
   state.abilities = obj.abilities || [];
+  state.talents = obj.talents || [];
   state.currentSection = obj.currentSection || null;
   state.previousSection = obj.previousSection ?? null;
   state.visitedSections = new Set(obj.visitedSections || []);

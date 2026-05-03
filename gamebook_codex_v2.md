@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.22.0
+# THE GAMEBOOK CODEX v2.23.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -1592,6 +1592,172 @@ The flag clears on the player's first eat_meal post-§89; subsequent eat_meals p
 **Anti-pattern — clearing a flag in only one section when the source text describes a more general clearing trigger.** If the source text says *"until you next can rest and take food"* and the book has 22 distinct eat_meal sections, the canonical encoding adds a `clear_flag` event to every one of them — not just the first one the player happens to route through. A single-section clear creates silent drift between the source text's phrasing and the book's mechanical behavior: a player who reaches an eat_meal section that happens not to carry the clear still has the flag set, and the standing penalty persists incorrectly. The reciprocal anti-pattern (clearing the flag too eagerly, e.g. on every section transition) violates the source text in the other direction.
 
 **Anti-pattern — using `script` to clear flags when `clear_flag` fits.** Pre-v1.17 the workaround for clearing a flag was a `script` event mutating `state.flags` directly (`state.flags = state.flags:filter(f => f != 'jotun_shoulder_wound')` or equivalent). The script-event workaround is no longer canonical for new parses; use `clear_flag` instead. Existing book-side script-event flag-clears are migration candidates for the new event type — sub-agent passes should rewrite them in lockstep with other rule applications when those books come up for re-review.
+
+---
+
+### Rule 34: Auto-Applied Chargen Effects on Abilities and Talents (`effects` / `exclusive_with`, plus parallel `talents` system)
+
+**The rule:** When a book's character-creation rules grant an *unconditional, auto-applied* mechanical bonus tied to a chosen ability or talent — Bushcraft adds 5 to initial Endurance, Lorecraft adds 1 to Intuition, Stealth adds 1 to Shimmera uses — encode that bonus as a structured `effects: [<event>]` list on the relevant `rules.abilities.available[]` or `rules.talents.available[]` entry. The chargen flow auto-applies each chosen entry's `effects` at confirm time, so the player's stats reflect the bonuses without the book hand-rolling per-section copies of the math. Use `exclusive_with: [<other_name>]` for source-text mutual-exclusion rules (Weaponmastery cannot be chosen with Huntmastery; Beast Slayer / Hordim Bane / Sword Focus form a 3-way exclusion). When the book's source rules carry both a skills/disciplines selection AND a separate talents selection, declare a parallel `rules.talents` block with its own `available[]` and a separate `choose_talents` chargen step.
+
+**Why a structured field and not a `script` event per ability.** Pre-v1.18 the only way to apply an ability's stat bonus at chargen was to either (a) hand-write a `script` chargen step that read `state.abilities` and applied per-ability mutations, (b) emit a section-1-side script that ran after chargen and applied bonuses based on the chosen abilities, or (c) leave the bonus as descriptive `mechanical_effect` text and trust the player to apply it on a paper character sheet. (a) duplicates the ability's mechanics in two places (the `available[]` description AND the chargen script) and a renamed ability silently breaks the script. (b) pollutes section 1 with chargen logic, which is a rule mismatch — section events shouldn't fire conditionally on chargen choices. (c) is the silent-drift case the codex's pre-output verification was designed to flag; the bonus exists in narrative but never lands on `state`. A structured `effects[]` array on the ability entry itself co-locates the mechanics with the description, removes the duplication, and lets both reference emulators apply the bonus identically without book-side scripting.
+
+**Why `exclusive_with` instead of a `condition` field.** A `condition` field would imply runtime gating of an already-confirmed selection, which is the wrong direction — mutual exclusion means the player should not be allowed to confirm a violating set in the first place. The chargen handler validates `exclusive_with` BEFORE applying any `effects`, so a rejected submission has no state mutation; the player re-picks. (A condition field on individual `effects` events still works for in-effect gating — e.g. "if you have ≥5 Intuition, increase to 6" — that's the existing event.condition mechanism unchanged.)
+
+**Mechanical guarantees the emulators provide.**
+
+- Each chosen ability/talent's `effects[]` is applied via the same event handlers used for in-section events (modify_stat with all its sub-fields including `modify_initial`, `modify_initial_only`, `set_initial_to`; set_flag; clear_flag; add_item; set_resource). The chargen subset deliberately excludes events that need a player pause (combat, stat_test, eat_meal, choose_items, roll_dice, input_number, input_text) — those don't fit a chargen-confirm flow and should be left out of `effects`.
+- Effects apply in array order. Within a chosen ability's `effects` array, earlier events see the pre-apply state, later events see the cumulative state of the prior events. Across multiple chosen abilities, application order follows the order the player listed in the submission (or the order the UI confirms them in for the HTML emulator); this is rare to matter because most `effects` are simple additive bumps.
+- `exclusive_with` is enforced symmetrically — both sides of the pair must declare each other (Weaponmastery → exclusive_with: [Huntmastery]; Huntmastery → exclusive_with: [Weaponmastery]). A one-sided declaration is not enough. Three-way exclusion lists each name in the other two's lists. The validator emits one rejection log line per violation.
+- `state.abilities` records the chosen ability names; `state.talents` records the chosen talent names; both arrays preserve canonical book-text capitalisation. The `has_ability` / `has_talent` conditions canonicalise whitespace + case at lookup time so books that capitalise differently in condition references don't silently miss.
+- Companion `ability_<canonical>` / `talent_<canonical>` flags land on `state.flags` for each chosen entry, mirroring the pre-v1.18 ability flag convention. Existing books that gate on these flags continue to work.
+
+**When NOT to use `effects` — leave it for `parser_notes` instead.** Some ability/talent bonuses are mechanically real but don't fit the chargen-time event primitives:
+
+1. **Per-combat conditional bonuses.** Heroic Confidence's "+1 CV that lapses on first wound in this combat" is a combat-internal state machine; encoding it via `effects` would persist the +1 globally, not lapse it. Document in `parser_notes`.
+2. **Re-roll-style mechanics.** Leap of Fate's "re-roll any three unsuccessful jumping attempts" is a free-floating credit that fires on demand against future test failures; the schema has no re-roll-pool primitive. Document in `parser_notes`.
+3. **In-section narrative gates.** Strong Back's "auto-pass any Strength attribute test required if you are trying to climb out of a hole" is a per-section gate the parser should encode as a section-level `condition` on the relevant stat_test; it's not a chargen effect. Document in `parser_notes` AND, where the relevant section is being parsed, gate the test on the talent.
+4. **Carry-limit / item-count interactions.** Strong Back's "ignore carry limits + -1 AGI/CV when over carry limit" depends on a carry-limit primitive that the schema doesn't currently encode. Document in `parser_notes`.
+5. **Conditional CV / attack bonuses against specific enemy categories.** Beast Slayer's "+1 CV vs non-Hordim non-Man" requires a per-combat condition the chargen flow doesn't see. Encode as a `rules.combat_system.standing_modifiers[]` entry gated on `has_talent` if the book is otherwise schema-clean; otherwise document in `parser_notes` until a follow-up codex rule adds the missing primitive.
+
+The `parser_notes` field exists precisely to document these deliberate non-encodings — both reference emulators ignore unencoded mechanics by design, and `parser_notes` makes the gap visible to future re-parsers, sub-agents, and human reviewers.
+
+**Worked example: Windhammer's chargen abilities + talents (canonical case).**
+
+Windhammer's source rules describe 6 skill areas (pick 2, with one mutual-exclusion pair) and 10 talents (pick up to 2, with two mutual-exclusion groups). The canonical encoding:
+
+```jsonc
+"rules": {
+  "abilities": {
+    "enabled": true,
+    "choose_count": 2,
+    "available": [
+      {
+        "name": "Bushcraft",
+        "description": "...",
+        "mechanical_effect": "+5 initial EP",
+        "effects": [
+          { "type": "modify_stat", "stat": "endurance", "amount": 5, "modify_initial": true,
+            "reason": "Bushcraft skill bonus: +5 to initial Endurance ceiling" }
+        ]
+      },
+      {
+        "name": "Huntmastery",
+        "description": "...",
+        "mechanical_effect": "+1 CV (vs Hordim and natural creatures while travelling)",
+        "exclusive_with": ["Weaponmastery"],
+        "parser_notes": "+1 to Combat Value while travelling to Stoneholme — encoded as rules.combat_system.standing_modifiers[] gated on has_ability(Huntmastery), not in effects[] because CV is a derived stat with no chargen-time slot."
+      },
+      {
+        "name": "Weaponmastery",
+        "description": "...",
+        "mechanical_effect": "+1 CV, critical hits on double 5/6",
+        "exclusive_with": ["Huntmastery"],
+        "parser_notes": "+1 CV — encoded as standing_modifier gated on has_ability(Weaponmastery). Critical-hits-on-double-5/6 is a round_script branch keyed on the ability flag."
+      },
+      {
+        "name": "Lorecraft",
+        "description": "...",
+        "mechanical_effect": "+1 Intuition",
+        "effects": [
+          { "type": "modify_stat", "stat": "intuition", "amount": 1, "modify_initial": true,
+            "reason": "Lorecraft skill bonus: +1 Intuition (may exceed normal max:5 cap, in which case all Intuition tests auto-pass — auto-pass logic is parser_notes)." }
+        ],
+        "parser_notes": "Source rule: 'If you already have 5 character points ascribed to Intuition it is within the rules to increase this attribute to 6 points. In this case all intuition tests will automatically be successful.' The +1 Intuition bonus is auto-applied via effects[]; the auto-pass-when-Intuition-≥-6 narrative rule is documented here for future codex extension (no current primitive)."
+      },
+      {
+        "name": "Brigandry",
+        "description": "...",
+        "mechanical_effect": "No stat bonus; opens conditional paths."
+      },
+      {
+        "name": "Stealth",
+        "description": "...",
+        "mechanical_effect": "+1 Shimmera",
+        "effects": [
+          { "type": "modify_stat", "stat": "shimmera_uses", "amount": 1, "modify_initial": true,
+            "reason": "Stealth skill bonus: +1 Shimmera use" }
+        ]
+      }
+    ]
+  },
+  "talents": {
+    "enabled": true,
+    "choose_count": 2,
+    "available": [
+      {
+        "name": "Strong Back",
+        "description": "...",
+        "mechanical_effect": "Ignore carry limits; auto-pass climb-out STR tests; -1 AGI/CV over carry limit",
+        "parser_notes": "All three sub-rules are conditional and don't fit chargen-time effects. Carry-limit primitive doesn't exist in the schema; auto-pass is per-test gate; -1 AGI/CV is a conditional standing_modifier dependent on the carry-limit primitive."
+      },
+      // ... 9 more talents, mostly parser_notes-only ...
+      {
+        "name": "Shadar in the Making",
+        "description": "...",
+        "mechanical_effect": "+1 Intuition; re-roll 2 failed Intuition tests",
+        "effects": [
+          { "type": "modify_stat", "stat": "intuition", "amount": 1, "modify_initial": true,
+            "reason": "Shadar in the Making talent: +1 Intuition" }
+        ],
+        "parser_notes": "Re-roll 2 failed intuition tests — re-roll-pool primitive doesn't exist in the schema; documented here. Auto-pass logic if Intuition reaches 6 is also parser_notes (parallels Lorecraft)."
+      },
+      {
+        "name": "Beast Slayer",
+        "description": "...",
+        "mechanical_effect": "+1 CV vs non-Hordim non-Man; critical hits",
+        "exclusive_with": ["Hordim Bane", "Sword Focus"],
+        "parser_notes": "+1 CV vs beasts — combat-internal conditional. Encoded as standing_modifier gated on has_talent(Beast Slayer) AND a per-enemy is_beast tag (catalog tagging pending a future codex rule for enemy-categorisation predicates)."
+      }
+      // ... etc ...
+    ]
+  }
+},
+"character_creation": {
+  "steps": [
+    { "action": "distribute_points", "total_points": 50, "stats": [...] },
+    { "action": "set_resource", "resource": "gold", "amount": 15 },
+    { "action": "set_resource", "resource": "provisions", "amount": 6 },
+    { "action": "choose_abilities", "count": 2, "from": "abilities_list",
+      "source": "Rules: pick 2 skill areas (Weaponmastery and Huntmastery cannot both be chosen)" },
+    { "action": "roll_stat", "stat": "shimmera_uses", "formula": "1d6",
+      "source": "Rules: roll 1d6 for Shimmera uses" },
+    { "action": "choose_talents", "count": 2, "from": "talents_list",
+      "source": "Rules: choose 2 talents from the 10 available (Beast Slayer / Hordim Bane / Sword Focus mutually exclusive; Leap of Fate / Blessed by Providence mutually exclusive)" },
+    { "action": "add_item", "item": "than_durion" },
+    // ... rest of starting equipment ...
+  ]
+}
+```
+
+Note the ordering: `roll_stat shimmera_uses` runs BEFORE `choose_talents`/`choose_abilities` because Stealth's +1 Shimmera bonus (and Shadar in the Making's +1 Intuition) are applied via `modify_stat modify_initial: true`, which adds to whatever the stat already holds. If choose_abilities ran first, the +1 would land on a 0-initialised shimmera_uses slot, then the 1d6 roll would overwrite. The canonical ordering is **declarative initial values first** (roll_stat / set_resource / distribute_points), THEN **selection-driven bonuses** (choose_abilities / choose_talents) — the bonuses stack on top of initial values, not the other way around.
+
+For Lorecraft's +1 Intuition the same ordering applies: distribute_points sets intuition to the player's chosen value first; choose_abilities then bumps it by 1. For a player who allocated 5 to Intuition and picks Lorecraft, the chargen-confirmed value is 6, exceeding the stat's declared max:5 — that's the source-rule behavior (Lorecraft "is within the rules to increase this attribute to 6 points"), and the emulators don't clamp at `statDef.max` so the value lands correctly. (See Bug C / Section 7.5 — the post-creation validation pass flags stats outside `[min, max]` only when `max` is null or otherwise structurally meaningful; the +1-from-Lorecraft case is intentionally allowed.)
+
+**Discriminating words.**
+
+- **Auto-applied chargen effects:** "If you choose this skill area you may add an additional five points to your total endurance points," "you will be able to add one additional point to your Combat Value," "+1 to Intuition Attribute" — language that describes a one-time stat change applied at character-creation confirm.
+- **Mutual exclusion:** "this skill cannot be chosen if you have already chosen X," "you cannot choose both X and Y," "only one of these can be chosen at a time," "this talent cannot be chosen if you intend to choose either X or Y as well."
+- **Conditional / per-combat / re-roll** (→ parser_notes, not effects): "during the combat," "for as long as you wield X," "if at any time X is lost," "may re-roll any N unsuccessful X tests," "only as long as you win all further combat rounds," "until you can take food."
+
+**Anti-patterns.**
+
+1. **Encoding conditional bonuses in `effects` and accepting silent drift.** Putting Heroic Confidence's "+1 CV (lapses on first wound)" in `effects` as `modify_stat combat_value +1` would persist the +1 across every combat for the whole adventure — wildly wrong vs the source. If it doesn't fit the chargen-time event primitives, it goes in `parser_notes`.
+
+2. **One-sided `exclusive_with` declarations.** Declaring `Weaponmastery → exclusive_with: [Huntmastery]` without the reciprocal entry on Huntmastery means picking Huntmastery first then Weaponmastery doesn't catch the violation. Always declare on both ends. Three-way exclusion (Beast Slayer / Hordim Bane / Sword Focus) lists each name in the other two's lists.
+
+3. **`script` chargen steps that read `state.abilities` and apply bonuses ad hoc.** Pre-v1.18 this was the workaround. Post-v1.18 it duplicates the mechanics, and a renamed ability silently breaks the script. Migration: move the per-ability logic into the `effects[]` array on each ability entry, drop the script step.
+
+4. **Reusing `rules.abilities` for talents.** When the source rules clearly distinguish skills/disciplines from talents (different lists, different selection counts, different mechanical roles), declare both `rules.abilities` and `rules.talents` with the parallel structure. Cramming both into one `abilities` block conflates two distinct selection flows and breaks the player's chargen UX (one combined "pick 4 from 16" prompt instead of two clean "pick 2 from 6" + "pick 2 from 10" steps).
+
+5. **Putting the `mechanical_effect` summary string in `parser_notes`.** `mechanical_effect` is a one-line player-facing summary ("+5 initial EP"); `parser_notes` is structured documentation of source-text mechanics that don't auto-apply. They serve different audiences and shouldn't be conflated.
+
+**Cross-references.**
+
+- Rule 27 (`skill_<name>` / `talent_<name>` flag prefix convention) — the `ability_<canonical>` / `talent_<canonical>` flags landed by Rule 34 follow Rule 27's convention. `has_ability` / `has_talent` conditions are the canonical readers; the underlying flags are also readable via the generic `has_flag` for backwards compat.
+- Rule 23 (`standing_modifiers`) — conditional CV bonuses gated on `has_ability` / `has_talent` belong here, not in `effects[]`.
+- Rule 30 (`modify_initial` / `modify_initial_only` / `set_initial_to`) — the bonus delta on a stat with `initial_is_max: true` should set `modify_initial: true` so the bonus survives later clamping (Bushcraft's +5 Endurance on a stat whose `initial_is_max: true` would otherwise clamp at the player's distribute_points value).
+- Section 7.5 derived-stat guidance — `combat_value` and other derived stats can't take direct chargen `effects`; the bonus is applied via `standing_modifiers` gated on the ability/talent.
+- Decision-table row keyed on the discriminating words above; pre-output checklist Rule 34 entry covers the auto-apply / mutual-exclusion / parser_notes split.
 
 ---
 
@@ -3573,7 +3739,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.22.0 / GBF schema v1.17.0 / CLI emulator v3.12.0 / HTML emulator v3.12.0.**
+**Codex v2.23.0 / GBF schema v1.18.0 / CLI emulator v3.13.0 / HTML emulator v3.13.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

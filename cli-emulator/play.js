@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.12.0';
+const CODEX_EMULATOR_VERSION = '3.13.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -33,7 +33,7 @@ const CODEX_EMULATOR_VERSION = '3.12.0';
 // of commit X" — the stamp is the parent of the commit that sets it,
 // so a downstream user can see exactly which known-good release their
 // binary was built on top of.
-const CODEX_EMULATOR_COMMIT = '4ac2758';
+const CODEX_EMULATOR_COMMIT = '9e39253';
 // Pinned Lua runtime. See package.json for the exact npm version and
 // package-lock.json for the integrity hash. Fengari is an unmaintained
 // pure-JS Lua 5.3 implementation; the project is frozen but functional
@@ -323,6 +323,13 @@ function initialState(bookPath) {
     gold: 0,
     meals: 0,
     abilities: [],
+    // Schema v1.18+. List of talent names confirmed via the
+    // choose_talents chargen step. Parallel to `abilities`. Empty when
+    // the book carries no `rules.talents` block or hasn't reached the
+    // step yet. Populated in canonical book-text capitalization (e.g.
+    // ['Strong Back', 'Heroic Confidence']); the has_talent condition
+    // canonicalises whitespace + case at lookup time.
+    talents: [],
     // Per-ability remaining-uses counters, populated by set_ability_uses
     // character creation steps and by book scripts. Keyed by ability name.
     // Empty by default; absent when no ability needs use tracking.
@@ -399,6 +406,13 @@ function evalCondition(cond, state, book) {
     }
     case 'has_ability':
       return (state.abilities || []).some(a => a.toLowerCase().replace(/ /g, '_') === cond.ability.toLowerCase().replace(/ /g, '_'));
+    case 'has_talent':
+      // Schema v1.18+. Parallel to has_ability; reads state.talents (the
+      // names confirmed by a `choose_talents` chargen step). Same
+      // case-insensitive whitespace-to-underscore canonicalisation as
+      // has_ability so books that capitalize talent names differently in
+      // condition references don't drift.
+      return (state.talents || []).some(t => t.toLowerCase().replace(/ /g, '_') === cond.talent.toLowerCase().replace(/ /g, '_'));
     case 'not': return !evalCondition(cond.condition, state, book);
     case 'and': return (cond.conditions || []).every(c => evalCondition(c, state, book));
     case 'or': return (cond.conditions || []).some(c => evalCondition(c, state, book));
@@ -443,6 +457,7 @@ function describeCondition(cond) {
     case 'stat_gte': return `${cond.stat} >= ${cond.value}`;
     case 'stat_lte': return `${cond.stat} <= ${cond.value}`;
     case 'has_ability': return `has ability: ${cond.ability}`;
+    case 'has_talent': return `has talent: ${cond.talent}`;
     case 'not': return `NOT (${describeCondition(cond.condition)})`;
     case 'and': return (cond.conditions || []).map(describeCondition).join(' AND ');
     case 'or': return (cond.conditions || []).map(describeCondition).join(' OR ');
@@ -912,6 +927,19 @@ function processCreationSteps(state, book) {
         step_index: state.creationStep,
         count: step.count || book.rules?.abilities?.choose_count || 5,
         available: (book.rules?.abilities?.available || []).map(a => a.name),
+      };
+      return state;
+    } else if (step.action === 'choose_talents') {
+      // Schema v1.18+ / codex Rule 35. Parallel to choose_abilities; reads
+      // candidates from rules.talents.available and writes the player's
+      // picks to state.talents (list of names). Per-talent `effects[]`
+      // auto-apply at confirm time and `exclusive_with` is enforced before
+      // any state mutation, exactly as for choose_abilities.
+      state.pause = {
+        type: 'character_creation_choose_talents',
+        step_index: state.creationStep,
+        count: step.count || book.rules?.talents?.choose_count || 2,
+        available: (book.rules?.talents?.available || []).map(t => t.name),
       };
       return state;
     } else if (step.action === 'add_item') {
@@ -1518,6 +1546,10 @@ function getAvailableActions(state, book) {
       actions.push({ name: 'choose_abilities', description: `Pick ${state.pause.count} from: ${state.pause.available.join(', ')}` });
       break;
 
+    case 'character_creation_choose_talents':
+      actions.push({ name: 'choose_talents', description: `Pick ${state.pause.count} from: ${state.pause.available.join(', ')}` });
+      break;
+
     case 'character_creation_distribute': {
       const parts = state.pause.stats.map(s => `${s.name}=<${s.min}..${s.max}>`).join(' ');
       actions.push({
@@ -1822,14 +1854,94 @@ function applyAction(state, book, action, args) {
     }
 
     case 'character_creation_choose_abilities': {
-      // args is the list of ability names
+      // Schema v1.18+ / codex Rule 35. The player's submitted set is
+      // first validated against per-entry `exclusive_with` lists from
+      // rules.abilities.available[]; any violation rejects the whole
+      // submission with a per-violation log line and leaves the pause
+      // intact. After validation passes, each chosen entry's `effects[]`
+      // (if present) is applied via applyEvent in array order against
+      // the in-flight state — so Bushcraft's +5 initial Endurance, etc.,
+      // lands at confirm time. Pre-v1.18 books with no effects/no
+      // exclusive_with on their ability entries continue to work
+      // unchanged (effects default to no-op, exclusive_with defaults to
+      // empty).
       const chosen = args;
+      const available = book.rules?.abilities?.available || [];
+      const byName = {};
+      for (const a of available) byName[a.name] = a;
+      const violations = [];
+      for (const pick of chosen) {
+        const entry = byName[pick];
+        if (!entry || !Array.isArray(entry.exclusive_with)) continue;
+        for (const other of chosen) {
+          if (other === pick) continue;
+          if (entry.exclusive_with.includes(other)) {
+            violations.push(`${pick} is mutually exclusive with ${other}`);
+          }
+        }
+      }
+      if (violations.length) {
+        for (const v of violations) state.log.push(`choose_abilities rejected: ${v}`);
+        return state;
+      }
       state.abilities = [...chosen];
       for (const name of chosen) {
         const flag = 'ability_' + name.toLowerCase().replace(/ /g, '_');
         if (!state.flags.includes(flag)) state.flags.push(flag);
       }
+      // Auto-apply effects from each chosen ability entry.
+      for (const pick of chosen) {
+        const entry = byName[pick];
+        if (!entry || !Array.isArray(entry.effects)) continue;
+        for (const ev of entry.effects) {
+          handleEvent(ev, state, book);
+        }
+      }
       state.log.push(`Chose abilities: ${chosen.join(', ')}`);
+      state.creationStep++;
+      return processCreationSteps(state, book);
+    }
+
+    case 'character_creation_choose_talents': {
+      // Schema v1.18+ / codex Rule 35. Mirror of choose_abilities — same
+      // exclusive_with validation, same effects-application loop, same
+      // post-confirm flow into processCreationSteps. Picks are written
+      // to state.talents (parallel to state.abilities); each chosen
+      // talent's name also lands as a `talent_<canonical>` flag for
+      // condition-shape symmetry with `ability_<canonical>` flags. See
+      // codex Rule 35 for the full pattern.
+      const chosen = args;
+      const available = book.rules?.talents?.available || [];
+      const byName = {};
+      for (const t of available) byName[t.name] = t;
+      const violations = [];
+      for (const pick of chosen) {
+        const entry = byName[pick];
+        if (!entry || !Array.isArray(entry.exclusive_with)) continue;
+        for (const other of chosen) {
+          if (other === pick) continue;
+          if (entry.exclusive_with.includes(other)) {
+            violations.push(`${pick} is mutually exclusive with ${other}`);
+          }
+        }
+      }
+      if (violations.length) {
+        for (const v of violations) state.log.push(`choose_talents rejected: ${v}`);
+        return state;
+      }
+      state.talents = [...chosen];
+      for (const name of chosen) {
+        const flag = 'talent_' + name.toLowerCase().replace(/ /g, '_');
+        if (!state.flags.includes(flag)) state.flags.push(flag);
+      }
+      for (const pick of chosen) {
+        const entry = byName[pick];
+        if (!entry || !Array.isArray(entry.effects)) continue;
+        for (const ev of entry.effects) {
+          handleEvent(ev, state, book);
+        }
+      }
+      state.log.push(`Chose talents: ${chosen.join(', ')}`);
       state.creationStep++;
       return processCreationSteps(state, book);
     }
@@ -2701,6 +2813,7 @@ function compactState(state) {
     gold: state.gold,
     meals: state.meals,
     abilities: state.abilities,
+    talents: state.talents || [],
     abilityUses: state.abilityUses || {},
     potion: state.potion,
     currentSection: state.currentSection,

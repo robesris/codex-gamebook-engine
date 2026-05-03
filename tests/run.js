@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title at v1.17.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title at v1.17.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title bumped to v1.17.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title bumped to v1.18.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.17.0', 'schema title at v1.17.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1761,6 +1761,231 @@ test('clear_flag removes a present flag and no-ops on an absent flag', () => {
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
   const eventTypes = schema.definitions.event.properties.type.enum;
   assertTrue(eventTypes.includes('clear_flag'), 'clear_flag in event.type enum');
+});
+
+// ============================================================
+// Test 27: Auto-applied chargen ability/talent effects + exclusive_with
+// ============================================================
+// MOTIVATED_BY: Codex v2.23.0 / schema v1.18.0 Rule 34. Closes the
+// chargen residual surfaced during Chat #29 verification of the
+// Windhammer Bug A/B status — chargen was wired but per-ability
+// `mechanical_effect` strings (Bushcraft +5 EP, Lorecraft +1 INT,
+// Stealth +1 Shimmera) were descriptive only, with no auto-application
+// at confirm time. v1.18 adds optional `effects[]` and `exclusive_with`
+// to ability/talent entries plus a parallel `rules.talents` block and
+// `choose_talents` chargen action. Locks in the four behaviors a
+// future regression must preserve: (a) per-ability `effects[]` apply
+// at confirm time via the standard event handler (modify_stat etc.);
+// (b) `exclusive_with` rejects mutually-exclusive co-selections BEFORE
+// any state mutation, with a per-violation log entry; (c) parallel
+// `choose_talents` step writes picks to state.talents and applies
+// per-talent effects[] the same way; (d) has_talent condition reads
+// state.talents with the same canonicalisation as has_ability.
+// END_TO_END_VERIFY: drive both emulators through a Windhammer chargen
+// once the book-side migration lands; confirm Bushcraft picks bump
+// state.stats.endurance by 5 and state.initialStats.endurance by 5;
+// confirm picking Weaponmastery + Huntmastery is rejected with a
+// violation log; confirm choose_talents sets state.talents and the
+// has_talent('Shadar in the Making') condition fires.
+test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents + has_talent', () => {
+  const play = require('../cli-emulator/play.js');
+  const book = {
+    metadata: { title: 'Test Book', codex_version: '2.23' },
+    rules: {
+      stats: [
+        { name: 'strength', min: 5, max: 11, initial_is_max: false },
+        { name: 'endurance', min: 0, max: 35, initial_is_max: true },
+        { name: 'intuition', min: 1, max: 5, initial_is_max: false },
+        { name: 'shimmera_uses', min: 0, max: null, initial_is_max: false },
+      ],
+      attack_stat: null,
+      health_stat: 'endurance',
+      provisions: { starting_amount: 0, display_name: 'Provisions' },
+      abilities: {
+        enabled: true,
+        choose_count: 2,
+        available: [
+          {
+            name: 'Bushcraft',
+            description: 'wilderness skills',
+            mechanical_effect: '+5 initial EP',
+            effects: [
+              { type: 'modify_stat', stat: 'endurance', amount: 5, modify_initial: true,
+                reason: 'Bushcraft +5 initial EP' }
+            ]
+          },
+          {
+            name: 'Huntmastery',
+            description: 'hunting skills',
+            mechanical_effect: '+1 CV',
+            exclusive_with: ['Weaponmastery']
+          },
+          {
+            name: 'Weaponmastery',
+            description: 'weapon proficiency',
+            mechanical_effect: '+1 CV',
+            exclusive_with: ['Huntmastery']
+          },
+          {
+            name: 'Lorecraft',
+            description: 'magic sense',
+            mechanical_effect: '+1 Intuition',
+            effects: [
+              { type: 'modify_stat', stat: 'intuition', amount: 1, modify_initial: true,
+                reason: 'Lorecraft +1 Intuition' }
+            ]
+          },
+        ]
+      },
+      talents: {
+        enabled: true,
+        choose_count: 2,
+        available: [
+          {
+            name: 'Shadar in the Making',
+            description: 'magical affinity',
+            mechanical_effect: '+1 Intuition',
+            effects: [
+              { type: 'modify_stat', stat: 'intuition', amount: 1, modify_initial: true,
+                reason: 'Shadar talent +1 Intuition' }
+            ]
+          },
+          {
+            name: 'Strong Back',
+            description: 'ignore carry limits',
+            mechanical_effect: 'parser_notes only',
+            parser_notes: 'all sub-rules conditional; not encoded'
+          },
+          {
+            name: 'Beast Slayer',
+            description: '+1 CV vs beasts',
+            mechanical_effect: 'combat-internal',
+            exclusive_with: ['Sword Focus']
+          },
+          {
+            name: 'Sword Focus',
+            description: '+1 CV with sword',
+            mechanical_effect: 'combat-internal',
+            exclusive_with: ['Beast Slayer']
+          },
+        ]
+      }
+    },
+    character_creation: {
+      steps: [
+        { action: 'distribute_points', total_points: 22,
+          stats: [
+            { name: 'strength', min: 5, max: 11 },
+            { name: 'endurance', min: 15, max: 16 },
+            { name: 'intuition', min: 1, max: 5 }
+          ]
+        },
+        { action: 'choose_abilities', count: 2, from: 'abilities_list' },
+        { action: 'choose_talents', count: 2, from: 'talents_list' },
+      ]
+    },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      '1': { id: '1', text: 'after talents', events: [
+        { type: 'modify_stat', stat: 'endurance', amount: -1,
+          condition: { type: 'has_talent', talent: 'Shadar in the Making' } }
+      ], choices: [] }
+    }
+  };
+
+  // ----------------------------------------------------------------
+  // Case (a): Bushcraft + Lorecraft → +5 endurance, +1 intuition.
+  // ----------------------------------------------------------------
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  play.startCharacterCreation(state, book);
+  assertEqual(state.pause && state.pause.type, 'character_creation_distribute',
+              '(a-pause0) paused on distribute_points');
+  // Distribute: strength=5, endurance=16, intuition=1 (sum 22)
+  play.applyAction(state, book, 'distribute', ['strength=5', 'endurance=16', 'intuition=1']);
+  assertEqual(state.stats.endurance, 16, '(a-pre) endurance after distribute');
+  assertEqual(state.initialStats.endurance, 16, '(a-pre) initial endurance after distribute');
+  assertEqual(state.stats.intuition, 1, '(a-pre) intuition after distribute');
+  play.applyAction(state, book, 'choose_abilities', ['Bushcraft', 'Lorecraft']);
+  assertEqual(state.stats.endurance, 21, '(a-post-ab) endurance bumped by Bushcraft +5');
+  assertEqual(state.initialStats.endurance, 21, '(a-post-ab) initial endurance bumped by Bushcraft +5');
+  assertEqual(state.stats.intuition, 2, '(a-post-ab) intuition bumped by Lorecraft +1');
+  assertEqual(state.initialStats.intuition, 2, '(a-post-ab) initial intuition bumped by Lorecraft +1');
+  assertTrue(state.flags.includes('ability_bushcraft'), '(a-flag) ability_bushcraft flag set');
+  assertTrue(state.flags.includes('ability_lorecraft'), '(a-flag) ability_lorecraft flag set');
+
+  play.applyAction(state, book, 'choose_talents', ['Shadar in the Making', 'Strong Back']);
+  // Note: end-of-chargen auto-navigates to §1, which fires §1's
+  // has_talent-gated -1 endurance — so the assertions below check
+  // the post-§1 state directly (no separate navigateTo call needed).
+  assertEqual(state.stats.intuition, 3, '(a-post-tl) intuition bumped by Shadar +1 (Strong Back parser_notes only)');
+  assertEqual(state.initialStats.intuition, 3, '(a-post-tl) initial intuition bumped by Shadar +1');
+  assertTrue(Array.isArray(state.talents) && state.talents.includes('Shadar in the Making'),
+             '(a-tl-array) state.talents contains Shadar in the Making');
+  assertTrue(state.flags.includes('talent_shadar_in_the_making'),
+             '(a-flag-tl) talent_shadar_in_the_making flag set');
+  assertTrue(state.flags.includes('talent_strong_back'),
+             '(a-flag-tl) talent_strong_back flag set');
+  // has_talent-gated section event fires on auto-navigate to §1.
+  assertEqual(state.stats.endurance, 20, '(a-cond) has_talent-gated endurance -1 fired on auto-navigate');
+
+  // ----------------------------------------------------------------
+  // Case (b): Huntmastery + Weaponmastery → rejected, no state mutation.
+  // ----------------------------------------------------------------
+  const state2 = play.initialState('synthetic');
+  state2.frontmatterDone = true;
+  play.startCharacterCreation(state2, book);
+  play.applyAction(state2, book, 'distribute', ['strength=5', 'endurance=16', 'intuition=1']);
+  const enduranceBefore = state2.stats.endurance;
+  play.applyAction(state2, book, 'choose_abilities', ['Huntmastery', 'Weaponmastery']);
+  // Pause should still be choose_abilities (not advanced).
+  assertEqual(state2.pause && state2.pause.type, 'character_creation_choose_abilities',
+              '(b-pause) still on choose_abilities after rejection');
+  assertEqual(state2.stats.endurance, enduranceBefore,
+              '(b-state) endurance unchanged on rejection');
+  assertTrue(!state2.abilities || state2.abilities.length === 0,
+             '(b-abilities) state.abilities not populated on rejection');
+  const violationLogged = state2.log.some(l => l.includes('mutually exclusive'));
+  assertTrue(violationLogged, '(b-log) violation logged');
+
+  // Re-submit with a valid pair → succeeds.
+  play.applyAction(state2, book, 'choose_abilities', ['Huntmastery', 'Bushcraft']);
+  assertEqual(state2.stats.endurance, enduranceBefore + 5,
+              '(b-retry) Bushcraft +5 lands on retry');
+
+  // ----------------------------------------------------------------
+  // Case (c): talent exclusive_with rejection (Beast Slayer + Sword Focus).
+  // ----------------------------------------------------------------
+  const state3 = play.initialState('synthetic');
+  state3.frontmatterDone = true;
+  play.startCharacterCreation(state3, book);
+  play.applyAction(state3, book, 'distribute', ['strength=5', 'endurance=16', 'intuition=1']);
+  play.applyAction(state3, book, 'choose_abilities', ['Bushcraft', 'Lorecraft']);
+  play.applyAction(state3, book, 'choose_talents', ['Beast Slayer', 'Sword Focus']);
+  assertEqual(state3.pause && state3.pause.type, 'character_creation_choose_talents',
+              '(c-pause) still on choose_talents after rejection');
+  assertTrue(!state3.talents || state3.talents.length === 0,
+             '(c-talents) state.talents not populated on rejection');
+
+  // ----------------------------------------------------------------
+  // Schema-shape assertions.
+  // ----------------------------------------------------------------
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
+  const stepActions = schema.definitions.character_creation_step.properties.action.enum;
+  assertTrue(stepActions.includes('choose_talents'),
+             'choose_talents in character_creation_step.action enum');
+  const condTypes = schema.definitions.condition.properties.type.enum;
+  assertTrue(condTypes.includes('has_talent'),
+             'has_talent in condition.type enum');
+  assertTrue(schema.properties.rules.properties.talents !== undefined,
+             'rules.talents block present in schema');
+  const abilityProps = schema.properties.rules.properties.abilities.properties.available.items.properties;
+  assertTrue(abilityProps.effects !== undefined, 'rules.abilities.available[].effects defined');
+  assertTrue(abilityProps.exclusive_with !== undefined, 'rules.abilities.available[].exclusive_with defined');
+  assertTrue(abilityProps.parser_notes !== undefined, 'rules.abilities.available[].parser_notes defined');
 });
 
 // ============================================================
