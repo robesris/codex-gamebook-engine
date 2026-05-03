@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.20.0
+# THE GAMEBOOK CODEX v2.20.1
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -798,6 +798,8 @@ The canonical encoding is **one `combat_modifiers[]` entry per discrete bonus**,
 
 Every field except `kind` is optional. The `multiplier` defaults to 0 for `immunity`, 0.5 for `resistance`, 2.0 for `weakness`. The `direction` defaults to `incoming` (damage dealt to the enemy by the player). The source filters and `condition` default to "no filtering" (the interaction applies to all damage regardless of source tags or player state). The `reason` is purely for display and logging.
 
+**Direction-naming convention (enemy-POV semantics).** The `incoming` / `outgoing` enum values on `damage_interaction.direction` are read **from the enemy's perspective**, not the player's: `incoming` = damage flowing INTO the enemy (i.e. the player's attacks); `outgoing` = damage flowing OUT FROM the enemy (i.e. attacks landing on the player). Rule 32 (`damage_cap.direction`) uses the same enum values with the same enemy-POV semantics — the two fields are deliberately aligned so a single combat that needs both a per-component scaling AND a total cap can use the same direction string for the same damage flow. The **defaults** differ between the two rules because the canonical use cases differ: `damage_interaction.direction` defaults to `incoming` (the common case is "enemy is immune/resistant to the player's attacks"), while `damage_cap.direction` defaults to `outgoing` (the common case is "this protection limits how much the enemy can hurt the player"). A naive reader who assumes player-POV ("outgoing = my attacks") will mis-read both rules; the cross-rule consistency only emerges once the enemy-POV framing is internalised. Mnemonic: damage flows TOWARD the enemy = `incoming` (to the enemy); damage flows AWAY from the enemy and toward the player = `outgoing` (from the enemy). See Rule 32 for the same convention applied to absolute per-round caps.
+
 **The round_script contract for structured damage.** Round_scripts must report damage as values on the `combat` table, *not* by directly mutating `player.health` or `enemy.health`. The script sets:
 
 ```lua
@@ -1418,6 +1420,8 @@ The canonical example is Windhammer §564 Words of Protection: *"If you have a b
 - **`direction`** (default `"outgoing"`). `"outgoing"` caps `damage_to_player`; `"incoming"` caps `damage_to_enemy`. The default matches the canonical use case (protection-style rules limiting incoming-from-enemy damage).
 - **`condition`** (optional). Frozen at combat start, same `and`/`or`/`not`/`has_*` union as combat_modifiers and damage_interactions. Compound conditions are first-class; the canonical Words-of-Protection case requires both the book in inventory AND the recorded-Word flag set. Null or absent → the cap always applies.
 - **`reason`** (optional). Human-readable display string shown in the combat UI's damage-caps panel and written to the playthrough log when the cap fires.
+
+**Direction-naming convention (enemy-POV semantics).** The `incoming` / `outgoing` enum values on `damage_cap.direction` are read **from the enemy's perspective**, not the player's: `incoming` = damage flowing INTO the enemy (i.e. the player's attacks); `outgoing` = damage flowing OUT FROM the enemy (i.e. attacks landing on the player). Rule 18 (`damage_interaction.direction`) uses the same enum values with the same enemy-POV semantics — the two fields are deliberately aligned so a single combat that needs both a per-component scaling AND a total cap can use the same direction string for the same damage flow. **Watch out:** the **defaults** differ between the two rules because the canonical use cases differ. `damage_interaction.direction` defaults to `"incoming"` because the most common interaction is "this enemy is immune/resistant to the player's attacks" (Helghast immunity, fire-elemental physical resistance). `damage_cap.direction` defaults to `"outgoing"` because the most common cap is "this protection limits how much the enemy can hurt the player" (Words of Protection). If a sub-agent is encoding a damage_cap that bounds player-attacks-the-enemy damage (rare — typically a sub-creature stage of a multi-form boss), the field must be set explicitly to `"incoming"`; do not assume the default. A naive reader who assumes player-POV ("outgoing = my attacks") will mis-read both rules; the cross-rule consistency only emerges once the enemy-POV framing is internalised. Mnemonic: damage flows TOWARD the enemy = `incoming` (to the enemy); damage flows AWAY from the enemy and toward the player = `outgoing` (from the enemy). See Rule 18 for the same convention applied to per-component scaling.
 
 **Composition with Rule 17 and Rule 18.** The three combat-shaping primitives form a layered pipeline:
 
@@ -2906,6 +2910,50 @@ The branch determines *which condition* the roll is compared against. The roll i
 
 **Three Windhammer instances cited as motivating cases.** §352 (LUCK + AGILITY compound, no reducibility — pure Pattern 7.6.2); §485 (STRENGTH + INTUITION compound — also pure Pattern 7.6.2 unless intuition turns out to be reducible by a skill); §594 (STRENGTH + AGILITY compound, reducible to AGILITY only when the player has `talent_strong_back` — the canonical Pattern 7.6.11 case). Encoding §352 / §485 with Pattern 7.6.2 alone is correct; §594 needs Pattern 7.6.11 because the reducibility is genuine player-state-dependent branching.
 
+**Multi-stat compound tests with split dice (one die per stat).** The canonical worked example above uses `roll('2d6')` because the source-text framing is "one roll, two compares" — a single 2d6 outcome compared against both stats independently. Some series use a **different die per stat** in their compound tests (e.g., the Windhammer/Chronicles-of-Arborell convention of 2d6 for STRENGTH tests but 1d6 for AGILITY tests). For these books, the encoding is **one `roll()` call per stat**, each against its own stat threshold, with the compound pass requiring all rolls to succeed; the reducibility gate skips one of the rolls entirely rather than skipping a comparison against a shared roll. The roll structure mirrors the source text's dice convention, not Pattern 7.6.11's sample dice notation.
+
+**Canonical `script` shape — split-dice variant (Windhammer §594):**
+
+```lua
+-- Compound stat-test of STRENGTH (2d6) and AGILITY (1d6), reducible to
+-- AGILITY only when the player has talent_strong_back. Encoding: roll
+-- once per stat (using the per-stat die the source text specifies),
+-- skip the strength roll entirely when the talent gate passes.
+local has_strong_back = false
+for _, f in ipairs(flags or {}) do
+  if f == 'talent_strong_back' then has_strong_back = true; break end
+end
+
+local pass_strength
+if has_strong_back then
+  -- Reduced test: skip the strength roll entirely.
+  pass_strength = true
+  log('Strong Back: skipping STRENGTH test')
+else
+  local rs = roll('2d6')
+  pass_strength = rs.total <= (game_state.strength or 0)
+  log('STRENGTH test: rolled [' .. rs.text .. ']=' .. rs.total ..
+      ' vs STRENGTH ' .. tostring(game_state.strength))
+end
+
+local ra = roll('1d6')
+local pass_agility = ra.total <= (game_state.agility or 0)
+log('AGILITY test: rolled [' .. ra.text .. ']=' .. ra.total ..
+    ' vs AGILITY ' .. tostring(game_state.agility))
+
+if pass_strength and pass_agility then
+  log('-- success')
+  player.navigate_to = 247
+else
+  log('-- failure')
+  player.navigate_to = 312
+end
+```
+
+**Why per-stat rolls instead of one shared roll.** When the source text's dice convention assigns a different die to each stat (2d6 vs STRENGTH max≈11, 1d6 vs AGILITY max≈5), a single `2d6` roll compared against both produces a near-impossible AGILITY pass (a 2d6 result of ≤5 only happens ~28% of the time even before stat clamps); a single `1d6` roll compared against both makes the STRENGTH compare meaningless. Neither matches the source-text intended difficulty. One die per stat preserves the per-stat probability the source text assumes. The reducibility gate (Strong Back) skips the entire strength roll/compare branch — the player is not asked to roll a die whose outcome is then ignored.
+
+**Anti-pattern — `roll('2d6')` against both stats when the source uses split dice.** Wave A's Chat #26 §594 encoding followed Pattern 7.6.11's literal worked example shape and rolled `2d6` against both STRENGTH and AGILITY — the AGILITY compare then failed almost always because Windhammer's AGILITY max is 5. The fix is the split-dice variant above. When migrating a compound test, **first verify the book's per-stat dice convention** (usually documented in the rules section's "Tests of [stat name]" subsection); if the convention is non-uniform, use the split-dice shape, not the shared-roll shape.
+
 **Anti-pattern — two stat_test events gated by `has_flag`.** Splitting §594 into two `stat_test` events (one with `condition: has_flag talent_strong_back`, one with `condition: not has_flag talent_strong_back`) implies two rolls and lets the player test Luck on the failure of either — the source text describes one roll. Always one `script` event for the reducible case, branching internally on player state.
 
 **When not to use Pattern 7.6.11.** If the source text explicitly describes the reduction as a *separate* check ("first test STRENGTH; if you fail, then test AGILITY with Strong Back as a second chance"), the encoding is two sequential `stat_test` events with appropriate `target` chaining, not one compound script. The Pattern 7.6.11 case is specifically *one* roll compared against *one or the other* condition based on player state — the reducibility is in the comparison, not in the roll structure.
@@ -3487,7 +3535,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.20.0 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
+**Codex v2.20.1 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
