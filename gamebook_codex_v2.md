@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.19.1
+# THE GAMEBOOK CODEX v2.20.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -325,6 +325,8 @@ The table exists because the codex doc is read by an AI that does not search it 
 | Section text describes a **permanent** stat change — "permanently reduce your STRENGTH by 3," "your INITIAL ENDURANCE is lowered by N," "for the rest of your adventure your COMBAT SKILL is reduced," "you cannot recover this loss" | Rule 30 | `modify_stat` event with `modify_initial: true` and the appropriate signed `amount`. Both `state.stats[stat]` and `state.initialStats[stat]` are adjusted by the delta, so `initial_is_max` clamping prevents healing from restoring beyond the new ceiling. Discriminating words: *permanently* / *forever* / *initial* / *for the rest of your adventure* / *cannot recover* — when present → `modify_initial: true`; when absent → omit the flag (transient loss). |
 | Section text describes a stat **cap** — "from now on your STRENGTH cannot exceed 11," "your maximum ENDURANCE is now N," any absolute-ceiling clause (rather than a delta change) | Rule 30 | `modify_stat` event with `set_initial_to: <value>` (schema v1.12+). The emulator assigns `state.initialStats[stat]` to the supplied value and clamps `state.stats[stat]` down if currently above the new ceiling; a current value already at or below the cap is left unchanged (raising a ceiling does not auto-heal). Pure caps OMIT `amount` and `modify_initial`. Pre-v1.12 books carry a `script` event clamping both `state.initialStats.<stat>` and `state.stats.<stat>` to the cap value via the Lua sandbox — these are migration candidates for the new encoding. |
 | Compound stat test reducible by a skill / talent / item — "Roll 2d6, total ≤ both your STRENGTH and AGILITY (or AGILITY only if you have Strong Back)" | Section 7.6 → Pattern 7.6.11 | `script` event that reads the gating flag/item/ability ONCE before rolling, branches the comparison (single-stat if the gate passes, compound if not), rolls ONCE, sets `player.navigate_to`. Single roll, two possible compare conditions. Distinct from Pattern 7.6.2 (compound test with no reducibility) and from two `stat_test` events gated by `has_flag` (the wrong encoding — implies two rolls). |
+| "Throw one dice and turn to N" / roll-here-apply-there cross-section dice patterns where the rolled value crosses a section boundary | Section 7.6 → Pattern 7.6.12 | `script` event in the roll-site section that rolls and stores the value to `state.deferred_roll_for_section_<receiver-id>` then sets `player.navigate_to`; matching `script` event in the receiver section that reads the slot, applies the effect with source-text clamps, then clears the slot. NEVER `roll_dice` per-range effects (consumes the value at the roll site, can't carry across navigation); NEVER a re-roll at the receiver site (mis-encodes the source's single-roll intent) |
+| "Eat a meal here (recover N endurance) ... and then restore all lost endurance" / sequential partial-heal-then-full-restore in one section | Section 7.6 → Pattern 7.6.13 | Two sequential events in `events[]`: first an `eat_meal` (or `modify_stat` for non-meal partial heal) for the partial gain, then a Pattern 7.6.1 `script` event setting `player_stats.<health-stat> = game_state.initial_stats.<health-stat>` for the full restore. NEVER a single collapsed `script` (loses the meal-decrement and source fidelity); NEVER omit one of the two events (misses either the cost or the final state) |
 | Combat where the source text frames victory as **endurance** rather than damage — "hold the gate for three rounds," "survive five rounds and the cavalry arrives," "last out the storm" | Rule 31 (`win_after_rounds`) | `combat` event with `win_after_rounds: <N>` (schema v1.13+) and `win_to` set to the post-survive section. The emulator runs the round flow normally and ends combat in victory once `combat.round >= N` with the player still alive. Player-death takes priority; enemy-defeat-by-health still wins in parallel (the field is an ADDITIONAL win condition). Anti-pattern: faking survive-N-rounds via inflated enemy health — that silently re-encodes the win condition as "deal enough damage" and lets a lucky round produce an early kill the source text doesn't describe. For forced endurance (no flee), set `flee_to: null`. |
 
 **How to use this table during a parse.** During Step 5 (Parse Rules and Character Creation), read the book's rules section once with this table open in your context. For every paragraph in the rules section, scan the left column for a matching trigger and note which rules apply to this book. Then during Step 6 (Parse Sections), as you encounter each section, scan the left column again — section-level triggers (combat modifiers, conditional choices, multi-event paragraphs) often only become apparent when you're looking at a specific section's text. The table is meant to be re-scanned, not memorised on a single read.
@@ -2910,6 +2912,87 @@ The branch determines *which condition* the roll is compared against. The roll i
 
 ---
 
+### Pattern 7.6.12 — Deferred-dice cross-section roll ("throw one dice and turn to N; at N, take the value and …")
+
+**Narrative trigger:** A section instructs the player to roll a die and navigate, with the *outcome* of the roll consumed in the destination section rather than at the roll site. The roll's value crosses a section boundary. Canonical Windhammer example: §377 ends *"Throw one dice and turn to section 408"*, and §408 begins *"Take the number of your dice throw and subtract it from your endurance points. If you are already low in endurance points do not reduce the number of your endurance points below 1 however."* The roll is in §377; the damage application is in §408; the value carries between them.
+
+**Why not a `roll_dice` event with per-range effects (Rule 22 / Pattern 7.6.9):** `roll_dice` consumes its outcome at the roll site through `results[range].effects` and `results[range].target` — the per-range branches resolve into navigation + side-effects in the same event. A deferred-dice section needs to *navigate first* and have the destination section read the rolled value, which the `roll_dice` event shape doesn't carry across the navigation.
+
+**Why not split the effect into the source section:** the source section's text would have to read *"Throw one dice; subtract it from your endurance, then turn to section 408"* — a different mechanical shape that mis-encodes the source-text intent. The book's actual phrasing is "throw a die and turn to N; at N, the effect is described and applied" — the player's reading flow visits N before knowing what the roll does.
+
+**Canonical encoding — `script` events on both ends with a state slot.** The roll-site section (§377) emits a `script` event that rolls the die and stores the value in a documented state slot named `state.deferred_roll_for_section_<id>` (or any other slot under `state.*` per the Lua sandbox), then sets `player.navigate_to`. The receiver section (§408) emits a `script` event that reads the slot, applies the effect, clamps as the source text requires, then clears the slot.
+
+```lua
+-- §377 script event: roll the die, store the value, navigate.
+local r = roll('1d6')
+log('Storm-damage deferred roll: [' .. r.text .. ']=' .. r.total)
+state.deferred_roll_for_section_408 = r.total
+player.navigate_to = 408
+```
+
+```lua
+-- §408 script event: read the deferred roll, apply -N to ENDURANCE
+-- with the source-text clamp at 1, clear the slot.
+local n = state.deferred_roll_for_section_408 or 0
+local cur = game_state.endurance or 0
+local new = cur - n
+if new < 1 then new = 1 end
+log('Storm damage: subtracting ' .. n .. ' from ENDURANCE (' .. cur .. ' -> ' .. new .. ', clamped at 1)')
+player_stats.endurance = new
+state.deferred_roll_for_section_408 = nil  -- clear the slot
+```
+
+**Slot-naming convention.** Use `deferred_roll_for_section_<receiver-id>` so the slot is self-documenting (a reader of the playthrough log can tell at a glance which roll-site set it and which section consumes it). Books with multiple deferred-dice chains can use distinct slots per chain without collision. The slot lives on `state.*` (the script-sandbox-exposed root), not on `player.*` or `game_state.*` — those are reserved for character data the emulator already manages.
+
+**Edge cases.** If the receiver section is reachable via paths *other than* the roll-site (a flag-gated branch elsewhere navigates directly to §408), the receiver script must guard the slot read with a default — `state.deferred_roll_for_section_408 or <default>` — so a player who arrives without having rolled doesn't silently take 0 damage when the source text would have applied a deterministic alternative. The default is whatever the source-text-described behavior is for the alternate-arrival path; if no alternate arrival exists in the book, set the default to a sentinel that flags the run for review.
+
+**Anti-pattern — using a global flag instead of a numeric slot.** A `set_flag` carries one bit; a deferred dice roll carries an integer 1..6 (or whatever the die produces). Use a numeric `state.*` slot, not a flag. Conversely, anti-pattern — using `state.deferred_roll_for_section_<id>` for one-bit transitions that the player took a particular path through. Use a flag for that (Rule 33-style if it's an item-state, or a section-milestone flag like `met_the_oracle` for narrative milestones).
+
+**Anti-pattern — emitting the receiver-section damage as a Rule 22 `roll_dice` per-range list.** That re-rolls the die at the receiver site, producing two rolls when the source text describes one. The deferred slot guarantees the receiver consumes the roll-site's outcome.
+
+---
+
+### Pattern 7.6.13 — Sequential dual restoration in one section ("eat a meal here, then rest fully")
+
+**Narrative trigger:** A section combines a partial-heal eat-meal-style event with a full-rest restoration in sequence within the same section. Canonical Windhammer example: §585's encampment scene reads *"This meal will recover six points of endurance to your endurance level. Record this on your character sheet before continuing."* mid-section, followed at the end by *"The hot food and decent rest has given you new energy. Restore all lost endurance points to your character sheet and then turn to section 107."* Two restorations in one section — a partial heal followed by a full restore. Mechanically the second swallows the first (the final state is "endurance restored to initial"), but Rule 1 source fidelity preserves both events because the source text describes them as sequential discrete steps.
+
+**Canonical encoding — two sequential events in `events[]`.** The first event is the partial heal (typically `eat_meal` if the book has a meal/provisions resource, or `modify_stat` for a simple +N heal). The second event is Pattern 7.6.1's stat-restoration `script`. The events fire in order; the section's `events[]` array preserves the source-text sequence.
+
+```json
+"events": [
+  {
+    "type": "eat_meal",
+    "heal_amount": 6,
+    "reason": "Hot meal recovers 6 ENDURANCE"
+  },
+  {
+    "type": "script",
+    "script": "player_stats.endurance = game_state.initial_stats.endurance",
+    "reason": "Hot food and decent rest fully restores ENDURANCE"
+  }
+]
+```
+
+The first event decrements the meal/provisions counter (or fires the named-consumable / Laumspur path per Rule 25 if the book has named consumables) and applies +6 ENDURANCE clamped to initial. The second event then writes ENDURANCE = initial, which subsumes the first event's partial gain when the player started below `initial - 6`.
+
+**Why encode both events when the second subsumes the first:** Rule 1 source fidelity. The book's text describes two distinct mechanical steps with different narrative framings (eating vs. resting), and the playthrough log should reflect both. A player reading the log later sees `[Hot meal: +6 ENDURANCE]` followed by `[Rest: fully restored to initial]`, matching the source text's flow. Collapsing both into a single `script` that just sets ENDURANCE to initial loses the meal-decrement side effect AND collapses two narrative beats into one log entry, which is harder to reconcile against the book.
+
+**Variants.**
+
+- **Eat-meal-only first step** — if the source text's first heal is a meal (`heal_amount` matches the book's per-meal heal value) and the book has a `rules.provisions` block, the first event is `eat_meal` and the second is the Pattern 7.6.1 script. The eat_meal decrements provisions; the script restores the rest. This matches the §585 shape.
+- **Pure modify_stat first step** — if the source text's first heal is a fixed amount with no meal-decrement framing ("a healing draught restores 4 ENDURANCE" followed by a rest), the first event is `modify_stat amount: +N` and the second is the script. No meal counter is touched.
+- **Named-consumable first step** — if the source text's first heal is a named consumable (Rule 21 carve-out / Rule 25 — Laumspur, etc.), the first event is `eat_meal` (which surfaces the named-consumable picker per Rule 25), and the second event is the script.
+
+**Anti-pattern — single `script` event collapsing both restorations.** A script that just sets ENDURANCE to initial loses the first step's meal-decrement side effect (the player gets a free heal that should have cost a Meal in the book's economy) AND loses Rule 1 source fidelity in the playthrough log. Always two events for the two-step source.
+
+**Anti-pattern — encoding only the partial heal and skipping the full restore.** That misses the source's "Restore all lost endurance points" instruction; the player ends the section at their pre-section state minus a Meal plus 6, instead of at initial. Always the second event for the full restore.
+
+**Anti-pattern — encoding only the full restore and skipping the partial heal.** That preserves the final state but misses the meal-decrement side effect (no provisions cost). If the source text describes eating a meal as part of the section, the meal counter must decrement; the partial-heal event is what carries that decrement.
+
+**Cross-reference.** Pattern 7.6.1 is the canonical encoding for the second event (full restoration to initial). Rule 9 (multi-event sections) covers the structural shape of multi-event sections in general; this pattern is the specific application to dual restoration.
+
+---
+
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
 
 ### 8.1 Computed Navigation
@@ -3404,7 +3487,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.19.1 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
+**Codex v2.20.0 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
