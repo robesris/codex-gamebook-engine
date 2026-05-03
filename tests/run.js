@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title at v1.15.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title at v1.16.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title at v1.15.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title at v1.16.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title bumped to v1.15.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title bumped to v1.16.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.15.0', 'schema title at v1.15.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.16.0', 'schema title at v1.16.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1577,6 +1577,117 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   assertEqual(dcProps.max.minimum, 0, 'damage_cap.max minimum is 0');
   assertTrue(Array.isArray(schema.definitions.damage_cap.required) && schema.definitions.damage_cap.required.includes('max'), 'max is required');
   assertEqual(dcProps.direction.enum.join(','), 'incoming,outgoing', 'direction enum is incoming|outgoing');
+});
+
+// ============================================================
+// Test 25: modify_stat.modify_initial_only adjusts initialStats
+//          without touching state.stats[stat] (schema v1.16+ /
+//          Rule 30 modify_initial-only sub-pattern).
+// ============================================================
+// MOTIVATED_BY: Codex v2.21.0 / schema v1.16.0 Rule 30 update.
+// Source-text discovery: Windhammer §453 says "Your endurance
+// points remain at the same level as they were prior to the
+// attack by the Dweo'gorga, but the Trial has weakened your
+// overall endurance level. For the remainder of this quest your
+// maximum endurance level must be reduced by 3 points." The
+// existing modify_initial: true field reduces BOTH current and
+// initial; the §453 case requires reducing ONLY initial,
+// preserving current at its pre-event level. New field
+// modify_initial_only: true on modify_stat events covers this
+// case. Locks in the four behaviors a future regression must
+// preserve: (a) initial drops by amount; (b) current value is
+// untouched; (c) the over-initial state is permitted (current
+// may legitimately exceed new initial); (d) subsequent heal
+// events still clamp to the new initial via initial_is_max.
+// END_TO_END_VERIFY: drive both emulators through Windhammer
+// §453 once the section is migrated to modify_initial_only;
+// confirm the player's current endurance is unchanged but
+// initial drops by 3, and a subsequent eat_meal event clamps
+// healing at the new lower initial.
+test('modify_initial_only reduces initial without touching current and respects later clamping', () => {
+  const book = buildBook({
+    rules: { stats: [{ name: 'TESTSTAT_END', initial_is_max: true }] },
+    sections: {
+      '1': {
+        text: 'permanent max reduction; current preserved',
+        events: [{ type: 'modify_stat', stat: 'TESTSTAT_END', amount: -3, modify_initial_only: true, reason: 'Trial of Hallen-draal' }],
+        choices: [],
+      },
+      '2': {
+        text: 'try to heal',
+        events: [{ type: 'modify_stat', stat: 'TESTSTAT_END', amount: 100, reason: 'big heal' }],
+        choices: [],
+      },
+    },
+  });
+
+  // Case (a): pre-event current=12, initial=12. Post-event current=12 (unchanged),
+  // initial=9.
+  const stateA = play.initialState('synthetic');
+  stateA.frontmatterDone = true;
+  stateA.creationDone = true;
+  stateA.pause = null;
+  stateA.stats = { TESTSTAT_END: 12 };
+  stateA.initialStats = { TESTSTAT_END: 12 };
+  play.navigateTo(stateA, book, '1');
+  assertEqual(stateA.initialStats.TESTSTAT_END, 9, '(a) initial dropped by 3 to 9');
+  assertEqual(stateA.stats.TESTSTAT_END, 12, '(a) current unchanged at 12 (allowed to exceed new initial)');
+
+  // Case (b): pre-event current=8, initial=12. Post-event current=8 (unchanged),
+  // initial=9. The current is now correctly below initial; nothing weird here.
+  const stateB = play.initialState('synthetic');
+  stateB.frontmatterDone = true;
+  stateB.creationDone = true;
+  stateB.pause = null;
+  stateB.stats = { TESTSTAT_END: 8 };
+  stateB.initialStats = { TESTSTAT_END: 12 };
+  play.navigateTo(stateB, book, '1');
+  assertEqual(stateB.initialStats.TESTSTAT_END, 9, '(b) initial dropped by 3 to 9');
+  assertEqual(stateB.stats.TESTSTAT_END, 8, '(b) current unchanged at 8');
+
+  // Case (c): a subsequent heal event clamps at the NEW initial (9), not the
+  // OLD initial (12). Verifies the field interacts correctly with
+  // initial_is_max on later events.
+  const stateC = play.initialState('synthetic');
+  stateC.frontmatterDone = true;
+  stateC.creationDone = true;
+  stateC.pause = null;
+  stateC.stats = { TESTSTAT_END: 5 };
+  stateC.initialStats = { TESTSTAT_END: 12 };
+  play.navigateTo(stateC, book, '1');  // initial -> 9, current stays 5
+  play.navigateTo(stateC, book, '2');  // big heal — should clamp at 9
+  assertEqual(stateC.initialStats.TESTSTAT_END, 9, '(c) initial still 9 after heal');
+  assertEqual(stateC.stats.TESTSTAT_END, 9, '(c) heal clamped at NEW initial of 9, not OLD initial of 12');
+
+  // Case (d): resource slots (provisions/gold/meals) are excluded — applying
+  // modify_initial_only to provisions should be a no-op on initial (since
+  // initial-stats tracking doesn't apply to resource slots).
+  const stateD = play.initialState('synthetic');
+  stateD.frontmatterDone = true;
+  stateD.creationDone = true;
+  stateD.pause = null;
+  stateD.stats = {};
+  stateD.initialStats = {};
+  stateD.provisions = 5;
+  const provBook = buildBook({
+    sections: {
+      '1': {
+        text: 'no-op on resource',
+        events: [{ type: 'modify_stat', stat: 'provisions', amount: -2, modify_initial_only: true }],
+        choices: [],
+      },
+    },
+  });
+  play.navigateTo(stateD, provBook, '1');
+  assertEqual(stateD.provisions, 5, '(d) provisions unchanged (modify_initial_only no-ops on resource slots)');
+  assertEqual(stateD.initialStats.provisions, undefined, '(d) initialStats.provisions unchanged');
+
+  // Schema-shape assertion.
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  const eventProps = schema.definitions.event.properties;
+  assertTrue(!!eventProps.modify_initial_only, 'event.modify_initial_only declared');
+  assertEqual(eventProps.modify_initial_only.type, 'boolean', 'event.modify_initial_only is boolean');
 });
 
 // ============================================================

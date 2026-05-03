@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.10.0';
+const CODEX_EMULATOR_VERSION = '3.11.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1059,6 +1059,33 @@ function handleEvent(event, state, book) {
     case 'modify_stat': {
       const stat = event.stat;
       const amount = event.amount || 0;
+      // modify_initial_only (schema v1.16+): apply amount to initialStats
+      // ONLY, leaving current stats[stat] untouched. The current value
+      // may legitimately exceed the new initial after this event fires;
+      // initial_is_max clamping on subsequent heal events does the
+      // catch-up. Resource slots (provisions / gold / meals) have no
+      // initial-stats entry, so the field is a true no-op for those —
+      // we still return early so the regular `amount` application path
+      // below does NOT run. Mutually exclusive with modify_initial (the
+      // schema description says don't combine; this implementation lets
+      // modify_initial_only take precedence if both are set, since
+      // modify_initial would otherwise also touch current).
+      if (event.modify_initial_only) {
+        if (stat !== 'provisions' && stat !== 'gold' && stat !== 'meals') {
+          state.initialStats[stat] = (state.initialStats[stat] || 0) + amount;
+          if (event.set_initial_to !== undefined) {
+            state.initialStats[stat] = event.set_initial_to;
+            if ((state.stats[stat] || 0) > event.set_initial_to) {
+              state.stats[stat] = event.set_initial_to;
+            }
+          }
+          const setNoteOnly = event.set_initial_to !== undefined ? ` (initial set to ${event.set_initial_to})` : '';
+          state.log.push(`${stat} initial ${amount >= 0 ? '+' : ''}${amount} (initial only — current unchanged)${setNoteOnly}${event.reason ? ' (' + event.reason + ')' : ''}`);
+        } else {
+          state.log.push(`${stat} modify_initial_only no-op (resource slot)${event.reason ? ' (' + event.reason + ')' : ''}`);
+        }
+        return 'continue';
+      }
       // If modify_initial is set, also apply the delta to initialStats
       // so the change is permanent — healing cannot restore past the
       // new (lower) ceiling. See codex / schema modify_initial field.
