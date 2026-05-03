@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.19.0
+# THE GAMEBOOK CODEX v2.19.1
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -278,6 +278,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "If you lose three combat rounds in a row the torch is knocked from your grasp / your CV must be returned to its normal level" / a held-item combat bonus that comes off mid-fight after N consecutive losses (NOT a combat-end clause) | Rule 17 (modifier-expiry-on-loss-streak, schema v1.14+) | `combat_modifiers[i].removed_after_consecutive_losses: <N>` on the affected modifier; the emulator filters the modifier out of the active list once the per-fight loss streak (`damage_to_player > damage_to_enemy` rounds in a row) reaches the threshold. Combat continues at the base value; this is NOT `combat.win_after_rounds` (Rule 31, which ENDS the fight) |
 | "Add five points to your combat value for each one held" / "an additional N if you also have Y" / "+M for the X and +N for the Y" / multiple discrete per-item bonuses on the same combat with explicit per-item attribution | Rule 17 (stacked / compound-condition modifiers — no schema change) | One `combat_modifiers[]` entry per discrete bonus, each carrying its own `has_item` (or compound `and`/`or`) `condition`. Stacking is the natural sum across all entries whose conditions pass; compound conditions handle paired-item gates and flag-gated item state ("if the sword is undamaged" → `not has_flag: <item>_damaged`). NEVER a single entry whose `delta` is summed at runtime from inventory count |
 | "Any damage caused by X in each battle round will be limited to N points" / "no more than N damage per round" / "cannot deal more than N per round" / absolute upper bound on the per-round damage total (NOT scaling per-component, NOT additive on inputs) | Rule 32 (per-round damage caps, schema v1.15+) | `damage_caps` array on the combat event (or `intrinsic_damage_caps` on the enemies_catalog entry) with entries of shape `{max, direction?, condition?, reason?}`. Caps clamp the post-interaction per-direction TOTAL at `min(total, max)` after Rule 17 deltas and Rule 18 multipliers have run. Distinct from Rule 17 (additive on inputs) and Rule 18 (multiplicative on components) |
+| "Your sword has been damaged" / "if you have come through this quest with the great sword undamaged" / "the lantern is now lit" / one-time mechanical transition on a specific item that gates downstream sections | Rule 33 (item-state flags — no schema change) | A flag named `<item_id>_<state-suffix>` (e.g. `thandurion_damaged`, `lantern_lit`, `scroll_read`); set in the transitioning section via `set_flag`; checked in downstream sections via `has_flag` (post-transition) or `not has_flag` (default state). NEVER a parallel `<item>_damaged` catalog entry; NEVER an item-quantity counter; NEVER a Rule 19 `stat_modifier` toggle |
 | "If you have the Hunting Discipline, you do not need to eat" / "the Ranger is exempt from" / "the bearer is immune to" / "you automatically succeed at" / "you may bypass" / "you may ignore" | Rule 15 | Event-level `condition` field gating the affected event (`eat_meal`, `stat_test`, `modify_stat`, etc.) using `not has_ability "Hunting"` or analogous |
 | "If you have the lantern, continue safely; otherwise lose 2 STAMINA" / "if your backpack has room, take the extra meal" / one-time flag-gated bonuses | Rule 15 | Event-level `condition` on the conditional event |
 | "If Weaponskill is chosen, pick R10 to determine weapon type" / "Paladins also roll for starting prayer count" / any rule that gates a *character-creation roll or prompt* on an earlier creation step's outcome (a discipline pick, an earlier rolled value, a flag set during creation) | Rule 15 (char-creation steps extension, schema v1.6+) | `character_creation.steps[]` entry carries a `condition` using the same union as event/choice conditions — usually `has_ability` for discipline gates, `stat_gte` / `stat_lte` for roll-outcome gates, `has_flag` for book-specific creation flags |
@@ -1466,6 +1467,87 @@ If the player has neither the book nor the flag set, the cap's condition fails a
 **Anti-pattern — encoding per-component caps as a single Rule 32 entry.** Rule 32 caps operate on the post-interaction TOTAL across all components — no source filters, no per-component bounds. If a book has a per-component cap (e.g., "fire damage capped at 2 per round but other types uncapped"), that's a future schema extension or a Rule 18 interaction with a custom multiplier; Rule 32 in v1.15 is the total-cap form.
 
 **Verification.** For every combat event in the book, check the source text for absolute-bounding language on per-round damage totals: *"limited to N points," "no more than N damage," "cannot deal more than N per round," "all damage capped at N," "the cursed sword can only do N damage per round to its wielder."* If present, encode as a `damage_caps` entry with the matching `max` and the direction the source text describes. NO bounding rule is encoded as a Rule 17 modifier or a Rule 18 interaction — those layers do not bound totals.
+
+---
+
+### Rule 33: Item-State Flags (`<item>_<state>` Convention for Stateful Items)
+
+**The rule:** When the book's narrative describes an in-adventure transition that changes an item's mechanical role — the player's sword is damaged in battle, a torch is lit, a key is used and consumed by a lock, a magic scroll is read once, a flask is broken — encode the transition as a **flag** following the `<item_id>_<state-suffix>` naming convention. The default state of the item (undamaged, unlit, unused, sealed) is encoded as the **absence** of the flag; the post-transition state is encoded as the flag set to true. Sections that perform the transition emit a `set_flag` event; sections that gate behavior on the post-transition state check `has_flag`; sections that gate behavior on the default state wrap `has_flag` in `not`.
+
+**Why a flag and not an item-quantity, an inventory swap, or a Rule 19 stat_modifier toggle.** None of those primitives match the semantic of "the same item, in a changed mechanical state." An item-quantity counter mis-models a one-bit transition; an inventory swap (`remove_item: thandurion, add_item: thandurion_damaged`) creates two catalog entries for what the source text describes as one item with one identity; a Rule 19 `stat_modifier` toggle requires the item itself to gain or lose a property mid-adventure, which the schema doesn't support and which would conflict with the items_catalog being the canonical source of an item's mechanical shape. A flag is the smallest primitive that carries the transition correctly: the catalog entry stays canonical, the inventory still contains one copy of the named item, and downstream conditions across many sections can read the same one-bit state without each section re-establishing it.
+
+**The naming convention.** The flag name is `<item_id>_<state-suffix>` where `item_id` matches the catalog entry's id and `state-suffix` names the post-transition state in lowercase snake_case. Examples: `thandurion_damaged`, `lantern_lit`, `medallion_examined`, `key_used`, `scroll_read`, `flask_broken`. **Always pick the post-transition state as the suffix**, not the default state — `thandurion_damaged` (set true after damage, default unset) rather than `thandurion_undamaged` (would have to be set true at character creation, then cleared on damage, doubling the bookkeeping). The convention is the same one Rule 27 uses for skills/talents (positive form, default-state-is-absence), but the prefix is the item's id rather than `skill_` or `talent_`.
+
+**Discriminating words.** The source text introduces an item-state flag whenever it (a) describes a one-time mechanical transition the item undergoes and (b) gates downstream behavior on whether that transition has happened. Watch for:
+
+- "Your sword is sheared / scorched / blunted / chipped" → `<sword>_damaged`
+- "If your sword has previously been damaged…" → conditional check on the flag
+- "If the lantern is lit…", "Strike the flint and light the lantern" → `lantern_lit`
+- "You read the scroll. Note that it cannot be used again." → `scroll_read`
+- "If you have come through this quest with the great sword undamaged…" → conditional check `not has_flag: <sword>_damaged`
+
+Any source-text predicate that gates on whether a particular item is in a particular state — and that state was set somewhere earlier in the book by an event, not by the item being held — uses the flag, not a stat, not a quantity, not a separate catalog entry.
+
+**Setting the flag (transition section).** The section that performs the transition emits a `set_flag` event among its `events[]`. The flag setting is part of the section's narrative outcome, not gated by a conditional choice — if the player reaches this section, the item enters the new state.
+
+**Gating on the flag (downstream sections).** Use `has_flag` in any condition slot — choice-level, event-level, combat_modifier-level, damage_cap-level — exactly as Rule 15 prescribes for any other binary state. Compound `and` / `or` / `not` combinators handle multi-flag predicates ("if the sword is undamaged AND you have the Words of Protection book").
+
+**Worked example — Windhammer's Than'durion damage chain (§200 → §128 → §564).** The book's narrative establishes Than'durion as the protagonist's primary weapon at character creation. §200 describes a section where the sword takes irreversible damage during a magical-trap encounter ("Your sword was not as lucky, a full forearm's length at its end sheared and scorched by its slight contact"); from that point on, every combat's CV is reduced and the §564 endgame setpiece's +2 Than'durion bonus no longer applies. §128 offers a one-time alternative: trade the damaged sword for a Mutan's axe with a +3 CV bonus that "will replace most of those points lost when your sword was damaged."
+
+The encoding is a single `thandurion_damaged` flag set at §200 and read at §128 + §564:
+
+```json
+// §200 events (the transition):
+[
+  { "type": "set_flag", "flag": "thandurion_damaged",
+    "reason": "Sword damaged by the magical lattice trap" }
+  /* ...plus the -4 CV penalty's encoding — see "Composing with combat-shaping rules" below... */
+]
+
+// §128 — conditional choice gated on the post-transition state:
+{
+  "text": "If your sword has previously been damaged, take the Mutan's axe and re-sheathe Than'durion.",
+  "condition": { "type": "has_flag", "flag": "thandurion_damaged" },
+  "events": [
+    { "type": "add_item", "item": "mutans_axe" },
+    { "type": "set_flag", "flag": "thandurion_replaced",
+      "reason": "Player swapped to Mutan's axe; Than'durion penalty lifts" }
+  ],
+  "target": <next-section>
+}
+
+// §564 — the +2 Than'durion bonus is gated on default-state (undamaged):
+{
+  "type": "combat",
+  "combat_modifiers": [
+    /* ...other §564 stacked entries... */
+    {
+      "target": "player.attack", "delta": 2,
+      "condition": {
+        "type": "and",
+        "conditions": [
+          { "type": "has_item", "item": "thandurion" },
+          { "type": "not", "condition": { "type": "has_flag", "flag": "thandurion_damaged" } }
+        ]
+      },
+      "reason": "Than'durion (undamaged)"
+    }
+  ]
+}
+```
+
+The same one-bit flag carries the transition cleanly across every dependent section. New sections that need to gate on the sword's state add their own `has_flag` / `not has_flag` checks without duplicating the transition logic.
+
+**Composing with combat-shaping rules.** The §200 source text includes a side-effect on every subsequent combat: *"Until such time you must reduce your combat value by 4 points to account for this damage."* This persistent CV penalty is naturally a Rule 23 `standing_modifier` whose condition reads the item-state flag — one entry in `rules.combat_system.standing_modifiers[]` covers every combat in the book, conditional on `{type: 'and', conditions: [{type: 'has_flag', flag: 'thandurion_damaged'}, {type: 'not', condition: {type: 'has_flag', flag: 'thandurion_replaced'}}]}`. The §128 choice's `set_flag: thandurion_replaced` lifts the standing penalty; the original `thandurion_damaged` flag stays set (the sword is still damaged in narrative terms), but the `_replaced` flag's presence cancels the combat-skill cost. This composition demonstrates the rule's intent: item-state flags compose cleanly with Rule 17 / Rule 23 / Rule 32 conditions and don't require any new schema or emulator capability — they are pure data.
+
+**Where Rule 33 stops and Rule 27 begins.** Both rules use the flag mechanism, but they cover different lifecycle points:
+
+- **Rule 27 (skill / talent flags)** — set during character creation (in a `choose_abilities` step or a `set_flag` step gated on a class pick), never changed during play. The flag represents an immutable character capability.
+- **Rule 33 (item-state flags)** — set during play by an in-section `set_flag` event, can be set or cleared by later sections. The flag represents an in-adventure state transition.
+
+The naming-prefix convention matches the schema-flag-namespace's intent: a reader of the JSON should be able to read the flag name and know what category of fact it encodes (`skill_brigandry` is a chargen capability; `thandurion_damaged` is an in-adventure item state; `class_ranger` is a chargen class pick; `met_the_oracle` is a one-time narrative milestone). When a flag's category is ambiguous between Rule 27 and Rule 33, ask "is this set during character creation and never changed afterward, or set/cleared by sections during play?" — chargen-only → Rule 27; mid-adventure → Rule 33.
+
+**Verification.** For every item the book's narrative describes as undergoing a one-time mechanical transition (damaged, lit, used, broken, examined, opened, read), the transition is encoded as a `set_flag` event in the section that performs it, with the flag name following the `<item_id>_<state-suffix>` convention (`thandurion_damaged`, not `sword_is_now_damaged` or `damaged_sword`). Every downstream section that gates on the post-transition state checks `has_flag: <item_id>_<state-suffix>`; every section that gates on the default state wraps the check in `not`. NO item-state transition is encoded as a swap from one items_catalog entry to a parallel "_damaged" catalog entry (that doubles the catalog and breaks per-id cross-references); NO transient narrative beat ("you grip the sword tighter") becomes a state flag — only mechanical transitions that gate downstream behavior earn a flag.
 
 ---
 
@@ -3265,6 +3347,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 32 (Per-round damage caps).** For every combat event in the book I checked the source text for absolute-bounding language on per-round damage totals ("limited to N points," "no more than N damage," "cannot deal more than N per round," "all damage capped at N"). If present, the rule is encoded as a `damage_caps` entry on the combat event (or `intrinsic_damage_caps` on the enemy's catalog entry) with `max` matching the source-text value and `direction` matching the source text's framing (`outgoing` for "limit damage taken by player," `incoming` for "limit damage dealt by player"). Compound `and` / `or` / `not` conditions handle predicates like "if you have the book AND uttered the Word." NO bounding rule is encoded as a Rule 17 modifier (those are additive deltas on round_script INPUTS, they do not bound output totals) or as a Rule 18 damage_interaction (those are multiplicative scalings per component, they cannot express an absolute total cap). The three combat-shaping primitives operate at different stages: Rule 17 on inputs, Rule 18 on components, Rule 32 on totals — pick the layer that matches the source-text semantic.
 
+**Rule 33 (Item-state flags).** For every item the book's narrative describes as undergoing a one-time mechanical transition (damaged, lit, used, broken, examined, opened, read) that gates downstream sections, the transition is encoded as a `set_flag` event in the section that performs it, with the flag name following the `<item_id>_<state-suffix>` convention (canonical: Windhammer §200's `set_flag: thandurion_damaged`, gating §128's "swap to Mutan's axe" choice and §564's `not has_flag: thandurion_damaged` predicate on the +2 Than'durion bonus). The default state is encoded as the absence of the flag (`thandurion_damaged` unset, not `thandurion_undamaged` set true at chargen). NO item-state transition is encoded as a swap to a parallel `<item>_damaged` catalog entry, an item-quantity counter, or a Rule 19 `stat_modifier` toggle. Persistent combat-skill side effects of the transition (e.g., §200's "reduce your combat value by 4 points until you acquire a new weapon") use Rule 23 standing_modifiers conditional on the item-state flag. Distinguished from Rule 27 by lifecycle: Rule 27 flags are set at character creation and never change; Rule 33 flags are set/cleared by in-section events during play.
+
 **Section 2.1a (Endings placement, schema v1.11+).** The book's `death_endings` and `victory_endings` lists are placed consistently — either both inside `metadata.confidence.{death,victory}_endings` as section-id arrays (single-chat parses, matching the four maintained books) OR both at the top level (`book.death_endings`, `book.victory_endings`) as section-id arrays with integer counts in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). I did NOT mix the two placements within one book (no array at top level AND a duplicating array in confidence), I did NOT silently migrate from one shape to the other mid-merge, and every section id listed in either placement also appears in `sections{}` with `is_ending: true` and the matching `ending_type` (`"death"` for death endings; `"victory"` or `"continuation"` for victory endings).
 
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised. **Combat-modifier targets on derived-stat books:** every per-fight modifier on a derived-stat combat targets either a component field the round_script reads (`player.strength`, `player.weapon_bonus`, etc.) OR a generic accumulator slot the round_script reads as additive (`player.attack` / `enemy.attack`, even though `attack_stat: null`). NO `combat_modifier` entry targets the derived stat name itself (`player.combat_value`, `player.attack_strength`) — that field doesn't exist on the player table because the derived value is computed inside Lua each round. NO `modify_stat` event in any section uses the derived stat name as `stat:` — that event silently no-ops because the derived stat is not a real player-table slot. Per-fight modifiers on derived-stat books go in `combat_modifiers` on the combat event (Rule 17); persistent stat changes go in `modify_stat` on a real **component** stat (`stat: "strength"` etc.).
@@ -3320,7 +3404,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.19.0 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
+**Codex v2.19.1 / GBF schema v1.15.0 / CLI emulator v3.10.0 / HTML emulator v3.10.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
