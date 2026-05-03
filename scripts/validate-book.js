@@ -96,7 +96,7 @@ const repoRoot = (() => {
 })();
 const baselineText = (() => {
   try {
-    return execSync(`git -C "${repoRoot}" show "${rev}:${relPath}"`, { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+    return execSync(`git -C "${repoRoot}" show "${rev}:${relPath}"`, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 }).toString();
   } catch (e) {
     console.error(`git show ${rev}:${relPath} failed: ${e.message}`);
     process.exit(1);
