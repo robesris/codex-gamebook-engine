@@ -261,6 +261,37 @@ For narrowly-scoped edits (< 15 items touched, < 200 lines changed), foreground 
 
 When running in the background, remember you CANNOT poll or read the output file — the system prompt's tool description explicitly warns that reading the sub-agent's output JSONL can overflow the main session's context. Wait for the notification.
 
+### Schema-validity comparison against baseline (mandatory for sub-agent migration commits)
+
+Every sub-agent migration commit that edits a book file must verify that the per-section schema-validity error count did not regress outside the migration's declared scope. The verification is a fast quality gate — running `ajv` validation on `git show origin/main:<file>` (the pre-Wave baseline) and on the post-Wave file takes ~2 seconds and immediately surfaces any introduced shape errors anywhere in the file, not just in the Wave's intended scope.
+
+The discipline is mandatory because "PASS json validity" — which only confirms the file is parseable JSON, not that it conforms to the schema — is a much weaker signal than schema-shape conformance. A Wave that fixes 6 sections cleanly while breaking 3 unrelated sections looks identical to a clean Wave under bare JSON-parse validation; ajv-shape comparison surfaces the 3 regressions immediately.
+
+**The verification step (per Wave):**
+
+1. Pre-Wave: extract the baseline error count and per-section breakdown from `git show origin/main:<book-path>` against the current schema using ajv. Note the total error count and any sections in the migration's scope that contributed errors.
+2. Post-Wave: run the same ajv validation on the working-tree file. Compute the per-section delta (count + which sections moved up/down).
+3. Confirm: every section the Wave touched should have the same or lower error count post-Wave. Every section the Wave did NOT touch should have the same error count post-Wave (any change is a regression).
+4. Report: include the per-section error-count delta in the commit message. Format: `Schema validity: <pre> → <post> errors. In-scope sections: <list with deltas>. Out-of-scope regressions: none.`
+
+**ajv is a first-class devDependency.** The engine repo's `package.json` declares `ajv` and `ajv-formats` as devDependencies so the validator is available without per-session bootstrap. Sub-agent prompts directing a baseline comparison should reference the existing `node_modules/ajv` path rather than instructing a `--no-save` install — the install pattern was the pre-discipline workaround and is now superseded.
+
+**A minimal validation snippet** (sub-agent or main session can paste this into a one-shot script):
+
+```js
+const Ajv = require('ajv');
+const addFormats = require('ajv-formats');
+const ajv = new Ajv({ allErrors: true, strict: false });
+addFormats(ajv);
+const schema = require('/home/user/codex-gamebook-engine/codex.schema.json');
+const validate = ajv.compile(schema);
+const book = require('<absolute-path-to-book>');
+validate(book);
+// Group errors by section id derived from the dataPath
+```
+
+The cost of running the comparison is bounded — even a 600-section accumulator validates in well under 10 seconds — so there is no scenario in which it is too expensive to run on every Wave. Skipping it is a net loss every time.
+
 ## Playbook regression harness
 
 Each first-party book has a set of `*.script` playbooks under `plans/playthroughs/` (gitignored — these live on disk only) that exercise different paths through the book. The naming convention is:
