@@ -60,6 +60,22 @@ Stop. Ask yourself: is the change mechanical (e.g., migrating a field to a new s
 
 This rule is repeated in abbreviated form in `CLAUDE.md` in both the public and private repos so it appears in session-start context automatically. The duplication has a purpose: the rule has already been violated at least once in this project by a main session that read DEV_PROCESS, wrote the rule into CLAUDE.md, and then broke it within minutes, and once more by a sub-agent that refused a legitimately-scoped task because the rule wording was too universal. Both failure modes deserve corrective emphasis.
 
+### Dispatching a sub-agent does NOT launder an ad-hoc fix
+
+A sub-agent is the production line's *delivery vehicle*, not a workaround for the codex-first discipline. Spawning one with a prescriptive, main-session-designed fix list — telling it exactly which events to add, exactly which encoding to choose — is functionally equivalent to a main-session hand-edit. The commit gets an `iter N [sub-agent]` marker, the commit-msg hook accepts it, and the work looks legitimate; but the codex was never consulted, the rule was never written, and the book drifts from "what the codex says" toward "what one chat decided." That is the silent-drift pattern the HARD RULE exists to prevent.
+
+The discriminating test: **could a sub-agent, reading only the current codex + schema + emulators + the book's source text, derive the same fix?** If yes, the dispatch is a real production-line re-run. If the answer requires *also* reading a main-session message that says "use this encoding here," the codex is incomplete — write the missing rule first, ship the codex update, then dispatch the sub-agent against the updated codex.
+
+This applies even when the fix is "obviously right" or "just one event." Two patterns that drift quietly past the discipline:
+
+- **Backfilling with an existing rule.** A catalog entry has `stat_modifier: null` despite a description promising a mechanical effect; Rule 19 already specifies the canonical encoding. *Legitimate* sub-agent dispatch — but scope it as a Rule 19 audit pass over the catalog (walk every entry, find any whose null `stat_modifier` contradicts its description, tag them per Rule 19), not a single-entry prescriptive fix. The audit framing forces the sub-agent to use the codex; the prescriptive framing lets it skip the codex entirely.
+
+- **Choosing between two valid encodings.** Source says "you find a purse with 8 Gold Pieces." The book could encode this as `add_item: gold_pouch_N` (treasure-pouch item) or `modify_stat: gold +N` (direct currency credit). Both pass schema validation; the codex doesn't currently distinguish them. Telling a sub-agent "use modify_stat for unconditional currency grants" launders the design call into a sub-agent commit — but the sub-agent did not derive it. The codex needs the missing rule first; only then is the dispatch real.
+
+If you find yourself writing a sub-agent prompt whose scope says "set field X to value Y on entry Z," ask: *what codex rule generates this prescription?* If you cannot point at a specific rule whose mechanical application produces Y, you are laundering an ad-hoc fix through the sub-agent vehicle. Stop. Either (a) write the codex rule that justifies the prescription, ship it, then re-dispatch the sub-agent in audit mode against the updated codex; or (b) take the hit honestly and use `[targeted-fix]` as the provenance marker, which makes the deviation visible to future maintainers.
+
+`iter N [sub-agent]` is reserved for production-line re-runs derivable from the current codex + schema. `[targeted-fix]` is reserved for genuine one-offs no general rule would catch. Neither marker exists to make ad-hoc encoding decisions look like rule-driven work. The reason this matters is foundational: book JSONs are *outputs* of the codex + schema, not first-class artifacts. They should be reproducible from the production line; anything that lets them evolve faster than the rules that generate them undermines the project's central design.
+
 ---
 
 ## What this project is, in one paragraph
