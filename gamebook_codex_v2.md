@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.23.0
+# THE GAMEBOOK CODEX v2.24.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -330,6 +330,8 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Throw one dice and turn to N" / roll-here-apply-there cross-section dice patterns where the rolled value crosses a section boundary | Section 7.6 → Pattern 7.6.12 | `script` event in the roll-site section that rolls and stores the value to `state.deferred_roll_for_section_<receiver-id>` then sets `player.navigate_to`; matching `script` event in the receiver section that reads the slot, applies the effect with source-text clamps, then clears the slot. NEVER `roll_dice` per-range effects (consumes the value at the roll site, can't carry across navigation); NEVER a re-roll at the receiver site (mis-encodes the source's single-roll intent) |
 | "Eat a meal here (recover N endurance) ... and then restore all lost endurance" / sequential partial-heal-then-full-restore in one section | Section 7.6 → Pattern 7.6.13 | Two sequential events in `events[]`: first an `eat_meal` (or `modify_stat` for non-meal partial heal) for the partial gain, then a Pattern 7.6.1 `script` event setting `player_stats.<health-stat> = game_state.initial_stats.<health-stat>` for the full restore. NEVER a single collapsed `script` (loses the meal-decrement and source fidelity); NEVER omit one of the two events (misses either the cost or the final state) |
 | Combat where the source text frames victory as **endurance** rather than damage — "hold the gate for three rounds," "survive five rounds and the cavalry arrives," "last out the storm" | Rule 31 (`win_after_rounds`) | `combat` event with `win_after_rounds: <N>` (schema v1.13+) and `win_to` set to the post-survive section. The emulator runs the round flow normally and ends combat in victory once `combat.round >= N` with the player still alive. Player-death takes priority; enemy-defeat-by-health still wins in parallel (the field is an ADDITIONAL win condition). Anti-pattern: faking survive-N-rounds via inflated enemy health — that silently re-encodes the win condition as "deal enough damage" and lets a lucky round produce an early kill the source text doesn't describe. For forced endurance (no flee), set `flee_to: null`. |
+| "A purse contains N Gold Pieces" / "you find N Gold Crowns" / "the chest holds N gold" / "your reward: N silver" / fixed currency amount delivered as a direct addition to the player's pool with NO choice and NO list context | Rule 35 (currency direct grant — no schema change) | Single `modify_stat <currency> +N` event on the section. NEVER wrap as `add_item: <synthetic_pouch>` (e.g. `gold_pieces_N`, `coin_purse_N`) — the wrapper is structurally lossy: the player's currency counter never receives the value because no `modify_stat` fires, the inventory accumulates a placeholder with no mechanical role, and downstream events that walk inventory see a meaningless entry. Distinct from Rule 21 (provisions / meals — same shape applied to a different stat) and from Rule 20 (`add_item` for discrete items, not currency). |
+| `choose_items` event whose `from` list includes a fixed-currency amount as one selectable option among other items (the player must pick between currency and non-currency items) | Rule 35 (treasure-pouch sub-pattern — no schema change) | One `items_catalog` entry for the pouch (`type: "treasure"`); the `choose_items` event's `from` list includes the pouch id; the **redemption section** (the section the player navigates to in order to credit the gold) MUST emit BOTH `modify_stat <currency> +N` AND `remove_item <pouch_id>`. The post-redemption `remove_item` is the cleanup half of the rule — without it the empty pouch lingers in inventory after redemption (Warlock §110 anti-pattern prior to Rule 35). The pouch catalog id encodes the redemption amount as a descriptive suffix (`gold_bag_8` = 8 gold) but the actual amount lives on the receiving section's `modify_stat`, not on a structured catalog field. Choice-gating across `choose_items` outputs (so a player can't redeem an item they didn't take) is a **separate codex-rule concern** — Rule 35 covers only the encoding shape and the cleanup. |
 
 **How to use this table during a parse.** During Step 5 (Parse Rules and Character Creation), read the book's rules section once with this table open in your context. For every paragraph in the rules section, scan the left column for a matching trigger and note which rules apply to this book. Then during Step 6 (Parse Sections), as you encounter each section, scan the left column again — section-level triggers (combat modifiers, conditional choices, multi-event paragraphs) often only become apparent when you're looking at a specific section's text. The table is meant to be re-scanned, not memorised on a single read.
 
@@ -1758,6 +1760,65 @@ For Lorecraft's +1 Intuition the same ordering applies: distribute_points sets i
 - Rule 30 (`modify_initial` / `modify_initial_only` / `set_initial_to`) — the bonus delta on a stat with `initial_is_max: true` should set `modify_initial: true` so the bonus survives later clamping (Bushcraft's +5 Endurance on a stat whose `initial_is_max: true` would otherwise clamp at the player's distribute_points value).
 - Section 7.5 derived-stat guidance — `combat_value` and other derived stats can't take direct chargen `effects`; the bonus is applied via `standing_modifiers` gated on the ability/talent.
 - Decision-table row keyed on the discriminating words above; pre-output checklist Rule 34 entry covers the auto-apply / mutual-exclusion / parser_notes split.
+
+---
+
+### Rule 35: Currency Grants — Direct vs. Treasure-Pouch Encoding
+
+**The rule.** When a section's narrative grants the player a fixed amount of currency (gold, gold pieces, gold crowns, coins, silver), the encoding depends on whether the source text frames the grant as a direct addition or as a `choose_items` option:
+
+- **Direct grant** (no choice involved — source text simply adds a fixed currency amount to the player's pool): encode as `modify_stat <currency> +N`. NEVER wrap as a synthetic items_catalog entry (`gold_pieces_N`, `coin_purse_N`) added via `add_item`.
+- **Treasure-pouch as `choose_items` option** (source text requires the player to choose between a fixed currency amount and other items, so the currency must be a selectable option): encode the pouch as an items_catalog entry (`type: "treasure"`) and emit `choose_items` including the pouch. The downstream **redemption section** — where the player navigates to credit the gold — MUST emit BOTH `modify_stat <currency> +N` AND `remove_item <pouch_id>`. The `remove_item` is the **post-redemption cleanup** half of the rule.
+
+**Why the distinction.** A treasure-pouch wrapper for a direct grant is structurally lossy: the player's inventory accumulates a placeholder with no mechanical role; downstream `eat_meal`, equipment, or `remove_inventory_category` events that walk inventory see meaningless entries; and the player's actual currency counter (`state.gold` for canonical-slot books, or `state.stats.gold` for stat-currency books) never receives the value because no `modify_stat` event fires. The Warlock §28 anti-pattern — "a purse contains 8 Gold Pieces" encoded as `add_item gold_pieces_8` with no companion `modify_stat` — silently drops 8 gold from the player's pool. The encoding may be syntactically legal, but it does not match the source-text mechanic, which is "credit 8 gold to the running total."
+
+The treasure-pouch sub-pattern is reserved for the `choose_items` case because the schema's `choose_items` event lists items by id; a fixed currency amount cannot be "chosen" without a selectable wrapper. The wrapper is a transient placeholder existing only between the choice section and the redemption section. The redemption section unwraps it (`modify_stat` + `remove_item`) and the placeholder vanishes.
+
+**Discriminating words.**
+
+- **Direct grant** (→ `modify_stat`): "a purse contains N Gold Pieces," "you find N Gold Crowns," "the chest holds N gold," "the merchant pays you N silver," "your reward: N gold," "Gold Pieces are scattered on the floor — you scoop up N." Currency pickup with no choice or list context.
+- **Treasure-pouch sub-pattern** (→ `choose_items` + redemption cleanup): "You may take 2 of the following: [armour / shield / sword / **a pouch of N Gold Pieces** / crucifix]," "Pick any 3 items from this room," "Choose between a healing potion and N gold." Currency appears as one option among others.
+- **Provisions / meals** (→ Rule 21, NOT Rule 35): "you have N Meals at the start," "you find rations." Provisions follow Rule 21's `modify_stat stat:"provisions"` shape.
+
+**Worked example: Warlock §28 (direct grant).**
+
+Source: "The mighty Giant lies dead. You search his cavern... a purse in his belt contains 8 Gold Pieces. Turn to 351." No choice; direct grant. Canonical encoding: `{"type": "modify_stat", "stat": "gold", "amount": 8, "reason": "Gold Pieces from Giant's purse"}`. Anti-pattern: `{"type": "add_item", "item": "gold_pieces_8"}` plus a `gold_pieces_8` catalog entry. The pouch wrapper has no mechanical role; the player's gold counter never receives the 8 because no `modify_stat` fires. After redeeming Rule 35, the catalog entry is also orphaned and should be removed.
+
+**Worked example: Warlock §313 → §110 (treasure-pouch as `choose_items` option).**
+
+§313 source: "You search the dead adventurer and find leather armour, a wooden shield, a steel sword, a small pouch holding 8 Gold Pieces, and a silver crucifix. You may take 2 of these items. Turn to 221." §110 source: "You are now 8 Gold Pieces richer; you also find 2 more in his boot. Record the gold..."
+
+Canonical encoding:
+
+- §313 emits `choose_items` with `from: ["leather_armour_313", "wooden_shield_313", "steel_sword_313", "gold_bag_8", "silver_crucifix"]`, `count: 2`.
+- `gold_bag_8` is an items_catalog entry: `{ "name": "Pouch of 8 Gold Pieces", "type": "treasure", "description": "..." }`.
+- §110 emits `[ {"type": "modify_stat", "stat": "gold", "amount": 10, "reason": "8 from pouch + 2 hidden in boot"}, {"type": "remove_item", "item": "gold_bag_8", "reason": "pouch consumed on redemption"} ]`. The `remove_item` is the **post-redemption cleanup** required by Rule 35.
+
+The pouch catalog id encodes the redemption amount as a descriptive suffix (`gold_bag_8` = 8 gold) but the actual amount lives on the receiving section's `modify_stat`, not on a structured catalog field. This is intentional — the placeholder's mechanical role is "be selectable in `choose_items`," not "carry the redemption amount." A pouch whose redemption amount differs across sections (rare but possible) just has different `modify_stat` amounts in each redemption section.
+
+The §313/§221/§319 outlier sub-flow ("the player should not be able to redeem an item they didn't pick at §313") is a **separate codex-rule concern** (per-item completion-tracking + `has_item`-gated choices in §221's hub). Rule 35 handles only the encoding shape and the post-redemption cleanup; choice-gating across the sub-flow is out of scope.
+
+**Anti-patterns.**
+
+1. **Direct grant wrapped as `add_item: <currency_pouch>` with no `modify_stat`.** The currency counter never receives the value. Warlock §28 case prior to Rule 35.
+
+2. **Direct grant emitting both `add_item: <pouch>` AND `modify_stat <currency> +N`.** Double-encoding produces an inventory item AND credits the gold; the player ends up with a phantom pouch they can never use up. Pick one shape.
+
+3. **Treasure-pouch redemption section that credits gold but does not `remove_item`.** The empty pouch lingers in inventory forever. Warlock §110 case prior to Rule 35.
+
+4. **Treasure-pouch redemption section that `remove_item`s the pouch but does not `modify_stat`.** Player loses the placeholder without ever receiving the currency. Mirror of anti-pattern 1.
+
+5. **Treasure-pouch wrapper for a `choose_items` option whose redemption section never reaches a `modify_stat`/`remove_item` pair.** Orphan placeholder — schema-valid but mechanically dead.
+
+6. **Treating Provisions, Meals, or Rations as a treasure-pouch.** Provisions are a separate per-adventure resource counter with their own grant/consume semantics (Rule 21). NEVER encode "you find 3 Meals" as `add_item: meal_pouch_3`; use `modify_stat stat:"provisions" amount:3`. See Rule 21 for the analogous pattern on provisions.
+
+**Cross-references.**
+
+- **Rule 9** (multi-event sections) — a treasure-pouch redemption section is a two-event section (`modify_stat` + `remove_item`), one per independent effect. Both events must be present.
+- **Rule 19** (equipment slots) — treasure-pouch entries are NOT Rule 19 items: no `slot`, no `equip_timing`, no `equippable: true`. They are placeholder treasures, not gear.
+- **Rule 20** (loot detection) — "you find N Gold Pieces" is loot text, but Rule 20's `add_item` shape applies to discrete items only; for currency, route through Rule 35's `modify_stat`.
+- **Rule 21** (provisions / meals as resource counter) — same pattern, different stat: `modify_stat stat:"provisions"` for food. Rule 21 is to provisions what Rule 35 is to currency.
+- **Section 7.2** (currency encoding choice — slot vs stat) — orthogonal: Section 7.2 picks the *target slot* for currency (canonical `gold` slot vs declared `rules.stats[]` entry); Rule 35 picks the *event shape* for in-section grants regardless of slot vs stat.
 
 ---
 
@@ -3684,6 +3745,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 33 (Item-state flags).** For every item the book's narrative describes as undergoing a one-time mechanical transition (damaged, lit, used, broken, examined, opened, read) that gates downstream sections, the transition is encoded as a `set_flag` event in the section that performs it, with the flag name following the `<item_id>_<state-suffix>` convention (canonical: Windhammer §200's `set_flag: thandurion_damaged`, gating §128's "swap to Mutan's axe" choice and §564's `not has_flag: thandurion_damaged` predicate on the +2 Than'durion bonus). The default state is encoded as the absence of the flag (`thandurion_damaged` unset, not `thandurion_undamaged` set true at chargen). NO item-state transition is encoded as a swap to a parallel `<item>_damaged` catalog entry, an item-quantity counter, or a Rule 19 `stat_modifier` toggle. Persistent combat-skill side effects of the transition (e.g., §200's "reduce your combat value by 4 points until you acquire a new weapon") use Rule 23 standing_modifiers conditional on the item-state flag. Distinguished from Rule 27 by lifecycle: Rule 27 flags are set at character creation and never change; Rule 33 flags are set/cleared by in-section events during play.
 
+**Rule 35 (Currency grants — direct vs. treasure-pouch encoding).** For every `add_item` event in the book whose target is a synthetic currency wrapper (item id matching `*gold*`, `*coin*`, `*crown*`, `*silver*`, `*purse*`, `*pouch*` patterns suggestive of a currency placeholder), I checked the source text. If the section's text describes a direct currency grant with no `choose_items` selecting the wrapper from a list of options, I migrated the encoding to a single `modify_stat <currency> +N` event and removed the now-orphaned items_catalog entry — the wrapper-without-modify_stat shape silently drops the currency from the player's pool because no event credits the counter. For every `choose_items` event whose `from` list includes a treasure-pouch placeholder, I verified the redemption section (the section the player navigates to in order to credit the gold) emits BOTH `modify_stat <currency> +N` AND `remove_item <pouch_id>`; if the `remove_item` was missing, I added it so the empty pouch does not linger in inventory after redemption. NO direct currency grant is encoded as an `add_item` wrapper without a companion `modify_stat`; NO treasure-pouch redemption section emits the gold credit without the post-redemption `remove_item` cleanup. Provisions / meals / rations follow the parallel Rule 21 shape (`modify_stat stat:"provisions"`); they are NEVER wrapped as an `add_item: meal_pouch_N` placeholder.
+
 **Section 2.1a (Endings placement, schema v1.11+).** The book's `death_endings` and `victory_endings` lists are placed consistently — either both inside `metadata.confidence.{death,victory}_endings` as section-id arrays (single-chat parses, matching the four maintained books) OR both at the top level (`book.death_endings`, `book.victory_endings`) as section-id arrays with integer counts in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). I did NOT mix the two placements within one book (no array at top level AND a duplicating array in confidence), I did NOT silently migrate from one shape to the other mid-merge, and every section id listed in either placement also appears in `sections{}` with `is_ending: true` and the matching `ending_type` (`"death"` for death endings; `"victory"` or `"continuation"` for victory endings).
 
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised. **Combat-modifier targets on derived-stat books:** every per-fight modifier on a derived-stat combat targets either a component field the round_script reads (`player.strength`, `player.weapon_bonus`, etc.) OR a generic accumulator slot the round_script reads as additive (`player.attack` / `enemy.attack`, even though `attack_stat: null`). NO `combat_modifier` entry targets the derived stat name itself (`player.combat_value`, `player.attack_strength`) — that field doesn't exist on the player table because the derived value is computed inside Lua each round. NO `modify_stat` event in any section uses the derived stat name as `stat:` — that event silently no-ops because the derived stat is not a real player-table slot. Per-fight modifiers on derived-stat books go in `combat_modifiers` on the combat event (Rule 17); persistent stat changes go in `modify_stat` on a real **component** stat (`stat: "strength"` etc.).
@@ -3739,7 +3802,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.23.0 / GBF schema v1.18.0 / CLI emulator v3.13.0 / HTML emulator v3.13.0.**
+**Codex v2.24.0 / GBF schema v1.18.0 / CLI emulator v3.13.0 / HTML emulator v3.13.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
