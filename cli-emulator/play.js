@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.13.0';
+const CODEX_EMULATOR_VERSION = '3.14.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1473,6 +1473,12 @@ function startCombat(event, state, book) {
       max: cap.max,
       direction: cap.direction || 'outgoing',
       reason: cap.reason || null,
+      // Schema v1.19+ (Rule 32 min_attacker_margin extension): preserve the
+      // optional per-round margin gate so the per-round cap evaluator can
+      // apply the gate-and-cap semantic. The gate itself is evaluated each
+      // round against combat.attacker_margin (set by the round_script), not
+      // frozen at combat start like the cap.condition.
+      min_attacker_margin: typeof cap.min_attacker_margin === 'number' ? cap.min_attacker_margin : null,
     });
   }
 
@@ -2614,21 +2620,46 @@ function runCombatRound(forcedRollsArg, state, book) {
   // direction, the tightest matching cap bounds the per-round total.
   // Healing (negative totals) bypasses caps — caps only bound positive
   // damage; a damage cap should not flip a heal into nothing.
+  // Schema v1.19+ (Rule 32 min_attacker_margin extension): a cap carrying
+  // min_attacker_margin is evaluated per round against the round_script's
+  // combat.attacker_margin; below the threshold the cap blocks all damage
+  // (effective max = 0), at-or-above threshold the cap applies as `max`.
   const caps = combat.appliedDamageCaps || [];
+  const attackerMargin = (typeof result.combat?.attacker_margin === 'number')
+    ? result.combat.attacker_margin
+    : null;
   if (caps.length > 0) {
     if (enemyTotal > 0) {
       for (const c of caps) {
-        if (c.direction === 'incoming' && enemyTotal > c.max) {
-          state.log.push(`Damage cap: damage_to_enemy ${enemyTotal} → ${c.max}${c.reason ? ' (' + c.reason + ')' : ''}`);
-          enemyTotal = c.max;
+        if (c.direction !== 'incoming') continue;
+        let effectiveMax = c.max;
+        if (typeof c.min_attacker_margin === 'number') {
+          if (attackerMargin === null) {
+            state.log.push(`WARN: damage_cap with min_attacker_margin requires combat.attacker_margin from round_script; cap skipped this round${c.reason ? ' (' + c.reason + ')' : ''}`);
+            continue;
+          }
+          effectiveMax = (attackerMargin >= c.min_attacker_margin) ? c.max : 0;
+        }
+        if (enemyTotal > effectiveMax) {
+          state.log.push(`Damage cap: damage_to_enemy ${enemyTotal} → ${effectiveMax}${c.reason ? ' (' + c.reason + ')' : ''}`);
+          enemyTotal = effectiveMax;
         }
       }
     }
     if (playerTotal > 0) {
       for (const c of caps) {
-        if ((c.direction || 'outgoing') === 'outgoing' && playerTotal > c.max) {
-          state.log.push(`Damage cap: damage_to_player ${playerTotal} → ${c.max}${c.reason ? ' (' + c.reason + ')' : ''}`);
-          playerTotal = c.max;
+        if ((c.direction || 'outgoing') !== 'outgoing') continue;
+        let effectiveMax = c.max;
+        if (typeof c.min_attacker_margin === 'number') {
+          if (attackerMargin === null) {
+            state.log.push(`WARN: damage_cap with min_attacker_margin requires combat.attacker_margin from round_script; cap skipped this round${c.reason ? ' (' + c.reason + ')' : ''}`);
+            continue;
+          }
+          effectiveMax = (attackerMargin >= c.min_attacker_margin) ? c.max : 0;
+        }
+        if (playerTotal > effectiveMax) {
+          state.log.push(`Damage cap: damage_to_player ${playerTotal} → ${effectiveMax}${c.reason ? ' (' + c.reason + ')' : ''}`);
+          playerTotal = effectiveMax;
         }
       }
     }

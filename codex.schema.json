@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.18.0",
+  "title": "Gamebook Format (GBF) v1.19.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -1097,6 +1097,11 @@
         "reason": {
           "type": "string",
           "description": "Human-readable explanation of why the cap applies. Shown in the combat UI's damage caps panel so the player knows what's in effect, and written to the playthrough log when the cap fires. Not interpreted by the emulator; purely for display and debugging. Examples: 'Words of Protection limits Windhammer's damage to 2 per round', 'Lich's curse: max 3 damage per round'."
+        },
+        "min_attacker_margin": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Schema v1.19+. Optional per-round gate that converts the cap into a gate-and-cap hybrid keyed on the round's attacker margin. When present, the cap's effective max for the round is computed as: if combat.attacker_margin >= min_attacker_margin, the cap applies normally with `max`; if combat.attacker_margin < min_attacker_margin, the cap blocks all damage in the cap's direction for that round (effective max of 0). Folds the gate-and-cap halves of source-text rules like 'the Dragon will only be able to harm you if it wins a combat round by more than N points... you can only lose a maximum of M points per round lost' into a single damage_cap entry (set min_attacker_margin to N+1, max to M). Round-script contract: the round_script must set combat.attacker_margin = <enemy_score - player_score> (or analogous source-text-defined margin) for the gate to evaluate. If combat.attacker_margin is unset or non-numeric when a min_attacker_margin cap is evaluated, the emulator logs a warning and skips the cap for that round. Canonical example: Windhammer §242 Shieldstone — `{max: 2, min_attacker_margin: 5, condition: <shieldstone_active>, direction: 'outgoing'}` encodes 'Dragon harms only on margin >= 5, capped at 2 EP per round.' Distinguished from `condition` (frozen at combat start, gates the entire fight) — min_attacker_margin is evaluated per round against the current round's attacker margin."
         }
       }
     }

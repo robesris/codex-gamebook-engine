@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title bumped to v1.18.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title bumped to v1.19.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1577,6 +1577,11 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   assertEqual(dcProps.max.minimum, 0, 'damage_cap.max minimum is 0');
   assertTrue(Array.isArray(schema.definitions.damage_cap.required) && schema.definitions.damage_cap.required.includes('max'), 'max is required');
   assertEqual(dcProps.direction.enum.join(','), 'incoming,outgoing', 'direction enum is incoming|outgoing');
+  // Schema v1.19+ (Rule 32 margin-gate extension) — min_attacker_margin
+  // is a per-round gate on the cap. Optional integer >= 1.
+  assertTrue(!!dcProps.min_attacker_margin, 'damage_cap.min_attacker_margin declared');
+  assertEqual(dcProps.min_attacker_margin.type, 'integer', 'min_attacker_margin is integer');
+  assertEqual(dcProps.min_attacker_margin.minimum, 1, 'min_attacker_margin minimum is 1');
 });
 
 // ============================================================
@@ -1973,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.18.0', 'schema title at v1.18.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -1986,6 +1991,143 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   assertTrue(abilityProps.effects !== undefined, 'rules.abilities.available[].effects defined');
   assertTrue(abilityProps.exclusive_with !== undefined, 'rules.abilities.available[].exclusive_with defined');
   assertTrue(abilityProps.parser_notes !== undefined, 'rules.abilities.available[].parser_notes defined');
+});
+
+// ============================================================
+// Test 28: damage_cap.min_attacker_margin gates the cap on
+//          per-round attacker margin (Rule 32, schema v1.19+).
+// ============================================================
+// MOTIVATED_BY: Codex v2.25.0 / schema v1.19.0 Rule 32 margin-gate
+// extension. Closes the Chat #30 known_issues entry on Windhammer
+// §242 Shieldstone two-rule combination — "Dragon will only harm
+// you if it wins by more than four points... max two EP per round."
+// Previous schema layers (Rule 17 modifiers, Rule 18 interactions,
+// Rule 32 v1.15 caps) could not express the per-round margin gate.
+// v1.19 adds an optional `min_attacker_margin` field on `damage_cap`
+// that, when present, makes the cap evaluate per round against the
+// round_script-reported `combat.attacker_margin`: when margin >= N,
+// the cap applies as `max`; when margin < N, the cap blocks all
+// damage in that direction (effective max = 0). Both halves of the
+// §242 source rule fold into one cap entry.
+// END_TO_END_VERIFY: drive Windhammer §242 once the round_script
+// is updated to expose `combat.attacker_margin` and the §242 combat
+// is migrated from `parser_notes`-string-only to the canonical
+// `damage_caps: [{max: 2, min_attacker_margin: 5, ...}]` encoding;
+// confirm the player takes 0 damage on margin 1-4 rounds and 2 damage
+// on margin >= 5 rounds when Shieldstone is active.
+test('damage_cap min_attacker_margin gates per-round application on attacker margin', () => {
+  const fs = require('fs');
+  const buildBookForMargin = (scriptCode) => buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: scriptCode },
+    },
+    sections: {
+      '1': {
+        text: 'shieldstone fight',
+        events: [{
+          type: 'combat',
+          enemy_ref: 'test_dragon',
+          win_to: '2',
+          flee_to: null,
+          damage_caps: [{
+            max: 2,
+            min_attacker_margin: 5,
+            direction: 'outgoing',
+            reason: 'Shieldstone gate-and-cap',
+          }],
+        }],
+        choices: [],
+      },
+      '2': { text: 'survived', events: [], choices: [] },
+    },
+    enemies_catalog: {
+      test_dragon: { name: 'Test Dragon', HEALTH: 100 },
+    },
+  });
+
+  // Case A: round_script reports margin = 7 (>= 5) and damage_to_player = 4.
+  //         Cap applies normally: 4 → 2.
+  {
+    const book = buildBookForMargin(
+      'combat.damage_to_enemy = 0\n' +
+      'combat.damage_to_player = 4\n' +
+      'combat.attacker_margin = 7'
+    );
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+    assertEqual(state.combat.appliedDamageCaps.length, 1, 'cap frozen at start');
+    assertEqual(state.combat.appliedDamageCaps[0].min_attacker_margin, 5, 'min_attacker_margin preserved on freeze');
+
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 2, 'margin 7 >= 5 → cap applies, 4 → 2 damage');
+
+    const capLog = state.log.find(l => /Damage cap: damage_to_player 4 .* 2/.test(l));
+    assertTrue(!!capLog, 'cap fire logged with 4 → 2');
+  }
+
+  // Case B: round_script reports margin = 3 (< 5) and damage_to_player = 4.
+  //         Cap blocks all damage in direction (effective max = 0).
+  {
+    const book = buildBookForMargin(
+      'combat.damage_to_enemy = 0\n' +
+      'combat.damage_to_player = 4\n' +
+      'combat.attacker_margin = 3'
+    );
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 0, 'margin 3 < 5 → cap blocks all damage');
+
+    const capLog = state.log.find(l => /Damage cap: damage_to_player 4 .* 0/.test(l));
+    assertTrue(!!capLog, 'cap fire logged with 4 → 0 (blocked below threshold)');
+    assertEqual(state.combat.consecutiveLosses, 0, 'fully-blocked round does not increment loss-streak');
+  }
+
+  // Case C: round_script does NOT set combat.attacker_margin.
+  //         Cap with min_attacker_margin is skipped with a warning;
+  //         player takes the full 4 damage.
+  {
+    const book = buildBookForMargin(
+      'combat.damage_to_enemy = 0\n' +
+      'combat.damage_to_player = 4'
+      // no combat.attacker_margin
+    );
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true;
+    state.creationDone = true;
+    state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = [];
+    state.equipment = {};
+
+    play.navigateTo(state, book, '1');
+
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 4, 'no attacker_margin → cap skipped, full damage flows');
+
+    const warnLog = state.log.find(l => /WARN: damage_cap with min_attacker_margin/.test(l));
+    assertTrue(!!warnLog, 'misconfiguration warning logged');
+  }
 });
 
 // ============================================================
