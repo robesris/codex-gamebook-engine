@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.25.0
+# THE GAMEBOOK CODEX v2.26.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -2145,6 +2145,144 @@ The `modify_stat.amount` as a dice expression (`"2d6"`) is itself a candidate sc
 
 Two entries for the same trigger, with mutually-exclusive `gate_roll.applies_on` ranges. The `applies_on` strings `"doubles_1_3_6"` and `"not_doubles_1_3_6"` are NOT in the existing range-key vocabulary — they are sketched here as a structured-range future extension. Open design question: how to express "doubles" and "not doubles" in `applies_on`. Defer to Chat #33.
 
+**Audit of current maintained books (parser_notes-flagged sites that would migrate to Rule 36).** Main-session pass during Chat #32 surveyed `items_catalog[].description` and `enemies_catalog[].special` fields for mechanics matching the Rule 36 shape. Twelve sites identified across three books; the remaining three books (LW1, GyoG06, WWY) have no obvious Rule 36 candidate sites pending a sub-agent audit pass when the rule ships.
+
+| Book | Placement | Site | Trigger | Effect (sketch) | Currently encoded as |
+|---|---|---|---|---|---|
+| Warlock | items_catalog | `iron_shield_crescent` (§155) | `on_combat_round` + 1d6-on-6 | `damage_delta -1` outgoing | `description` text only |
+| Warlock | items_catalog | `iron_helmet_magic` (§325) | `while_equipped` | `modify_stat attack_strength +1` | Rule 19 `stat_modifier` (already canonical — re-encoding as Rule 36 is OPTIONAL and only if the rule absorbs Rule 19; see "Coexistence" below) |
+| Warlock | items_catalog | `potion_of_invisibility` (§51, §39→§105) | `on_user_use` + `in_combat` | flee combat (script or new effect type) | `description` text + per-section narrative encoding |
+| Warlock | enemies_catalog | `dog_249` (§249) | `on_combat_round` + 1d6-on-1-2 | `damage_delta +1` outgoing | `special` text only |
+| GrailQuest | items_catalog | `excalibur_junior` | `while_equipped` | composite: modify hit threshold (4+ instead of 6+) + `damage_delta +5` incoming | `description` text only (open question: hit-threshold modification is a *combat-system* change, not a per-round triggered effect; may need a different rule entirely) |
+| GrailQuest | items_catalog | `healing_potion_bottle_*` (×3, six-dose) | `on_user_use` | `modify_stat life_points +2d6` (dice-driven amount, charges-based) | `description` text only |
+| GrailQuest | items_catalog | `luckstone` | `while_equipped` (or `on_dice_roll`?) | dice-roll modifier ±3 (not a damage effect; a meta-effect on other dice rolls) | `description` text only (open: meta-effects on dice rolls are a separate rule family, not Rule 36) |
+| GrailQuest | items_catalog | `globule_wand` | `on_user_use` + `in_combat` | composite: hit-roll + 4-strike no-retaliation buff (charges from 1d6 at pickup) | `description` text only |
+| GrailQuest | items_catalog | `healing_spell_scroll` | `on_user_use` | `modify_stat life_points = initial` (full heal) | `description` text only (`consume_on_fire: true`, one-use) |
+| GrailQuest | items_catalog | `death_spell_scroll` | `on_user_use` + `in_combat` | branching: 2d6 doubles → backfire; else → insta-kill | `description` text only |
+| GrailQuest | items_catalog | `hypnotism_spell_scroll` | `on_user_use` + `in_combat` | 2d6: 5+ trance (gate); else no effect | `description` text only |
+| Windhammer | (various) | Most Windhammer talents with `parser_notes`-only mechanical effects per Rule 34's deferral | `on_combat_round` / `on_section_enter` / variant | per-talent | `parser_notes` on talent entries |
+
+Sites NOT in scope for Rule 36 (flagged here to keep the migration audit clean):
+
+- **GrailQuest `luckstone`** — meta-effect on other dice rolls is a *dice-roll modifier* family, distinct from Rule 36's effect dispatch. Future codex rule should address (placement: `items_catalog[].roll_modifier`-style field). Carry as a separate known_issues entry.
+- **GrailQuest `excalibur_junior` hit-threshold modification** — `2d6 ≥ 4` instead of `≥ 6` is a *combat-system* parameter change, not a per-round triggered effect. Likely belongs in `combat_modifiers` with a `target` like `player.hit_threshold` (the round_script reads it as additive) — Rule 17 territory.
+- **GrailQuest `globule_wand` multi-strike buff (4 strikes no retaliation)** — duration-based combat effect spanning multiple rounds. Requires a *combat-state mutation* not just a single-round effect dispatch. The Rule 36 candidate as sketched only handles single-round effects. Carry as a Rule 36 follow-up extension.
+
+The audit surface is wider than this initial pass; sub-agents will need a thorough walk of all 6 books once Rule 36 ships in schema form. The audit pass scope is similar to Chat #29's Windhammer chargen migration: per-book sub-agent, audit-mode framing ("walk every `items_catalog` entry, find any whose `description` describes a per-round / per-section / on-use mechanic, apply Rule 36"), baseline schema-validity comparison, single iter commit per book.
+
+**Coexistence with existing rules.** Strictly additive on first ship — no deprecation, no migration of existing canonical encodings. The decision matrix for each adjacent rule:
+
+| Adjacent rule | Existing scope | Rule 36 overlap | Coexistence policy |
+|---|---|---|---|
+| Rule 19 `stat_modifier.when: "equipped"` | items_catalog[].stat_modifier on equipment slots, applies stat bonus when equipped | Subset of `trigger: while_equipped` + `effect: modify_stat` | Rule 19 remains canonical for the "while equipped, single stat bonus" case. Rule 36 entries on the same item with non-while_equipped triggers are independent. A future codex consolidation MAY migrate Rule 19 entries to Rule 36 shape; not in scope for the candidate ship. |
+| Rule 25 `consume.satisfies_eat_meal` / `consume.effects` | items_catalog[].consume for named consumables triggered at eat_meal time or user-choice | Subset of `trigger: on_eat_meal` or `trigger: on_user_use` + various effects | Rule 25 remains canonical for the eat_meal carve-out (Laumspur, Iron Rations of the Dwarves, etc.). Rule 36 covers `on_user_use` consumables that DON'T fit the eat_meal mold (potion of invisibility, healing potion outside meals, scrolls). Future codex consolidation MAY merge; not in scope. |
+| Rule 34 `effects[]` on abilities/talents | `rules.abilities.available[].effects[]` and `rules.talents.available[].effects[]`, auto-applied at chargen-confirm time | Implicit `trigger: on_grant` equivalent (chargen-only, fires once); separate field name (`effects[]` vs `triggered_effects[]`) | Rule 34's `effects[]` remains chargen-only with its existing chargen-event-primitives subset. Rule 36's `triggered_effects[]` is a *separate* array on the same placements for non-chargen lifecycle triggers. An ability with BOTH chargen `effects[]` (auto-apply once at pick time) AND `triggered_effects[]` (fire per-section / per-combat-round) is allowed and well-defined. |
+| Rule 32 `damage_caps[]` on combat events / enemies | Per-encounter (`combat.damage_caps`) or per-enemy-type (`enemies_catalog[].intrinsic_damage_caps`) frozen-at-combat-start caps | Rule 36's `effect: damage_cap` overlaps in *what* (clamp per-direction total) but differs in *when* and *where* (per-round trigger evaluation on items/abilities/talents/enemies vs. frozen at combat start on combat events/enemy types) | Both ship. Pipeline ordering: Rule 32 caps apply first (frozen, combat-start-evaluated); then Rule 36 `damage_cap` triggered effects evaluate per-round and can tighten further. The "tightest cap wins" semantic from Rule 32 v1.15 extends naturally: take min across all caps from any source on a given round. |
+| Rule 33 `set_flag` / `clear_flag` events | Section-level state transitions on items | Rule 36 may fire `set_flag` / `clear_flag` as effects | Rule 36 entries that fire `set_flag` events compose with Rule 33's flag-state semantics. A flag set by an `on_combat_start` triggered effect on an item is identical in downstream behavior to a flag set by a section-level event. |
+
+**Key design framings (from Chat #31, captured for reference — do not re-litigate).** Four sticky reframings drove this candidate. Future chats should treat them as decided unless the user explicitly reopens.
+
+1. **Dice, not probabilities.** A `probability: 0.1667` field would estimate `1/6` and throw away the dice contract the emulator needs for honest UX (manual roll prompts, displayed outcomes, debug-replay forced rolls). The schema preserves the source-text dice mechanic verbatim via `gate_roll.dice` + `gate_roll.applies_on`, using the same range-string format as `roll_dice.results` keys. This applies wherever the codex might be tempted to convert dice to probabilities, not just in Rule 36.
+
+2. **`gate_roll` is one half — `effect` is the other.** The dice-gate primitive preserves source-text fidelity; the discriminated effect union covers the wide range of state mutations the gate can trigger. Together they form a complete shape for triggered side effects. Earlier sketches that proposed `damage_cap.probability` or `damage_cap.gate_roll` directly on the Rule 32 `damage_cap` shape were too narrow — the same dice gate triggers shifts, multipliers, sets, stat changes, flag mutations, and item grants. The two-field shape (`gate_roll` + `effect`) is the canonical separation of concerns.
+
+3. **"Passive" is too narrow — items can be user-triggered.** The `trigger` dimension covers BOTH passive (`while_equipped`, `on_section_enter`, `on_combat_round`, etc.) AND active (`on_user_use`). Same `triggered_effects[]` shape, different trigger values. The emulator's inventory UI renders user-triggerable items with a clickable "use" affordance; passive items have no UI change beyond their existing equipped/inventory display. This unification absorbs the pending menu item B7 (Chat #18+) for `use_item` events under the Rule 36 umbrella.
+
+4. **"Damage-related" is too narrow.** Effects can modify stats, set flags, add items, etc. — not just shape damage. The discriminated effect union includes both new damage operations AND the existing event types where they make sense. A "ring of regeneration" (on_section_enter → modify_stat) and an "iron shield" (on_combat_round → damage_delta) share the same triggered-effect array shape with a different `effect.type`; the emulator dispatches by `effect.type` and applies the per-type mutation.
+
+**Open design questions (defer to Chat #33+).** The following are explicitly NOT decided in the candidate ship. They need user input and / or main-session schema-emulator implementation review before being closed.
+
+1. **Field name finalization.** Candidate uses `triggered_effects[]` to avoid conflict with Rule 34's `effects[]`. Confirmed in Chat #32 user discussion. Chat #33's schema ship implements this name. A future codex consolidation MAY revisit and merge under one name with a `trigger` discriminator (chargen-time treated as `trigger: "on_grant"`), but that consolidation requires migrating existing Rule 34 entries on all maintained books and is out of scope for the candidate ship.
+
+2. **Full trigger taxonomy.** The 8 + 1 triggers in the taxonomy table are the current best guess. The reserved-but-not-yet-needed triggers (`on_pickup`, `on_drop`, `on_equip`, `on_unequip`, `on_damage_taken`, `on_kill`, `on_level_up`, `on_dawn`, `on_dusk`) should be added only when a source-text site demands them. A pre-ship audit of all 6 books' `parser_notes` and item / enemy `description` / `special` fields will surface any trigger the candidate missed. Chat #33's first ship should ship a closed enum covering the 8 + 1 plus any audit-surfaced additions; further triggers require schema bumps.
+
+3. **`on_user_use` UX semantics.** Multiple sub-questions:
+   - Free action mid-combat? Limited to one per round?
+   - Can the player use multiple items in succession in one inventory pause?
+   - Where in the section flow can the player click "use" — only at section-start, only between events, anywhere?
+   - Does `consume_on_fire` fire as a separate inventory event (visible in event log) or atomically with the effect?
+   - What's the schema's commitment here vs the emulator's UX freedom? (Recommendation: schema specifies *when the trigger fires*; emulator owns *how the player initiates*.)
+
+4. **Damage-flow effect operations pipeline position.** The four new operations (`damage_cap`, `damage_multiplier`, `damage_delta`, `damage_set`) need a formalized ordering against Rule 17 (`combat_modifiers`), Rule 18 (`damage_interactions`), and Rule 32 (frozen `damage_caps`). The candidate's proposed ordering (inputs → multipliers → frozen caps → triggered shift/multiply/set → triggered caps → apply to state) is sketched but unvalidated. The composition test cases below should be added to the test suite when Rule 36 ships:
+   - magic sword (1d6-on-6 `damage_multiplier 2` incoming) + shield (1d6-on-6 `damage_cap 0` outgoing) on the same round → cap wins (0 damage)
+   - vorpal sword (1d6-on-6 `damage_set enemy.max_health` incoming) + enemy intrinsic Rule 32 `damage_cap.max: 10` → cap wins (10 damage, not max_health)
+   - per-round `damage_delta -1` (shield) + per-round `damage_delta +1` (poison aura) → net 0 delta
+   - multiple Rule 36 caps from different items → tightest cap wins (extends Rule 32 v1.15 semantic)
+
+5. **`consume_on_fire` vs charges.** `consume_on_fire: true` works for single-use items (one-shot scrolls). Multi-charge items (GrailQuest's 6-dose healing potion bottle; the globule_wand with 1d6-rolled-on-pickup charges) need a separate charges mechanism. Sub-questions:
+   - Charges as a top-level `items_catalog[].charges: <int>` field, initialized at pickup?
+   - Charges-decrement per-firing via `triggered_effects[].decrement_charges: <int>`?
+   - What happens when charges hit 0 — auto-`remove_item`, or just disable further triggering?
+   - Random-charges-on-pickup (1d6 charges) — does the schema express this declaratively, or via a section-level `roll_dice` writing to an item-state field?
+
+6. **Variable-amount effects (dice-driven amounts inside effects).** GrailQuest healing potion bottle's per-dose heal is 2d6, not a fixed integer. The candidate sketch uses `"amount": "2d6"` as a placeholder string but the existing `modify_stat.amount` schema accepts integer only. Sub-questions:
+   - Should `modify_stat.amount` accept a dice-expression union (`{ kind: "dice", expression: "2d6" }`)?
+   - Should `triggered_effects[].effect` for variable-amount cases route through a structured `roll_dice`-style sub-event that produces the amount?
+   - How does the emulator UX present the dice-driven amount (prompt-roll vs auto-roll)?
+
+7. **Branching effects on the same trigger.** GrailQuest death_spell_scroll: 2d6 doubles (1-1, 3-3, 6-6) → backfire; else → kill opponent. The candidate sketches two `triggered_effects[]` entries with mutually-exclusive `gate_roll.applies_on` ranges. Sub-questions:
+   - Does the emulator roll ONCE and dispatch BOTH entries against the same roll, OR roll separately for each entry?
+   - If once-and-dispatch-both: the entries must guarantee partition (every roll matches exactly one). Schema validator should enforce.
+   - Could a single entry carry a structured `branches: [{ applies_on, effect }, ...]` sub-field that captures the partition explicitly? (Cleaner, but introduces a second discriminator nesting.)
+
+8. **Effect type for "flee combat" and similar combat-state mutations.** The potion_of_invisibility sketch uses `effect.type: script` with a `script_code` setting `player.flee_combat = true`. Alternatives:
+   - New dedicated `effect.type: flee_combat` with target section (mirrors `combat.flee_to`).
+   - `set_flag` + round_script reading the flag and exiting combat.
+   - Generic combat-state mutation effect type with target field.
+   Defer to Chat #33's emulator-implementation review.
+
+9. **`is_equipped` condition type.** Rule 36 entries with `trigger: while_equipped` are unambiguous — the trigger itself implies equipment-slot occupancy. But entries with other triggers that should fire only when an item is equipped (e.g., `on_section_enter` for the Ring of Regeneration, but only while worn) need a condition type. Sub-questions:
+   - New `condition.type: is_equipped` with item-id field?
+   - Or extend `has_item` with an optional `equipped: true` qualifier?
+   - Does the gate also apply to abilities / talents (which don't have an "equipped" state)?
+
+10. **Coexistence with Rule 19, Rule 25, Rule 34 (long-term).** Strictly additive on first ship per Chat #32 user direction. But the long-term question stands: does the codex eventually deprecate Rule 19 `stat_modifier.when` / Rule 25 `consume` / Rule 34 chargen `effects[]` in favor of unified `triggered_effects[]`, or does it keep them as canonical narrow shapes for their specific cases? Tradeoffs:
+    - Absorption: one clean primitive; cleaner long-term doc; but requires book-side migration and breaks backwards compat for any external book consumers.
+    - Coexistence: keeps existing books valid forever; but means multiple ways to express the same mechanic, which is exactly the silent-drift the codex exists to prevent.
+    Defer to a multi-chat consolidation discussion AFTER Rule 36 ships and audit waves complete.
+
+11. **Sub-agent audit scope.** Once Rule 36 ships in schema form, all 6 maintained books need an audit pass. Suggested wave sizing per the Chat #20-#29 lessons: per-book sub-agent dispatch (6 dispatches total, one per book), audit-mode framing, ≤10 affected sites per dispatch (Warlock has ~4 sites; GrailQuest has ~8-10; Windhammer has potentially dozens via the talent migration; LW1 / GyoG06 / WWY have unknown count pending audit). The audit waves are a multi-chat undertaking (Chat #34+).
+
+**Anti-patterns (clear even at candidate stage).** Some shapes are wrong regardless of how the schema details resolve:
+
+1. **Estimating dice as probability.** `{ "probability": 0.1667 }` instead of `{ "dice": "1d6", "applies_on": "6" }`. Loses source-text fidelity AND the emulator UX contract. Always preserve the source-text dice mechanic verbatim. See "Key design framings" reframing (i).
+
+2. **Encoding a triggered effect as section-level events on every affected section.** A Ring of Regeneration encoded as a `modify_stat endurance +1` event copied into every section in the book is correct mechanically but wrong structurally — the effect's home is the item, not the section. Sub-agent audits should NOT spread one effect across N sections; the canonical home is `items_catalog[ring_of_regeneration].triggered_effects[]`. Same anti-pattern applies to per-round dice-gated shield effects (don't encode in every section that fights the affected enemy — encode on the shield).
+
+3. **Encoding a per-round dice gate as a Rule 17 modifier.** A 1d6-on-6 → -1 damage shield is NOT a `combat_modifiers` entry (those are frozen at combat start, additive on inputs). The mechanic is a *per-round* dice-gated *output* shift. Use `on_combat_round` + `gate_roll` + `damage_delta`. Reverse-direction: a Rule 17 modifier is NOT a Rule 36 entry — frozen-at-combat-start per-fight bonuses live in `combat_modifiers`.
+
+4. **Inventing trigger names not in the closed enum.** A book whose source text requires a trigger not in the published taxonomy is a *codex extension request*, not a freelance schema deviation. File as a follow-up; do not ship a book with a custom trigger name.
+
+5. **Mixing chargen-time effects and run-time triggered effects in one array.** Rule 34's `effects[]` stays chargen-only; Rule 36's `triggered_effects[]` stays run-time. An entry intended to fire at chargen-confirm time belongs in `effects[]` (Rule 34); an entry intended to fire on a lifecycle trigger during play belongs in `triggered_effects[]` (Rule 36). They are separate fields on the same placements.
+
+6. **Using `script` as the default `effect.type`.** The discriminated effect types (damage_cap, damage_multiplier, damage_delta, damage_set, modify_stat, set_flag, clear_flag, add_item, remove_item) exist so the emulator can render UX hints (per-round dice display, user-use button label, effect summary in inventory). `script` is the escape hatch for genuinely complex effects that don't fit the discrete types — use sparingly. If a `script` effect's logic is "modify stat X by Y," it should be `modify_stat`, not `script`.
+
+7. **Forgetting `direction` on damage-flow effects.** `damage_cap`, `damage_multiplier`, `damage_delta`, `damage_set` all REQUIRE `direction: "incoming" | "outgoing"`. The player's perspective is canonical (`outgoing` = damage out of player's health; `incoming` = damage out of enemy's health). Source-text language like "the dragon does up to 4 damage per round" maps to `direction: "outgoing"` (damage out of the player). See Rule 18 "Direction-naming convention (enemy-POV semantics)" — Rule 36 follows the same convention as Rule 18 / Rule 32.
+
+**Recommended sequencing (Chat #32 → Chat #33+).** The candidate ships as codex-doc-only in Chat #32 (this chat). The downstream sequencing:
+
+- **Chat #32 (this chat — codex-doc-only release v2.26.0):** captures the design fully (this subsection). NO schema changes, NO emulator changes, NO book migrations. The design is reviewable as a self-contained doc artifact; user feedback closes open design questions before Chat #33's schema ship.
+
+- **Chat #33 (schema-additive release, target v2.27.0 / GBF v1.20.0 / emulators v3.15.0):** ships the `triggered_effects[]` schema, both reference emulator handlers, the pipeline-ordering composition tests, and the first audit wave (one book — Warlock is the simplest scope with ~4 sites). Open design questions get closed in Chat #33's design-pass-before-coding phase.
+
+- **Chat #34+ (audit waves):** sub-agent dispatches migrating the remaining 5 books' parser_notes-flagged sites to canonical Rule 36 encoding. One book per dispatch, audit-mode framing, schema-validity-comparison-against-baseline mandatory.
+
+- **Chat #N (consolidation, optional):** decide whether to absorb Rule 19 `stat_modifier` / Rule 25 `consume` / Rule 34 `effects[]` into a unified shape. Multi-chat scope.
+
+The candidate ship MUST NOT skip ahead — schema additions and emulator handlers without the design review are exactly the prescriptive shortcut the Chat #30 "codex-first discipline" exists to prevent.
+
+**Cross-references.**
+
+- **Rule 17** (combat modifiers structurally) — per-fight additive deltas on round_script INPUTS; distinct from Rule 36's per-round dispatch on outputs. The "Modifier-expiry-on-loss-streak" subsection covers a per-fight modifier that DROPS after N losses; Rule 36's `on_combat_round` trigger is a different mechanic (fires every round, not drops after N).
+- **Rule 18** (damage interactions) — per-component multiplicative scaling at the damage-pipeline level. Rule 36's `damage_multiplier` is per-direction-total, not per-component. The "Direction-naming convention (enemy-POV semantics)" subsection's vocabulary applies identically to Rule 36's damage-flow effects.
+- **Rule 19** (equipment slots) — `stat_modifier.when: "equipped"` is the existing narrow case Rule 36's `trigger: while_equipped` generalizes. See "Coexistence" above for the strictly-additive policy.
+- **Rule 22** (per-range effects on `roll_dice`) — section-level dice mechanic with per-branch effects. Rule 36's `gate_roll` reuses the same range-string vocabulary (`applies_on` mirrors `results[range]` keys). A per-range `roll_dice` effect lives on a section; a Rule 36 `gate_roll` lives on an item / ability / talent / enemy and fires on a lifecycle trigger.
+- **Rule 23** (book-wide standing combat modifiers) — rules-section-level per-fight modifiers. Rule 36 is per-item / per-ability / per-talent / per-enemy. The two are at different scopes and never collide.
+- **Rule 25** (named-consumable heal semantics) — `consume.satisfies_eat_meal` + `consume.effects` is the existing narrow case Rule 36's `trigger: on_eat_meal` (and `trigger: on_user_use` for non-meal consumables) generalizes. See "Coexistence" above.
+- **Rule 32** (per-round damage caps) — frozen-at-combat-start caps on combat events / enemies. Rule 36's `damage_cap` effect is per-round trigger-evaluated, on items / abilities / talents / enemies. Pipeline-ordering and tightest-cap-wins composition documented above.
+- **Rule 33** (item-state flags) — Rule 36 entries that fire `set_flag` / `clear_flag` compose with Rule 33's flag-state semantics; no conflict.
+- **Rule 34** (auto-applied chargen effects on abilities and talents) — chargen-only `effects[]` on the same placements as Rule 36's run-time `triggered_effects[]`. Separate fields, separate semantics, no migration required. See "Coexistence" above.
+
 1. Universal Gamebook Concepts
 2. Output Schema Specification
 3. Series Profile: Choice-Only Books
@@ -4066,6 +4204,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 33 (Item-state flags).** For every item the book's narrative describes as undergoing a one-time mechanical transition (damaged, lit, used, broken, examined, opened, read) that gates downstream sections, the transition is encoded as a `set_flag` event in the section that performs it, with the flag name following the `<item_id>_<state-suffix>` convention (canonical: Windhammer §200's `set_flag: thandurion_damaged`, gating §128's "swap to Mutan's axe" choice and §564's `not has_flag: thandurion_damaged` predicate on the +2 Than'durion bonus). The default state is encoded as the absence of the flag (`thandurion_damaged` unset, not `thandurion_undamaged` set true at chargen). NO item-state transition is encoded as a swap to a parallel `<item>_damaged` catalog entry, an item-quantity counter, or a Rule 19 `stat_modifier` toggle. Persistent combat-skill side effects of the transition (e.g., §200's "reduce your combat value by 4 points until you acquire a new weapon") use Rule 23 standing_modifiers conditional on the item-state flag. Distinguished from Rule 27 by lifecycle: Rule 27 flags are set at character creation and never change; Rule 33 flags are set/cleared by in-section events during play.
 
+**Rule 34 (Auto-applied chargen effects on abilities and talents).** For every entry in `rules.abilities.available[]` and `rules.talents.available[]` whose source-text describes a deterministic mechanical bonus that should auto-apply at the moment the player picks that ability or talent ("Bushcraft: +5 ENDURANCE," "Lorecraft: +1 INTUITION," "Shadar in the Making: +1 INTUITION"), I encoded the bonus as an `effects: [<event>]` array on the entry. The events fire at chargen-confirm time using the bounded chargen-event-primitives subset (`modify_stat`, `set_flag`, `clear_flag`, `add_item`, `set_resource`); interactive event types (`combat`, `stat_test`, `eat_meal`, `choose_items`, `roll_dice`, `input_number`, `input_text`) are NOT allowed in `effects[]` and produce an emulator warning if used. For every mutual-exclusion pair the rules section states ("Weaponmastery and Huntmastery are mutually exclusive"), BOTH entries declare each other via `exclusive_with: ["<other_name>"]` — the symmetric-validation rejects mutually-exclusive picks before any state mutation, and one-sided declarations don't enforce. For conditional bonuses that depend on combat state, player state, or runtime context ("Brigandry: +1 CV when fighting alone," "Huntmastery: +1 CV when fighting beasts"), I encoded the conditional rule as `rules.combat_system.standing_modifiers[]` gated on `has_ability "<name>"` (Rule 23 + has_ability), NOT in `effects[]` (which fires once at chargen and has no awareness of runtime state). For talents whose source-text rule doesn't fit the chargen-event-primitives subset (conditional-effect talents, talent-grants-of-items-with-triggers, talents that interact with run-time state), I used `parser_notes` on the entry to capture the source-text rule for future codex extension instead of forcing a partial fit into `effects[]`. `character_creation.steps[]` ordering matters: declarative initial-value steps (`roll_stat`, `set_resource`, `distribute_points`) come BEFORE selection-driven bonus steps (`choose_abilities`, `choose_talents`) so the +N bonuses stack on top of the rolled / distributed baseline, not the other way around. NO `effects[]` entry uses an interactive event type; NO mutual-exclusion is left one-sided; NO conditional-bonus is encoded in `effects[]` when `standing_modifiers` is the right layer; NO chargen step ordering inverts the declarative-before-selection sequence.
+
 **Rule 35 (Currency grants — direct vs. treasure-pouch encoding).** For every `add_item` event in the book whose target is a synthetic currency wrapper (item id matching `*gold*`, `*coin*`, `*crown*`, `*silver*`, `*purse*`, `*pouch*` patterns suggestive of a currency placeholder), I checked the source text. If the section's text describes a direct currency grant with no `choose_items` selecting the wrapper from a list of options, I migrated the encoding to a single `modify_stat <currency> +N` event and removed the now-orphaned items_catalog entry — the wrapper-without-modify_stat shape silently drops the currency from the player's pool because no event credits the counter. For every `choose_items` event whose `from` list includes a treasure-pouch placeholder, I verified the redemption section (the section the player navigates to in order to credit the gold) emits BOTH `modify_stat <currency> +N` AND `remove_item <pouch_id>`; if the `remove_item` was missing, I added it so the empty pouch does not linger in inventory after redemption. NO direct currency grant is encoded as an `add_item` wrapper without a companion `modify_stat`; NO treasure-pouch redemption section emits the gold credit without the post-redemption `remove_item` cleanup. Provisions / meals / rations follow the parallel Rule 21 shape (`modify_stat stat:"provisions"`); they are NEVER wrapped as an `add_item: meal_pouch_N` placeholder.
 
 **Section 2.1a (Endings placement, schema v1.11+).** The book's `death_endings` and `victory_endings` lists are placed consistently — either both inside `metadata.confidence.{death,victory}_endings` as section-id arrays (single-chat parses, matching the four maintained books) OR both at the top level (`book.death_endings`, `book.victory_endings`) as section-id arrays with integer counts in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). I did NOT mix the two placements within one book (no array at top level AND a duplicating array in confidence), I did NOT silently migrate from one shape to the other mid-merge, and every section id listed in either placement also appears in `sections{}` with `is_ending: true` and the matching `ending_type` (`"death"` for death endings; `"victory"` or `"continuation"` for victory endings).
@@ -4123,7 +4263,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.25.0 / GBF schema v1.19.0 / CLI emulator v3.14.0 / HTML emulator v3.14.0.**
+**Codex v2.26.0 / GBF schema v1.19.0 / CLI emulator v3.14.0 / HTML emulator v3.14.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
