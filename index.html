@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.14.0';
+const CODEX_EMULATOR_VERSION = '3.15.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2215,6 +2215,26 @@ function updateInventory() {
       }
       li.appendChild(btn);
     }
+    // Rule 36 (schema v1.20+): add Use button for items whose
+    // triggered_effects[] has trigger 'on_user_use' reachable from
+    // the current context (in_combat vs in_section).
+    if (def && Array.isArray(def.triggered_effects)) {
+      const inCombat = !!window._combat;
+      const ctxName = inCombat ? 'in_combat' : 'in_section';
+      const hasUseHere = def.triggered_effects.some(te => {
+        if (!te || te.trigger !== 'on_user_use') return false;
+        const ctx = te.context || 'anywhere';
+        return ctx === 'anywhere' || ctx === ctxName;
+      });
+      if (hasUseHere) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm use-btn';
+        btn.textContent = 'Use';
+        btn.title = `Use ${def.name || item}`;
+        btn.addEventListener('click', () => r36_useItem(item));
+        li.appendChild(btn);
+      }
+    }
     list.appendChild(li);
   }
   renderEquipmentPanel();
@@ -2343,6 +2363,10 @@ function navigateTo(sectionId) {
     );
     return;
   }
+
+  // Rule 36 on_section_enter triggers (schema v1.20+): fire after the
+  // death check, before processing the section's event queue.
+  r36_dispatchLifecycleTriggers('on_section_enter');
 
   // Process events (section header and text were already rendered above)
   processEvents(section.events || [], section.choices || []);
@@ -3279,6 +3303,8 @@ function handleCombat(event) {
   // Store combat state for callbacks — all mutable state lives here
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules, winAfterRounds,
+    // Schema v1.20+ (Rule 36): enemy catalog ids for triggered_effects lookup.
+    enemyRefs: enemies.map(en => en.ref).filter(r => typeof r === 'string'),
     // Frozen, condition-evaluated list of active modifiers for this
     // combat's duration. See comment above for why this is
     // snapshotted at combat start rather than re-evaluated each round.
@@ -3305,6 +3331,11 @@ function handleCombat(event) {
   // Keep window._combatContext alive for equipment helpers to detect
   // in-combat state. It's the same object as window._combat.
   window._combatContext = window._combat;
+
+  // Rule 36 on_combat_start triggers (schema v1.20+): fire after frozen
+  // modifiers / damage_interactions / damage_caps resolve and combat
+  // state is initialized.
+  r36_dispatchLifecycleTriggers('on_combat_start', { combatScope: true });
 
   // Callback bound to the Continue button that appears after combat ends
   // (either the player wins or successfully flees). Navigates to the
@@ -3580,11 +3611,45 @@ function handleCombat(event) {
       }
     }
 
+    // Rule 36 on_combat_round triggers (schema v1.20+). Dispatch AFTER Rule 32
+    // frozen caps and BEFORE applying damage to health. Q4 pipeline ordering:
+    // damage_delta / damage_multiplier / damage_set first (shift/scale/replace
+    // pass), then damage_cap (tightest-cap-wins pass). Non-damage-flow effects
+    // queue and fire after numerics settle; consume_on_fire items are removed
+    // last. Mirrors play.js dispatchCombatRoundTriggers.
+    const r36enemyMaxHealth = (gameData.enemies_catalog?.[c.enemyRefs?.[0]]?.[gameData.rules?.health_stat] || enemy.maxHealth || 0);
+    const r36ctx = {
+      playerTotal,
+      enemyTotal,
+      enemyMaxHealth: r36enemyMaxHealth,
+      log: c.combatLog,
+      consume: [],
+      nonDamageQueue: [],
+    };
+    r36_dispatchCombatRoundTriggers(r36ctx);
+    playerTotal = Math.max(0, r36ctx.playerTotal);
+    enemyTotal = Math.max(0, r36ctx.enemyTotal);
+
     if (enemyTotal !== 0) {
       enemy.currentHealth = Math.max(0, enemy.currentHealth - enemyTotal);
     }
     if (playerTotal !== 0) {
       setPlayerHealth(Math.max(0, getPlayerHealth() - playerTotal));
+    }
+
+    // Apply Rule 36 non-damage-flow queued effects.
+    for (const q of r36ctx.nonDamageQueue) {
+      r36_dispatchTriggeredEvent(q.effect, r36_describeSource(q.source), c.combatLog);
+    }
+    // Apply Rule 36 consume_on_fire removals.
+    for (const itemId of r36ctx.consume) {
+      state.inventory = state.inventory.filter(id => id !== itemId);
+      if (state.equipment) {
+        for (const slot of Object.keys(state.equipment)) {
+          if (state.equipment[slot] === itemId) delete state.equipment[slot];
+        }
+      }
+      c.combatLog.push(`<span class="hit">R36 consume_on_fire: removed ${itemId}</span>`);
     }
 
     // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): update the
@@ -3729,6 +3794,8 @@ function handleCombat(event) {
     // combats win on whichever fires first.
     if (c.winAfterRounds !== undefined && c.winAfterRounds !== null && c.roundNum >= c.winAfterRounds) {
       c.combatLog.push(`<span class="lucky">You survived ${c.roundNum} rounds — combat ends in victory.</span>`);
+      // Rule 36 on_combat_end (schema v1.20+).
+      r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
       c.combatOver = true;
       c.combatEndTarget = c.winTo;
       c.renderCombat();
@@ -3755,6 +3822,8 @@ function handleCombat(event) {
         // before the player can read what happened. currentEnemyIdx
         // still points at the just-defeated enemy at this point, so the
         // render is safe.
+        // Rule 36 on_combat_end (schema v1.20+).
+        r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
         c.combatOver = true;
         c.combatEndTarget = c.winTo;
         c.renderCombat();
@@ -4461,6 +4530,12 @@ function evaluateCondition(cond) {
       }
       return false;
     }
+    case 'is_equipped': {
+      // Schema v1.20+ (Rule 36). Canonical condition for gating Rule 36
+      // triggered_effects on equipment-slot occupancy.
+      const eq = state.equipment || {};
+      return Object.values(eq).some(id => id === cond.item);
+    }
     default:
       return true;
   }
@@ -4497,9 +4572,323 @@ function describeCondition(cond) {
       return cond.item ? `Requires ${getItemName(cond.item)} equipped in ${cond.slot}` : `Requires something in ${cond.slot} slot`;
     case 'has_equipped_with_property':
       return `Requires equipped item with property: ${cond.property}`;
+    case 'is_equipped':
+      return `Requires equipped: ${getItemName(cond.item)}`;
     default:
       return 'Condition not met';
   }
+}
+
+// ==================== TRIGGERED EFFECTS (Rule 36, schema v1.20+) ====================
+//
+// Browser-emulator mirror of the cli-emulator/play.js Rule 36 dispatch.
+// See play.js "TRIGGERED EFFECTS" section for the canonical design
+// commentary; this implementation is intentionally a near-line-by-line
+// mirror so behavior matches across both emulators.
+
+function r36_matchAppliesOn(rolled, applies_on) {
+  if (typeof applies_on !== 'string') return false;
+  const trimmed = applies_on.trim();
+  if (/^-?\d+$/.test(trimmed)) return rolled === parseInt(trimmed, 10);
+  const m = trimmed.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
+  if (m) return rolled >= parseInt(m[1], 10) && rolled <= parseInt(m[2], 10);
+  return false;
+}
+
+function r36_evalGateRoll(gateRoll, log) {
+  if (!gateRoll) return { fired: true, rolled: null };
+  const { dice, applies_on } = gateRoll;
+  if (!dice || !applies_on) return { fired: false, rolled: null };
+  const r = rollDice(dice);
+  return { fired: r36_matchAppliesOn(r.total, applies_on), rolled: r.total };
+}
+
+function r36_resolveAmount(amount, log, label) {
+  if (typeof amount === 'number') return amount;
+  if (amount && typeof amount === 'object' && amount.kind === 'dice') {
+    const r = rollDice(amount.expression);
+    const signed = amount.sign === 'negative' ? -r.total : r.total;
+    if (log) log.push(`Dice amount${label ? ' (' + label + ')' : ''}: ${amount.expression} → ${r.total}${amount.sign === 'negative' ? ' (negated)' : ''}`);
+    return signed;
+  }
+  return 0;
+}
+
+function r36_isItemEquipped(itemId) {
+  const eq = state.equipment || {};
+  return Object.values(eq).some(id => id === itemId);
+}
+
+function r36_collectTriggeredEffects(trigger, includeCombatScope) {
+  const out = [];
+  const itemsCat = (gameData && gameData.items_catalog) || {};
+  for (const itemId of (state.inventory || [])) {
+    const def = itemsCat[itemId];
+    if (!def || !Array.isArray(def.triggered_effects)) continue;
+    for (const te of def.triggered_effects) {
+      if (!te || !te.trigger) continue;
+      if (te.trigger === trigger) {
+        out.push({ source: 'item', itemId, entry: te });
+      } else if (te.trigger === 'while_equipped' && trigger === 'on_combat_round') {
+        if (r36_isItemEquipped(itemId)) out.push({ source: 'item', itemId, entry: te, _whileEquipped: true });
+      }
+    }
+  }
+  const abilities = (gameData?.rules?.abilities?.available) || [];
+  for (const ab of abilities) {
+    if (!Array.isArray(ab.triggered_effects)) continue;
+    const owned = (state.abilities || []).some(a => a.toLowerCase().replace(/ /g, '_') === ab.name.toLowerCase().replace(/ /g, '_'));
+    if (!owned) continue;
+    for (const te of ab.triggered_effects) {
+      if (te && te.trigger === trigger) out.push({ source: 'ability', name: ab.name, entry: te });
+    }
+  }
+  const talents = (gameData?.rules?.talents?.available) || [];
+  for (const tal of talents) {
+    if (!Array.isArray(tal.triggered_effects)) continue;
+    const owned = (state.talents || []).some(t => t.toLowerCase().replace(/ /g, '_') === tal.name.toLowerCase().replace(/ /g, '_'));
+    if (!owned) continue;
+    for (const te of tal.triggered_effects) {
+      if (te && te.trigger === trigger) out.push({ source: 'talent', name: tal.name, entry: te });
+    }
+  }
+  if (includeCombatScope && window._combat) {
+    const enemiesCat = (gameData && gameData.enemies_catalog) || {};
+    for (const ref of (window._combat.enemyRefs || [])) {
+      const def = enemiesCat[ref];
+      if (!def || !Array.isArray(def.triggered_effects)) continue;
+      for (const te of def.triggered_effects) {
+        if (te && te.trigger === trigger) out.push({ source: 'enemy', ref, entry: te });
+      }
+    }
+  }
+  return out;
+}
+
+function r36_describeSource(e) {
+  if (e.source === 'item') return `item:${e.itemId}${e._whileEquipped ? ' (while_equipped)' : ''}`;
+  if (e.source === 'enemy') return `enemy:${e.ref}`;
+  if (e.source === 'ability') return `ability:${e.name}`;
+  if (e.source === 'talent') return `talent:${e.name}`;
+  return e.source || '?';
+}
+
+function r36_resolveDamageSetValue(value, ctx) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    if (value === 'enemy.max_health') return ctx.enemyMaxHealth || 0;
+    return 0;
+  }
+  return 0;
+}
+
+function r36_applyDamageFlowEffect(effect, ctx, source) {
+  const dir = effect.direction;
+  if (!dir) return false;
+  const key = dir === 'incoming' ? 'enemyTotal' : 'playerTotal';
+  switch (effect.type) {
+    case 'damage_delta': {
+      const delta = typeof effect.delta === 'number' ? effect.delta : 0;
+      ctx[key] = ctx[key] + delta;
+      ctx.log.push(`R36 damage_delta (${source}): ${dir} ${delta >= 0 ? '+' : ''}${delta} → ${ctx[key]}`);
+      return true;
+    }
+    case 'damage_multiplier': {
+      const m = typeof effect.multiplier === 'number' ? effect.multiplier : 1;
+      const before = ctx[key];
+      ctx[key] = before * m;
+      ctx.log.push(`R36 damage_multiplier (${source}): ${dir} ${before} × ${m} → ${ctx[key]}`);
+      return true;
+    }
+    case 'damage_set': {
+      const before = ctx[key];
+      ctx[key] = r36_resolveDamageSetValue(effect.value, ctx);
+      ctx.log.push(`R36 damage_set (${source}): ${dir} ${before} → ${ctx[key]}`);
+      return true;
+    }
+    case 'damage_cap': {
+      const cap = typeof effect.max === 'number' ? effect.max : Infinity;
+      if (ctx[key] > cap) {
+        ctx.log.push(`R36 damage_cap (${source}): ${dir} ${ctx[key]} → ${cap}`);
+        ctx[key] = cap;
+      }
+      return true;
+    }
+    default: return false;
+  }
+}
+
+function r36_dispatchCombatRoundTriggers(ctx) {
+  const entries = r36_collectTriggeredEffects('on_combat_round', true);
+  const SHIFT_OPS = new Set(['damage_delta', 'damage_multiplier', 'damage_set']);
+  const passes = [
+    e => SHIFT_OPS.has(e.entry.effect?.type),
+    e => e.entry.effect?.type === 'damage_cap',
+  ];
+  const fired = [];
+  for (const pass of passes) {
+    for (const e of entries.filter(pass)) {
+      const te = e.entry;
+      if (te.condition && !evaluateCondition(te.condition)) continue;
+      const gr = r36_evalGateRoll(te.gate_roll, ctx.log);
+      if (!gr.fired) {
+        if (te.gate_roll) ctx.log.push(`R36 gate_roll skip (${r36_describeSource(e)}): rolled ${gr.rolled} not in ${te.gate_roll.applies_on}`);
+        continue;
+      }
+      if (te.gate_roll) ctx.log.push(`R36 gate_roll fire (${r36_describeSource(e)}): rolled ${gr.rolled} in ${te.gate_roll.applies_on}`);
+      r36_applyDamageFlowEffect(te.effect, ctx, r36_describeSource(e));
+      fired.push(e);
+    }
+  }
+  ctx.nonDamageQueue = [];
+  for (const e of entries) {
+    const te = e.entry;
+    if (!te.effect) continue;
+    if (SHIFT_OPS.has(te.effect.type) || te.effect.type === 'damage_cap' || te.effect.type === 'flee_combat') continue;
+    if (te.condition && !evaluateCondition(te.condition)) continue;
+    const gr = r36_evalGateRoll(te.gate_roll, ctx.log);
+    if (!gr.fired) continue;
+    ctx.nonDamageQueue.push({ source: e, effect: te.effect });
+    fired.push(e);
+  }
+  for (const e of fired) {
+    if (e.source === 'item' && e.entry.consume_on_fire) ctx.consume.push(e.itemId);
+  }
+  return ctx;
+}
+
+function r36_dispatchTriggeredEvent(effect, sourceDesc, log) {
+  if (!effect || !effect.type) return;
+  const evt = JSON.parse(JSON.stringify(effect));
+  if (evt.type === 'modify_stat' && evt.amount !== undefined && typeof evt.amount !== 'number') {
+    evt.amount = r36_resolveAmount(evt.amount, log, sourceDesc);
+  }
+  if (log) log.push(`R36 event (${sourceDesc}): ${evt.type}${evt.stat ? ' ' + evt.stat : ''}${typeof evt.amount === 'number' ? ' ' + (evt.amount >= 0 ? '+' : '') + evt.amount : ''}`);
+  handleEvent(evt);
+}
+
+// Rule 36 on_user_use dispatch (schema v1.20+). The player clicked Use
+// on an inventory entry. Dispatches on_user_use triggered_effects[];
+// honors consume_on_fire; handles flee_combat by clearing combat and
+// navigating.
+function r36_useItem(itemId) {
+  const def = (gameData.items_catalog || {})[itemId];
+  if (!def || !Array.isArray(def.triggered_effects)) {
+    state.log.push(`No on_user_use triggered_effects on ${itemId}`);
+    return;
+  }
+  const combat = window._combat;
+  const ctxName = combat ? 'in_combat' : 'in_section';
+  const fireable = def.triggered_effects.filter(te => {
+    if (!te || te.trigger !== 'on_user_use') return false;
+    const ctx = te.context || 'anywhere';
+    if (ctx !== 'anywhere' && ctx !== ctxName) return false;
+    if (te.condition && !evaluateCondition(te.condition)) return false;
+    return true;
+  });
+  if (fireable.length === 0) {
+    state.log.push(`No fireable on_user_use entry on ${itemId} in ${ctxName} context`);
+    return;
+  }
+  const log = combat ? combat.combatLog : state.log;
+  let fledTo = null;
+  let consume = false;
+  for (const te of fireable) {
+    const gr = r36_evalGateRoll(te.gate_roll, log);
+    if (!gr.fired) {
+      if (te.gate_roll && log) log.push(`R36 gate_roll skip (item:${itemId}): rolled ${gr.rolled} not in ${te.gate_roll.applies_on}`);
+      continue;
+    }
+    if (te.gate_roll && log) log.push(`R36 gate_roll fire (item:${itemId}): rolled ${gr.rolled} in ${te.gate_roll.applies_on}`);
+    const eff = te.effect;
+    if (!eff) continue;
+    if (eff.type === 'flee_combat') {
+      if (!combat) {
+        if (log) log.push(`R36 flee_combat (item:${itemId}): no active combat; skipping`);
+      } else {
+        fledTo = eff.target_section;
+        if (log) log.push(`R36 flee_combat (item:${itemId}): fleeing to §${eff.target_section}`);
+      }
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+      if (log) log.push(`R36 ${eff.type} (item:${itemId}): damage-flow effects only fire on on_combat_round; skipping`);
+    } else {
+      r36_dispatchTriggeredEvent(eff, `item:${itemId}`, log);
+    }
+    if (te.consume_on_fire) consume = true;
+  }
+  if (consume) {
+    state.inventory = state.inventory.filter(id => id !== itemId);
+    if (state.equipment) {
+      for (const slot of Object.keys(state.equipment)) {
+        if (state.equipment[slot] === itemId) delete state.equipment[slot];
+      }
+    }
+    if (log) log.push(`R36 consume_on_fire: removed ${itemId}`);
+  }
+  if (fledTo !== null && combat) {
+    // Fire on_combat_end before tearing down combat, then navigate.
+    r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
+    combat.combatOver = true;
+    combat.combatEndTarget = fledTo;
+    window._combat = null;
+    window._combatContext = null;
+    updateInventory();
+    updateStatBar();
+    navigateTo(fledTo);
+    return;
+  }
+  // Non-flee uses (heal potion, scroll dispatch, etc.): refresh stat bar
+  // and inventory, and let any combat continue.
+  updateInventory();
+  updateStatBar();
+}
+
+function r36_dispatchLifecycleTriggers(trigger, options) {
+  options = options || {};
+  const entries = r36_collectTriggeredEffects(trigger, !!options.combatScope);
+  const consume = [];
+  let fledTo = null;
+  const log = state.log;
+  for (const e of entries) {
+    const te = e.entry;
+    if (te.condition && !evaluateCondition(te.condition)) continue;
+    if (trigger === 'on_user_use' && te.context && te.context !== 'anywhere') {
+      const inCombat = !!window._combat;
+      if (te.context === 'in_combat' && !inCombat) continue;
+      if (te.context === 'in_section' && inCombat) continue;
+    }
+    const gr = r36_evalGateRoll(te.gate_roll, log);
+    if (!gr.fired) {
+      if (te.gate_roll && log) log.push(`R36 gate_roll skip (${r36_describeSource(e)}): rolled ${gr.rolled} not in ${te.gate_roll.applies_on}`);
+      continue;
+    }
+    if (te.gate_roll && log) log.push(`R36 gate_roll fire (${r36_describeSource(e)}): rolled ${gr.rolled} in ${te.gate_roll.applies_on}`);
+    const eff = te.effect;
+    if (!eff) continue;
+    if (eff.type === 'flee_combat') {
+      if (!window._combat) {
+        if (log) log.push(`R36 flee_combat (${r36_describeSource(e)}): no active combat; skipping`);
+      } else {
+        fledTo = eff.target_section;
+        if (log) log.push(`R36 flee_combat (${r36_describeSource(e)}): fleeing to §${eff.target_section}`);
+      }
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+      if (log) log.push(`R36 ${eff.type} (${r36_describeSource(e)}): damage-flow effects only fire on on_combat_round; skipping`);
+    } else {
+      r36_dispatchTriggeredEvent(eff, r36_describeSource(e), log);
+    }
+    if (e.source === 'item' && te.consume_on_fire) consume.push(e.itemId);
+  }
+  for (const itemId of consume) {
+    state.inventory = state.inventory.filter(id => id !== itemId);
+    if (state.equipment) {
+      for (const slot of Object.keys(state.equipment)) {
+        if (state.equipment[slot] === itemId) delete state.equipment[slot];
+      }
+    }
+    if (log) log.push(`R36 consume_on_fire: removed ${itemId}`);
+  }
+  return { fledTo };
 }
 
 // ==================== EQUIPMENT HELPERS (schema v1.5+) ====================

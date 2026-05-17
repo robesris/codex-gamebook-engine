@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.14.0';
+const CODEX_EMULATOR_VERSION = '3.15.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -445,6 +445,15 @@ function evalCondition(cond, state, book) {
       }
       return false;
     }
+    case 'is_equipped': {
+      // Schema v1.20+ (Rule 36). Canonical condition for gating Rule 36
+      // triggered_effects on equipment-slot occupancy. Same state check as
+      // has_equipped_item; the distinct condition type is preserved for
+      // parser intent (and so schema validators can reject is_equipped on
+      // abilities / talents where it has no meaning).
+      const eq = state.equipment || {};
+      return Object.values(eq).some(id => id === cond.item);
+    }
     default: return true;
   }
 }
@@ -466,8 +475,310 @@ function describeCondition(cond) {
     case 'has_equipped_item': return `has equipped: ${cond.item}`;
     case 'has_equipped_in_slot': return cond.item ? `${cond.slot} slot has ${cond.item}` : `${cond.slot} slot occupied`;
     case 'has_equipped_with_property': return `equipped item has property: ${cond.property}`;
+    case 'is_equipped': return `is equipped: ${cond.item}`;
     default: return cond.type;
   }
+}
+
+// ==================== TRIGGERED EFFECTS (Rule 36, schema v1.20+) ====================
+//
+// Run-time triggered effects fire on lifecycle events (per combat round, on
+// section enter, on user use, etc.) and live on four placements:
+//   - items_catalog[id].triggered_effects[]
+//   - enemies_catalog[id].triggered_effects[]
+//   - rules.abilities.available[].triggered_effects[]
+//   - rules.talents.available[].triggered_effects[]
+//
+// Each entry: { trigger, context?, condition?, gate_roll?, effect, consume_on_fire?, reason? }
+//
+// Pipeline ordering (per Q4 design closure, Chat #33):
+//   Rule 17 combat_modifiers (frozen, applied to round_script INPUTS)
+//     → Rule 18 damage_interactions (per-component multiplicative)
+//       → Rule 32 frozen damage_caps (post-interaction total bound)
+//         → Rule 36 damage_delta (additive shift on per-direction total)
+//           → Rule 36 damage_multiplier (× on per-direction total)
+//             → Rule 36 damage_set (replaces per-direction total)
+//               → Rule 36 damage_cap (tightest-cap-wins, extends Rule 32 v1.15 semantic)
+//                 → apply to state.
+
+// Parse a gate_roll.applies_on expression ("6", "1-2", "1-5") against a
+// rolled total. Returns true on match, false otherwise. Same syntax as
+// roll_dice.results keys.
+function matchAppliesOn(rolled, applies_on) {
+  if (typeof applies_on !== 'string') return false;
+  const trimmed = applies_on.trim();
+  if (/^-?\d+$/.test(trimmed)) return rolled === parseInt(trimmed, 10);
+  const m = trimmed.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
+  if (m) return rolled >= parseInt(m[1], 10) && rolled <= parseInt(m[2], 10);
+  return false;
+}
+
+// Evaluate a triggered_effect.gate_roll. Rolls the dice expression and tests
+// the rolled total against applies_on. Forced-rolls queue (state.forcedRolls)
+// is consumed when present for deterministic replay / test fixtures, mirroring
+// the existing roll_dice UX.
+function evalGateRoll(gateRoll, state) {
+  if (!gateRoll) return { fired: true, rolled: null };
+  const { dice, applies_on } = gateRoll;
+  if (!dice || !applies_on) return { fired: false, rolled: null };
+  const forced = Array.isArray(state.forcedRolls) ? state.forcedRolls : undefined;
+  const result = rollDice(dice, forced);
+  if (forced && forced.length > 0) {
+    // rollDice consumed from the front when forced was supplied — but rollDice
+    // currently reads forcedRolls without shifting. The existing pattern in
+    // run_dice handlers shifts off the queue manually. Mirror that:
+    forced.splice(0, result.rolls.length);
+  }
+  return { fired: matchAppliesOn(result.total, applies_on), rolled: result.total };
+}
+
+// Resolve a modify_stat-style amount field that may be either a numeric
+// value (legacy form) or a dice-amount object {kind: 'dice', expression, sign}
+// (Schema v1.20+). Returns the integer amount; logs the roll when dice.
+function resolveAmount(amount, state, label) {
+  if (typeof amount === 'number') return amount;
+  if (amount && typeof amount === 'object' && amount.kind === 'dice') {
+    const forced = Array.isArray(state.forcedRolls) ? state.forcedRolls : undefined;
+    const r = rollDice(amount.expression, forced);
+    if (forced && forced.length > 0) forced.splice(0, r.rolls.length);
+    const signed = amount.sign === 'negative' ? -r.total : r.total;
+    if (state && Array.isArray(state.log)) {
+      state.log.push(`Dice amount${label ? ' (' + label + ')' : ''}: ${amount.expression} → ${r.total}${amount.sign === 'negative' ? ' (negated)' : ''}`);
+    }
+    return signed;
+  }
+  return 0;
+}
+
+// Collect every Rule 36 triggered_effect entry currently in scope for the
+// given trigger, walking all four placements. Each returned entry is tagged
+// with its source for consume_on_fire bookkeeping and the playthrough log.
+// `combat` is optional; when present, enemies_catalog entries for the active
+// combat's enemies contribute.
+function collectTriggeredEffects(state, book, trigger, combat) {
+  const out = [];
+  const itemsCat = (book && book.items_catalog) || {};
+  for (const itemId of (state.inventory || [])) {
+    const def = itemsCat[itemId];
+    if (!def || !Array.isArray(def.triggered_effects)) continue;
+    for (const te of def.triggered_effects) {
+      if (!te || !te.trigger) continue;
+      if (te.trigger === trigger) {
+        out.push({ source: 'item', itemId, entry: te });
+      } else if (te.trigger === 'while_equipped' && trigger === 'on_combat_round') {
+        // while_equipped fires at the on_combat_round lifecycle moment IF
+        // the carrying item currently occupies its slot. Equivalent to
+        // (on_combat_round + implicit is_equipped condition). Implemented
+        // as sugar so the candidate doc's two-trigger split stays clean.
+        if (isItemEquipped(state, itemId)) {
+          out.push({ source: 'item', itemId, entry: te, _whileEquipped: true });
+        }
+      }
+    }
+  }
+  const abilities = (book?.rules?.abilities?.available) || [];
+  for (const ab of abilities) {
+    if (!Array.isArray(ab.triggered_effects)) continue;
+    const owned = (state.abilities || []).some(a => a.toLowerCase().replace(/ /g, '_') === ab.name.toLowerCase().replace(/ /g, '_'));
+    if (!owned) continue;
+    for (const te of ab.triggered_effects) {
+      if (te && te.trigger === trigger) out.push({ source: 'ability', name: ab.name, entry: te });
+    }
+  }
+  const talents = (book?.rules?.talents?.available) || [];
+  for (const tal of talents) {
+    if (!Array.isArray(tal.triggered_effects)) continue;
+    const owned = (state.talents || []).some(t => t.toLowerCase().replace(/ /g, '_') === tal.name.toLowerCase().replace(/ /g, '_'));
+    if (!owned) continue;
+    for (const te of tal.triggered_effects) {
+      if (te && te.trigger === trigger) out.push({ source: 'talent', name: tal.name, entry: te });
+    }
+  }
+  if (combat) {
+    const enemiesCat = (book && book.enemies_catalog) || {};
+    for (const ref of (combat.enemyRefs || [])) {
+      const def = enemiesCat[ref];
+      if (!def || !Array.isArray(def.triggered_effects)) continue;
+      for (const te of def.triggered_effects) {
+        if (te && te.trigger === trigger) out.push({ source: 'enemy', ref, entry: te });
+      }
+    }
+  }
+  return out;
+}
+
+// Resolve a damage_set.value field: integer literal OR symbolic expression
+// (currently 'enemy.max_health'). Future expressions may be added.
+function resolveDamageSetValue(value, ctx) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    if (value === 'enemy.max_health') return ctx.enemyMaxHealth || 0;
+    return 0;
+  }
+  return 0;
+}
+
+// Apply a single passing Rule 36 effect to a per-round damage flow context.
+// Returns true if the effect was a damage-flow op; false if a non-damage
+// effect (caller dispatches non-damage ops via the standard event handler).
+function applyDamageFlowEffect(effect, ctx, source) {
+  const dir = effect.direction;
+  if (!dir) return false;
+  const key = dir === 'incoming' ? 'enemyTotal' : 'playerTotal';
+  switch (effect.type) {
+    case 'damage_delta': {
+      const delta = typeof effect.delta === 'number' ? effect.delta : 0;
+      ctx[key] = ctx[key] + delta;
+      ctx.log.push(`R36 damage_delta (${source}): ${dir} ${delta >= 0 ? '+' : ''}${delta} → ${ctx[key]}`);
+      return true;
+    }
+    case 'damage_multiplier': {
+      const m = typeof effect.multiplier === 'number' ? effect.multiplier : 1;
+      const before = ctx[key];
+      ctx[key] = before * m;
+      ctx.log.push(`R36 damage_multiplier (${source}): ${dir} ${before} × ${m} → ${ctx[key]}`);
+      return true;
+    }
+    case 'damage_set': {
+      const before = ctx[key];
+      ctx[key] = resolveDamageSetValue(effect.value, ctx);
+      ctx.log.push(`R36 damage_set (${source}): ${dir} ${before} → ${ctx[key]}`);
+      return true;
+    }
+    case 'damage_cap': {
+      const cap = typeof effect.max === 'number' ? effect.max : Infinity;
+      if (ctx[key] > cap) {
+        ctx.log.push(`R36 damage_cap (${source}): ${dir} ${ctx[key]} → ${cap}`);
+        ctx[key] = cap;
+      }
+      return true;
+    }
+    default: return false;
+  }
+}
+
+// Top-level: dispatch all on_combat_round Rule 36 effects against a per-round
+// damage flow. Mutates ctx.{playerTotal, enemyTotal, log} and ctx.consume[]
+// (item ids to remove_item one copy of after the round resolves).
+function dispatchCombatRoundTriggers(state, book, ctx) {
+  const entries = collectTriggeredEffects(state, book, 'on_combat_round', state.combat);
+  // Two-pass: first apply delta/multiplier/set (shift/scale/replace), THEN apply
+  // damage_cap (tightest-cap-wins). Within each pass, iterate in collection
+  // order so item-then-ability-then-talent-then-enemy is the canonical order.
+  const SHIFT_OPS = new Set(['damage_delta', 'damage_multiplier', 'damage_set']);
+  const passes = [
+    e => SHIFT_OPS.has(e.entry.effect?.type),
+    e => e.entry.effect?.type === 'damage_cap',
+  ];
+  const fired = [];
+  for (const pass of passes) {
+    for (const e of entries.filter(pass)) {
+      const te = e.entry;
+      if (te.condition && !evalCondition(te.condition, state, book)) continue;
+      const gr = evalGateRoll(te.gate_roll, state);
+      if (!gr.fired) {
+        if (te.gate_roll) ctx.log.push(`R36 gate_roll skip (${describeSource(e)}): rolled ${gr.rolled} not in ${te.gate_roll.applies_on}`);
+        continue;
+      }
+      if (te.gate_roll) ctx.log.push(`R36 gate_roll fire (${describeSource(e)}): rolled ${gr.rolled} in ${te.gate_roll.applies_on}`);
+      applyDamageFlowEffect(te.effect, ctx, describeSource(e));
+      fired.push(e);
+    }
+  }
+  // Non-damage-flow effects (modify_stat, set_flag, etc.) — these dispatch as
+  // standard events. We collect them so the caller can run them after the
+  // damage-flow numerics settle.
+  ctx.nonDamageQueue = [];
+  for (const e of entries) {
+    const te = e.entry;
+    if (!te.effect) continue;
+    if (SHIFT_OPS.has(te.effect.type) || te.effect.type === 'damage_cap' || te.effect.type === 'flee_combat') continue;
+    if (te.condition && !evalCondition(te.condition, state, book)) continue;
+    const gr = evalGateRoll(te.gate_roll, state);
+    if (!gr.fired) continue;
+    ctx.nonDamageQueue.push({ source: e, effect: te.effect });
+    fired.push(e);
+  }
+  // consume_on_fire bookkeeping.
+  for (const e of fired) {
+    if (e.source === 'item' && e.entry.consume_on_fire) ctx.consume.push(e.itemId);
+  }
+  return ctx;
+}
+
+function describeSource(e) {
+  if (e.source === 'item') return `item:${e.itemId}${e._whileEquipped ? ' (while_equipped)' : ''}`;
+  if (e.source === 'enemy') return `enemy:${e.ref}`;
+  if (e.source === 'ability') return `ability:${e.name}`;
+  if (e.source === 'talent') return `talent:${e.name}`;
+  return e.source || '?';
+}
+
+// Dispatch a single non-damage-flow effect (modify_stat / set_flag / etc.)
+// through the standard event handler, after rolling any dice-amount.
+function dispatchTriggeredEvent(effect, state, book, sourceDesc) {
+  if (!effect || !effect.type) return;
+  const evt = JSON.parse(JSON.stringify(effect));
+  if (evt.type === 'modify_stat' && evt.amount !== undefined && typeof evt.amount !== 'number') {
+    evt.amount = resolveAmount(evt.amount, state, sourceDesc);
+  }
+  if (state.log) state.log.push(`R36 event (${sourceDesc}): ${evt.type}${evt.stat ? ' ' + evt.stat : ''}${typeof evt.amount === 'number' ? ' ' + (evt.amount >= 0 ? '+' : '') + evt.amount : ''}`);
+  handleEvent(evt, state, book);
+}
+
+// Dispatch lifecycle triggers that DON'T touch the per-round damage flow
+// (on_section_enter, on_combat_start, on_combat_end, on_eat_meal,
+// on_user_use). Returns { fledTo: <sectionId | null> } so callers can act
+// on a flee_combat effect (only meaningful when combat is active).
+function dispatchLifecycleTriggers(state, book, trigger, options) {
+  options = options || {};
+  const combat = state.combat;
+  const entries = collectTriggeredEffects(state, book, trigger, options.combatScope ? combat : null);
+  const consume = [];
+  let fledTo = null;
+  for (const e of entries) {
+    const te = e.entry;
+    if (te.condition && !evalCondition(te.condition, state, book)) continue;
+    // context filter for on_user_use; ignored for other triggers
+    if (trigger === 'on_user_use' && te.context && te.context !== 'anywhere') {
+      const inCombat = !!combat;
+      if (te.context === 'in_combat' && !inCombat) continue;
+      if (te.context === 'in_section' && inCombat) continue;
+    }
+    const gr = evalGateRoll(te.gate_roll, state);
+    if (!gr.fired) {
+      if (te.gate_roll && state.log) state.log.push(`R36 gate_roll skip (${describeSource(e)}): rolled ${gr.rolled} not in ${te.gate_roll.applies_on}`);
+      continue;
+    }
+    if (te.gate_roll && state.log) state.log.push(`R36 gate_roll fire (${describeSource(e)}): rolled ${gr.rolled} in ${te.gate_roll.applies_on}`);
+    const eff = te.effect;
+    if (!eff) continue;
+    if (eff.type === 'flee_combat') {
+      if (!combat) {
+        state.log.push(`R36 flee_combat (${describeSource(e)}): no active combat; skipping`);
+      } else {
+        fledTo = eff.target_section;
+        state.log.push(`R36 flee_combat (${describeSource(e)}): fleeing to §${eff.target_section}`);
+      }
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+      // damage-flow effects only meaningful on on_combat_round; warn elsewhere
+      state.log.push(`R36 ${eff.type} (${describeSource(e)}): damage-flow effects only fire on on_combat_round trigger; skipping`);
+    } else {
+      dispatchTriggeredEvent(eff, state, book, describeSource(e));
+    }
+    if (e.source === 'item' && te.consume_on_fire) consume.push(e.itemId);
+  }
+  // Apply consume_on_fire removals
+  for (const itemId of consume) {
+    state.inventory = state.inventory.filter(id => id !== itemId);
+    if (state.equipment) {
+      for (const slot of Object.keys(state.equipment)) {
+        if (state.equipment[slot] === itemId) delete state.equipment[slot];
+      }
+    }
+    state.log.push(`R36 consume_on_fire: removed ${itemId}`);
+  }
+  return { fledTo };
 }
 
 // ==================== ACTION HANDLERS ====================
@@ -1053,6 +1364,12 @@ function navigateTo(state, book, sectionId) {
     return state;
   }
 
+  // Rule 36 on_section_enter triggers (schema v1.20+): fire after death
+  // check, before section event queue. Items / abilities / talents whose
+  // triggered_effects[].trigger === 'on_section_enter' dispatch their
+  // effect against the player's state as they enter the section.
+  dispatchLifecycleTriggers(state, book, 'on_section_enter');
+
   // Queue events
   state.eventQueue = [...(section.events || [])];
   state.pendingChoices = section.choices || [];
@@ -1484,6 +1801,9 @@ function startCombat(event, state, book) {
 
   state.combat = {
     enemies,
+    // Schema v1.20+ (Rule 36): list of enemy catalog ids in scope for this
+    // combat, so collectTriggeredEffects can walk enemies_catalog[].triggered_effects[].
+    enemyRefs: enemies.map(en => en.ref).filter(r => typeof r === 'string'),
     currentEnemyIdx: 0,
     mode: event.mode || 'sequential',
     winTo: event.win_to,
@@ -1511,6 +1831,13 @@ function startCombat(event, state, book) {
     // `removed_after_consecutive_losses` threshold.
     consecutiveLosses: 0,
   };
+
+  // Rule 36 on_combat_start triggers (schema v1.20+): fire after frozen
+  // modifiers / damage_interactions / damage_caps resolve and state.combat
+  // is initialized. Enemies in this combat contribute their on_combat_start
+  // triggered_effects too.
+  dispatchLifecycleTriggers(state, book, 'on_combat_start', { combatScope: true });
+
   state.pause = { type: 'combat' };
   return 'pause';
 }
@@ -1580,6 +1907,25 @@ function getAvailableActions(state, book) {
           available: ok,
           reason: ok ? null : describeCondition(c.condition),
         });
+      }
+      // Rule 36 on_user_use (schema v1.20+): list items in inventory whose
+      // triggered_effects[] has an on_user_use trigger reachable from the
+      // current context (in_section or anywhere). Player initiates via
+      // `use <item_id>`.
+      {
+        const cat = book.items_catalog || {};
+        for (const itemId of state.inventory) {
+          const def = cat[itemId];
+          if (!def || !Array.isArray(def.triggered_effects)) continue;
+          const hasUseHere = def.triggered_effects.some(te => {
+            if (!te || te.trigger !== 'on_user_use') return false;
+            const ctx = te.context || 'anywhere';
+            return ctx === 'anywhere' || ctx === 'in_section';
+          });
+          if (hasUseHere) {
+            actions.push({ name: 'use', arg: itemId, description: `Use ${def.name || itemId}` });
+          }
+        }
       }
       // Equipment actions (schema v1.5+): list equip/unequip options for
       // any equippable item in inventory. Gated by equip_timing via
@@ -1663,6 +2009,23 @@ function getAvailableActions(state, book) {
       } else {
         actions.push({ name: 'attack', description: 'Attack' });
         if (combat.fleeTo) actions.push({ name: 'flee', description: 'Flee' });
+      }
+      // Rule 36 on_user_use (schema v1.20+, in-combat context): list items
+      // whose triggered_effects[] has on_user_use reachable from combat.
+      {
+        const cat = book.items_catalog || {};
+        for (const itemId of state.inventory) {
+          const def = cat[itemId];
+          if (!def || !Array.isArray(def.triggered_effects)) continue;
+          const hasUseHere = def.triggered_effects.some(te => {
+            if (!te || te.trigger !== 'on_user_use') return false;
+            const ctx = te.context || 'anywhere';
+            return ctx === 'anywhere' || ctx === 'in_combat';
+          });
+          if (hasUseHere) {
+            actions.push({ name: 'use', arg: itemId, description: `Use ${def.name || itemId}` });
+          }
+        }
       }
       actions.push({ name: 'provide_roll', description: 'For next attack: provide_roll <values>' });
       // Equip/unequip actions for items with equip_timing: "always". Items
@@ -2019,6 +2382,15 @@ function applyAction(state, book, action, args) {
     }
 
     case 'section':
+      if (action === 'use') {
+        const itemId = args[0];
+        if (!itemId) { state.log.push('use requires an item_id argument'); return state; }
+        if (!state.inventory.includes(itemId)) {
+          state.log.push(`Cannot use ${itemId}: not in inventory`);
+          return state;
+        }
+        return runUserUse(state, book, itemId);
+      }
       if (action === 'equip') {
         const itemId = args[0];
         if (!itemId) {
@@ -2398,10 +2770,24 @@ function handleCombatAction(action, args, state, book) {
       return state;
     }
     if (combat.fleeTo) {
+      // Rule 36 on_combat_end: fire before clearing combat (player-initiated flee).
+      dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
       state.combat = null;
       return navigateTo(state, book, combat.fleeTo);
     }
     return state;
+  }
+
+  // Rule 36 on_user_use (schema v1.20+): player initiates use of an item
+  // whose triggered_effects[] has trigger 'on_user_use'. In-combat context.
+  if (action === 'use') {
+    const itemId = args[0];
+    if (!itemId) { state.log.push('use requires an item_id argument'); return state; }
+    if (!state.inventory.includes(itemId)) {
+      state.log.push(`Cannot use ${itemId}: not in inventory`);
+      return state;
+    }
+    return runUserUse(state, book, itemId);
   }
 
   if (action === 'attack') {
@@ -2665,6 +3051,25 @@ function runCombatRound(forcedRollsArg, state, book) {
     }
   }
 
+  // Rule 36 on_combat_round triggers (schema v1.20+). Dispatch AFTER Rule 32
+  // frozen caps and BEFORE applying damage to health, per the Q4-decided
+  // pipeline ordering: damage_delta / damage_multiplier / damage_set first
+  // (shift/scale/replace pass), then damage_cap (tightest-cap-wins pass).
+  // Non-damage-flow effects (modify_stat / set_flag / etc.) queue and fire
+  // after the numerics settle; consume_on_fire items are removed last.
+  const enemyMaxHealth = (book.enemies_catalog?.[combat.enemyRefs?.[0]]?.[book.rules?.health_stat] || enemy.maxHealth || 0);
+  const r36ctx = {
+    playerTotal,
+    enemyTotal,
+    enemyMaxHealth,
+    log: state.log,
+    consume: [],
+    nonDamageQueue: [],
+  };
+  dispatchCombatRoundTriggers(state, book, r36ctx);
+  playerTotal = Math.max(0, r36ctx.playerTotal);
+  enemyTotal = Math.max(0, r36ctx.enemyTotal);
+
   // Subtract damage from health. Negative damage = healing; clamp to 0
   // on the damage side. Healing is applied directly and can exceed
   // initial_is_max (the modify_stat path handles those clamps elsewhere).
@@ -2674,6 +3079,22 @@ function runCombatRound(forcedRollsArg, state, book) {
   if (playerTotal !== 0) {
     const currentPlayerHp = getPlayerHealth(state, book);
     setPlayerHealth(state, book, Math.max(0, currentPlayerHp - playerTotal));
+  }
+
+  // Apply Rule 36 non-damage-flow effects (modify_stat, set_flag, etc.)
+  // queued by dispatchCombatRoundTriggers.
+  for (const q of r36ctx.nonDamageQueue) {
+    dispatchTriggeredEvent(q.effect, state, book, describeSource(q.source));
+  }
+  // Apply Rule 36 consume_on_fire removals.
+  for (const itemId of r36ctx.consume) {
+    state.inventory = state.inventory.filter(id => id !== itemId);
+    if (state.equipment) {
+      for (const slot of Object.keys(state.equipment)) {
+        if (state.equipment[slot] === itemId) delete state.equipment[slot];
+      }
+    }
+    state.log.push(`R36 consume_on_fire: removed ${itemId}`);
   }
 
   for (const msg of result.logs || []) state.log.push(msg);
@@ -2783,6 +3204,73 @@ function runPostRound(forcedRollsArg, state, book) {
   return checkCombatEnd(state, book);
 }
 
+// Rule 36 on_user_use dispatch (schema v1.20+). The player initiated `use
+// <itemId>` from either a section pause (in_section context) or a combat
+// pause (in_combat context). Dispatches the item's on_user_use
+// triggered_effects[]; honors consume_on_fire; handles flee_combat by
+// clearing combat and navigating.
+function runUserUse(state, book, itemId) {
+  const def = (book.items_catalog || {})[itemId];
+  if (!def || !Array.isArray(def.triggered_effects)) {
+    state.log.push(`No on_user_use triggered_effects on ${itemId}`);
+    return state;
+  }
+  const combat = state.combat;
+  const ctxName = combat ? 'in_combat' : 'in_section';
+  const fireable = def.triggered_effects.filter(te => {
+    if (!te || te.trigger !== 'on_user_use') return false;
+    const ctx = te.context || 'anywhere';
+    if (ctx !== 'anywhere' && ctx !== ctxName) return false;
+    if (te.condition && !evalCondition(te.condition, state, book)) return false;
+    return true;
+  });
+  if (fireable.length === 0) {
+    state.log.push(`No fireable on_user_use entry on ${itemId} in ${ctxName} context`);
+    return state;
+  }
+  let fledTo = null;
+  let consume = false;
+  for (const te of fireable) {
+    const gr = evalGateRoll(te.gate_roll, state);
+    if (!gr.fired) {
+      if (te.gate_roll) state.log.push(`R36 gate_roll skip (item:${itemId}): rolled ${gr.rolled} not in ${te.gate_roll.applies_on}`);
+      continue;
+    }
+    if (te.gate_roll) state.log.push(`R36 gate_roll fire (item:${itemId}): rolled ${gr.rolled} in ${te.gate_roll.applies_on}`);
+    const eff = te.effect;
+    if (!eff) continue;
+    if (eff.type === 'flee_combat') {
+      if (!combat) {
+        state.log.push(`R36 flee_combat (item:${itemId}): no active combat; skipping`);
+      } else {
+        fledTo = eff.target_section;
+        state.log.push(`R36 flee_combat (item:${itemId}): fleeing to §${eff.target_section}`);
+      }
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+      state.log.push(`R36 ${eff.type} (item:${itemId}): damage-flow effects only fire on on_combat_round; skipping`);
+    } else {
+      dispatchTriggeredEvent(eff, state, book, `item:${itemId}`);
+    }
+    if (te.consume_on_fire) consume = true;
+  }
+  if (consume) {
+    state.inventory = state.inventory.filter(id => id !== itemId);
+    if (state.equipment) {
+      for (const slot of Object.keys(state.equipment)) {
+        if (state.equipment[slot] === itemId) delete state.equipment[slot];
+      }
+    }
+    state.log.push(`R36 consume_on_fire: removed ${itemId}`);
+  }
+  if (fledTo !== null && combat) {
+    // Fire on_combat_end (R36) before tearing down combat, then navigate.
+    dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
+    state.combat = null;
+    return navigateTo(state, book, fledTo);
+  }
+  return state;
+}
+
 function checkCombatEnd(state, book) {
   const combat = state.combat;
   const enemy = combat.enemies[combat.currentEnemyIdx];
@@ -2802,6 +3290,8 @@ function checkCombatEnd(state, book) {
   // first.
   if (combat.winAfterRounds !== undefined && combat.winAfterRounds !== null && combat.round >= combat.winAfterRounds) {
     state.log.push(`Survived ${combat.round} rounds — combat ends in victory.`);
+    // Rule 36 on_combat_end (schema v1.20+): fire before clearing combat.
+    dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
     if (winTo) return navigateTo(state, book, winTo);
@@ -2816,6 +3306,8 @@ function checkCombatEnd(state, book) {
       return state;
     }
     // All enemies defeated
+    // Rule 36 on_combat_end (schema v1.20+): fire before clearing combat.
+    dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
     if (winTo) return navigateTo(state, book, winTo);

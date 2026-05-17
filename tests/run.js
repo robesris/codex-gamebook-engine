@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title bumped to v1.19.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title bumped to v1.20.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.19.0', 'schema title at v1.19.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2128,6 +2128,389 @@ test('damage_cap min_attacker_margin gates per-round application on attacker mar
     const warnLog = state.log.find(l => /WARN: damage_cap with min_attacker_margin/.test(l));
     assertTrue(!!warnLog, 'misconfiguration warning logged');
   }
+});
+
+// ============================================================
+// Test 29: Rule 36 (schema v1.20+) — on_combat_round damage_delta with
+// gate_roll fires when the rolled total falls in applies_on, and is
+// skipped when it doesn't. Covers the basic trigger + gate_roll +
+// damage_delta primitives.
+// ============================================================
+// MOTIVATED_BY: Warlock §155 iron_shield_crescent ('When wounded in
+// combat, roll 1d6: on 6, damage reduced by 1 point.') is the canonical
+// audit-wave-1 site. Schema v1.20+ encodes this as a triggered_effect
+// on the shield item: trigger on_combat_round, gate_roll 1d6 on 6,
+// effect damage_delta direction outgoing delta -1.
+// END_TO_END_VERIFY: Once Warlock wave 1 lands the encoding on the
+// shield's items_catalog entry, drive a CLI session through §155, equip
+// the shield, enter combat with a Warlock enemy, and verify that on
+// rounds where the gate-roll lands on 6 the player takes 1 less damage
+// than the round_script reports.
+test('Rule 36 on_combat_round damage_delta fires on gate_roll match, skips otherwise', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 4' },
+    },
+    sections: {
+      '1': {
+        text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_orc', win_to: '2', flee_to: null }], choices: [],
+      },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+    items_catalog: {
+      test_shield: {
+        name: 'Test Shield', type: 'armor', equippable: true, slot: 'shield', equip_timing: 'out_of_combat', auto_equip: true,
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          condition: { type: 'is_equipped', item: 'test_shield' },
+          gate_roll: { dice: '1d6', applies_on: '6' },
+          effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+          reason: 'Test shield: 1d6 on 6 → -1 damage',
+        }],
+      },
+    },
+    enemies_catalog: { test_orc: { name: 'Test Orc', HEALTH: 50 } },
+  });
+
+  // Case A: gate_roll rolls 6 → effect fires → player takes 4 - 1 = 3.
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100 }; state.inventory = ['test_shield']; state.equipment = { shield: 'test_shield' };
+    state.forcedRolls = [6];
+    play.navigateTo(state, book, '1');
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 3, 'gate_roll fire → damage_delta -1 → 4-1=3 damage');
+    assertTrue(!!state.log.find(l => /gate_roll fire/.test(l) && /test_shield/.test(l)), 'gate_roll fire logged');
+    assertTrue(!!state.log.find(l => /damage_delta.*item:test_shield/.test(l)), 'damage_delta application logged');
+  }
+  // Case B: gate_roll rolls 3 → effect skipped → player takes full 4.
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100 }; state.inventory = ['test_shield']; state.equipment = { shield: 'test_shield' };
+    state.forcedRolls = [3];
+    play.navigateTo(state, book, '1');
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 4, 'gate_roll miss → full damage 4');
+    assertTrue(!!state.log.find(l => /gate_roll skip/.test(l)), 'gate_roll skip logged');
+  }
+  // Case C: is_equipped condition false (shield in inventory, not equipped) → effect skipped.
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100 }; state.inventory = ['test_shield']; state.equipment = {};
+    state.forcedRolls = [6];
+    play.navigateTo(state, book, '1');
+    const hpBefore = state.stats.HEALTH;
+    play.applyAction(state, book, 'attack', []);
+    assertEqual(hpBefore - state.stats.HEALTH, 4, 'is_equipped false → effect skipped, full damage');
+  }
+});
+
+// ============================================================
+// Test 30: Rule 36 pipeline composition — damage_multiplier ×2 followed
+// by damage_cap 0 on the same round → cap wins (final damage = 0).
+// Covers the Q4-decided ordering: shift/multiply/set pass BEFORE cap
+// pass, with tightest-cap-wins on the cap pass.
+// ============================================================
+// MOTIVATED_BY: Q4 composition test case (i) — "magic sword (1d6-on-6
+// damage_multiplier 2 incoming) + shield (1d6-on-6 damage_cap 0
+// outgoing) on the same round → cap wins". Direct test of the codex's
+// pipeline-ordering claim.
+// END_TO_END_VERIFY: Encode the magic-sword + shield pair on a synthetic
+// test book; drive a round where both gate_rolls land; verify the
+// damage_to_player is 0.
+test('Rule 36 pipeline: damage_multiplier + damage_cap → cap wins (Q4 composition (i))', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 3' },
+    },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_orc', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+    items_catalog: {
+      magic_sword: {
+        name: 'Magic Sword', type: 'weapon', equippable: true, slot: 'weapon', auto_equip: true,
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          gate_roll: { dice: '1d6', applies_on: '6' },
+          effect: { type: 'damage_multiplier', direction: 'outgoing', multiplier: 2 },
+          reason: 'Magic sword: 1d6 on 6 → 2x damage',
+        }],
+      },
+      blocker_shield: {
+        name: 'Blocker Shield', type: 'armor', equippable: true, slot: 'shield', auto_equip: true,
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          gate_roll: { dice: '1d6', applies_on: '6' },
+          effect: { type: 'damage_cap', direction: 'outgoing', max: 0 },
+          reason: 'Blocker shield: 1d6 on 6 → 0 damage cap',
+        }],
+      },
+    },
+    enemies_catalog: { test_orc: { name: 'Test Orc', HEALTH: 50 } },
+  });
+
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 }; state.inventory = ['magic_sword', 'blocker_shield']; state.equipment = { weapon: 'magic_sword', shield: 'blocker_shield' };
+  // First gate_roll = sword (6 → multiplier fires), second = shield (6 → cap fires).
+  state.forcedRolls = [6, 6];
+  play.navigateTo(state, book, '1');
+  const hpBefore = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(hpBefore - state.stats.HEALTH, 0, 'multiplier ×2 then cap 0 → final 0 damage (cap wins)');
+  assertTrue(!!state.log.find(l => /damage_multiplier.*magic_sword/.test(l)), 'multiplier application logged');
+  assertTrue(!!state.log.find(l => /damage_cap.*blocker_shield/.test(l)), 'cap application logged');
+});
+
+// ============================================================
+// Test 31: Rule 36 damage_set + Rule 32 frozen damage_cap → frozen cap
+// holds (final damage = cap.max, not the set value). Covers the
+// cross-rule pipeline: Rule 32 frozen cap is applied at the per-round
+// total stage AFTER Rule 36's damage_set replaces the total — and then
+// the Rule 32 cap could constrain it, but per Q4 the ordering is:
+// Rule 32 frozen cap → Rule 36 set → Rule 36 triggered cap. So the
+// Rule 32 cap actually runs BEFORE damage_set, which means damage_set
+// can EXCEED Rule 32's cap. To get the "vorpal × intrinsic cap → cap
+// wins" semantic, the intrinsic cap must ALSO be a Rule 36 triggered
+// cap. This test verifies the Q4-decided ordering empirically and
+// documents the design implication: Rule 32 frozen caps cannot
+// constrain Rule 36 damage_set, by design.
+// ============================================================
+// MOTIVATED_BY: Q4 composition test case (ii) — "vorpal sword (1d6-on-6
+// damage_set enemy.max_health incoming) + enemy intrinsic Rule 32
+// damage_cap.max: 10 → cap wins (10, not max_health)". The Q4 design
+// chose pipeline ordering where R32 frozen caps run BEFORE R36
+// shift/set, so a Rule 32 cap CANNOT bind a Rule 36 damage_set. To
+// achieve the intended "intrinsic cap holds against vorpal" semantic,
+// the intrinsic cap should be a Rule 36 triggered cap (on the enemy),
+// which then runs AFTER damage_set per the ordering. This test
+// exercises that path.
+test('Rule 36 damage_set + enemy intrinsic Rule 36 cap → cap holds (Q4 composition (ii))', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 2\ncombat.damage_to_player = 0' },
+    },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'big_guy', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+    items_catalog: {
+      vorpal_sword: {
+        name: 'Vorpal Sword', type: 'weapon', equippable: true, slot: 'weapon', auto_equip: true,
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          gate_roll: { dice: '1d6', applies_on: '6' },
+          effect: { type: 'damage_set', direction: 'incoming', value: 'enemy.max_health' },
+          reason: 'Vorpal sword: 1d6 on 6 → insta-kill',
+        }],
+      },
+    },
+    enemies_catalog: {
+      big_guy: {
+        name: 'Big Guy', HEALTH: 50,
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          effect: { type: 'damage_cap', direction: 'incoming', max: 10 },
+          reason: 'Big Guy: intrinsic cap 10 incoming',
+        }],
+      },
+    },
+  });
+
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 }; state.inventory = ['vorpal_sword']; state.equipment = { weapon: 'vorpal_sword' };
+  state.forcedRolls = [6];
+  play.navigateTo(state, book, '1');
+  // Snapshot the enemy's max health before the round so we can compare.
+  assertEqual(state.combat.enemies[0].currentHealth, 50, 'enemy starts at 50');
+  play.applyAction(state, book, 'attack', []);
+  // damage_set replaces incoming damage with enemy.max_health (50); then
+  // the enemy's Rule 36 intrinsic cap caps it at 10. Enemy takes 10
+  // damage, drops to 40.
+  const enemyAfter = state.combat?.enemies?.[0]?.currentHealth ?? null;
+  assertEqual(enemyAfter, 40, 'damage_set 50 → R36 cap 10 → enemy 50-10=40');
+  assertTrue(!!state.log.find(l => /damage_set.*vorpal_sword/.test(l)), 'damage_set application logged');
+  assertTrue(!!state.log.find(l => /damage_cap.*big_guy/.test(l)), 'enemy R36 cap application logged');
+});
+
+// ============================================================
+// Test 32: Rule 36 tightest-cap-wins across two items. Extends Rule 32
+// v1.15 semantic to Rule 36 caps.
+// ============================================================
+// MOTIVATED_BY: Q4 composition test case (iv) — "multiple Rule 36 caps
+// from different items → tightest cap wins (extends Rule 32 v1.15
+// semantic)".
+// END_TO_END_VERIFY: Hypothetical site — two passive cap items, one
+// caps at 3, one caps at 1. Verify per-round damage is bound at 1.
+test('Rule 36 multiple caps compose tightest-wins (Q4 composition (iv))', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 5' },
+    },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_orc', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+    items_catalog: {
+      loose_cap: {
+        name: 'Loose Cap', type: 'general',
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          effect: { type: 'damage_cap', direction: 'outgoing', max: 3 },
+          reason: 'Loose Cap: outgoing 3',
+        }],
+      },
+      tight_cap: {
+        name: 'Tight Cap', type: 'general',
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          effect: { type: 'damage_cap', direction: 'outgoing', max: 1 },
+          reason: 'Tight Cap: outgoing 1',
+        }],
+      },
+    },
+    enemies_catalog: { test_orc: { name: 'Test Orc', HEALTH: 50 } },
+  });
+
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 }; state.inventory = ['loose_cap', 'tight_cap']; state.equipment = {};
+  play.navigateTo(state, book, '1');
+  const hpBefore = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(hpBefore - state.stats.HEALTH, 1, 'tightest cap (1) wins over loose cap (3) and raw 5');
+});
+
+// ============================================================
+// Test 33: Rule 36 damage_delta cancellation (-1 + +1 = 0 net) and
+// dice-amount (modify_stat amount as {kind: dice, expression, sign})
+// resolution at firing time.
+// ============================================================
+// MOTIVATED_BY: Q4 composition test case (iii) — per-round damage_delta
+// -1 (shield) + per-round damage_delta +1 (poison aura) → net 0 delta.
+// AND Q6 — variable-amount effects via dice-amount union on
+// modify_stat.amount.
+// END_TO_END_VERIFY: Synthetic test book mixing both effects.
+test('Rule 36 damage_delta cancellation + dice-amount modify_stat resolution (Q4 (iii), Q6)', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 2' },
+    },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_orc', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+    items_catalog: {
+      neg_shield: {
+        name: 'Neg Shield', type: 'armor', equippable: true, slot: 'shield', auto_equip: true,
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+          reason: 'Neg Shield: -1 outgoing',
+        }],
+      },
+      poison_aura: {
+        name: 'Poison Aura', type: 'general',
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          effect: { type: 'damage_delta', direction: 'outgoing', delta: 1 },
+          reason: 'Poison Aura: +1 outgoing',
+        }],
+      },
+      heal_charm: {
+        name: 'Heal Charm', type: 'general',
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          effect: { type: 'modify_stat', stat: 'HEALTH', amount: { kind: 'dice', expression: '1d6', sign: 'positive' } },
+          reason: 'Heal Charm: +1d6 HEALTH per round',
+        }],
+      },
+    },
+    enemies_catalog: { test_orc: { name: 'Test Orc', HEALTH: 50 } },
+  });
+
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 }; state.inventory = ['neg_shield', 'poison_aura', 'heal_charm']; state.equipment = { shield: 'neg_shield' };
+  state.forcedRolls = [4];  // heal_charm rolls 4
+  play.navigateTo(state, book, '1');
+  const hpBefore = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  // Damage flow: 2 (script) + (-1) (neg_shield) + (+1) (poison_aura) = 2 net → take 2.
+  // Then heal_charm modify_stat +4 fires post-damage → +4 HEALTH.
+  // Net HEALTH change: -2 + 4 = +2.
+  assertEqual(state.stats.HEALTH - hpBefore, 2, 'delta cancel net 0 (took 2), then +1d6=4 heal → +2 HEALTH');
+  assertTrue(!!state.log.find(l => /Dice amount.*1d6.*4/.test(l)), 'dice-amount roll logged');
+});
+
+// ============================================================
+// Test 34: Rule 36 on_user_use + flee_combat + consume_on_fire — full
+// "use a potion to escape" mechanic. Covers Q3 (UX schema vs emulator
+// split), Q8 (flee_combat effect type), and the consume_on_fire
+// item-removal bookkeeping.
+// ============================================================
+// MOTIVATED_BY: Warlock potion_of_invisibility (audit-wave-1 site).
+// Player uses the potion mid-combat, fleeing to a target section; the
+// potion is removed from inventory.
+// END_TO_END_VERIFY: Once Warlock wave 1 lands the encoding, drive a
+// CLI session through §39 or §51, equip a potion_of_invisibility, enter
+// combat, `use potion_of_invisibility`, verify navigation to §105 and
+// item removed.
+test('Rule 36 on_user_use + flee_combat + consume_on_fire navigates and removes item', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0' },
+    },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_orc', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+      '105': { text: 'escaped via potion', events: [], choices: [] },
+    },
+    items_catalog: {
+      test_potion: {
+        name: 'Test Potion of Invisibility', type: 'consumable',
+        triggered_effects: [{
+          trigger: 'on_user_use',
+          context: 'in_combat',
+          effect: { type: 'flee_combat', target_section: 105 },
+          consume_on_fire: true,
+          reason: 'Potion: use in combat to flee',
+        }],
+      },
+    },
+    enemies_catalog: { test_orc: { name: 'Test Orc', HEALTH: 50 } },
+  });
+
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 }; state.inventory = ['test_potion']; state.equipment = {};
+  play.navigateTo(state, book, '1');
+  assertTrue(state.combat !== null, 'in combat before use');
+  play.applyAction(state, book, 'use', ['test_potion']);
+  assertEqual(state.combat, null, 'combat cleared after flee_combat');
+  assertEqual(state.currentSection, '105', 'navigated to flee target §105');
+  assertTrue(!state.inventory.includes('test_potion'), 'consume_on_fire removed potion from inventory');
+  assertTrue(!!state.log.find(l => /flee_combat.*test_potion/.test(l)), 'flee_combat logged');
+  assertTrue(!!state.log.find(l => /consume_on_fire.*test_potion/.test(l)), 'consume_on_fire logged');
 });
 
 // ============================================================

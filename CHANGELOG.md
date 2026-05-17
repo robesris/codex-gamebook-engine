@@ -6,6 +6,48 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.27.0 / GBF v1.20.0 / emulators v3.15.0 / package.json v3.15.0
+
+**Schema-additive ship.** Rule 36 (item / ability / talent / enemy effects with triggers) graduates from candidate (Chat #32 v2.26.0) to shipped. Closes the 11 open design questions captured at the candidate stage; lands the `triggered_effects[]` schema, both reference emulator handlers, six new composition tests, decision-table rows, the Section 10 pre-output checklist entry, and Warlock audit wave 1 in a single ship vehicle.
+
+**Schema additions:**
+- New `triggered_effects[]` array placements on `items_catalog[]`, `enemies_catalog[]`, `rules.abilities.available[]`, `rules.talents.available[]`.
+- New `triggered_effect` definition: required `trigger` (closed enum of 8+1 — `while_equipped`, `on_section_enter`, `on_combat_start`, `on_combat_round`, `on_combat_end`, `on_eat_meal`, `on_rest`, `on_user_use`) + required `effect`; optional `context` (filter for `on_user_use`), `condition` (state predicate gate), `gate_roll` (dice gate `{dice, applies_on}`), `consume_on_fire` (items only), `reason`.
+- New `triggered_effect_action` discriminated union: damage-flow operations (`damage_cap`, `damage_multiplier`, `damage_delta`, `damage_set` with literal-or-symbolic value), `flee_combat` (with `target_section`), and reuse of the standard non-pausing event types (`modify_stat`, `set_flag`, `clear_flag`, `add_item`, `remove_item`, `script`).
+- New `condition.type: is_equipped` for gating triggered effects on equipment-slot occupancy.
+- `event.amount` extended to a `oneOf [number, dice_amount]` union: existing integer form continues to validate unchanged; new `dice_amount` shape `{ kind: "dice", expression: "2d6", sign: "positive" | "negative" }` resolves at firing time. The union supports source-text rules with dice-driven heal / damage amounts (canonical: GrailQuest's 2d6 healing potion).
+
+**Pipeline ordering (per Q4 closure):** Rule 17 → Rule 18 → Rule 32 frozen caps → Rule 36 shift/multiply/set → Rule 36 caps → apply. Within Rule 36's pass: damage_delta / damage_multiplier / damage_set first; damage_cap last (tightest-cap-wins extends Rule 32 v1.15 semantic). Note: Rule 32 frozen caps run BEFORE Rule 36 damage_set, so a frozen cap cannot bind a triggered damage_set — sites needing "vorpal × intrinsic cap → cap wins" semantic must encode the intrinsic cap as a Rule 36 triggered cap on the enemy (Test 31 documents this empirically).
+
+**Both reference emulators:** trigger dispatch at six lifecycle points (`on_section_enter`, `on_combat_start`, `on_combat_round`, `on_combat_end`, `on_eat_meal`, `on_user_use`), with `while_equipped` treated as sugar for `on_combat_round + implicit is_equipped`. `gate_roll` dice handling via state.forcedRolls queue (mirrors existing roll_dice UX). Effect-type dispatch for the four damage-flow operations plus `flee_combat` plus reused event types. `on_user_use` UI: CLI emulator gains a `use <itemId>` action; HTML emulator renders a "Use" button on inventory entries whose triggered_effects[] reach the current context (in_combat vs in_section vs anywhere). `consume_on_fire: true` removes one copy of the item on firing (auto-unequips if currently equipped).
+
+**Closed design decisions (sticky — re-litigation requires explicit user direction):**
+- Q1 Field name: `triggered_effects[]` (separate from Rule 34 `effects[]`)
+- Q2 Trigger taxonomy: 8+1 closed enum
+- Q3 on_user_use UX: schema = WHEN, emulator owns HOW
+- Q4 Pipeline ordering: R17 → R18 → R32 frozen → R36 shift/multiply/set → R36 caps → apply
+- Q5 Charges: deferred to v2.28.0+
+- Q6 Variable amounts: `modify_stat.amount` integer-or-dice-expression union
+- Q7 Branching: N entries with partition-validated `gate_roll` (validator does not yet enforce partition; sub-agent audits hand-verify)
+- Q8 Flee-combat: dedicated `effect.type: flee_combat` with `target_section`
+- Q9 is_equipped: new `condition.type: is_equipped`
+- Q10 Long-term coexistence: strictly additive on first ship
+- Q11 Audit waves: per-book sub-agent dispatches, ≤10 sites each, audit-mode framing; Warlock wave 1 lands in this ship
+
+**Tests:** test count 28 → 34. Six new composition tests covering: gate_roll match/miss + is_equipped gate (Test 29), multiplier+cap composition (Test 30), damage_set + Rule 36 intrinsic cap (Test 31), tightest-cap-wins across multiple items (Test 32), damage_delta cancellation + dice-amount modify_stat (Test 33), on_user_use + flee_combat + consume_on_fire (Test 34).
+
+**Decision-table rows added:** Three rows covering per-combat-round triggered effects (item/enemy damage gates), passive per-section effects (Ring of Regeneration / Foraging style), and user-initiated consumables (potion-of-invisibility style).
+
+**Section 10 pre-output checklist:** new Rule 36 entry covering placement choice, pipeline ordering, condition / gate_roll gates, consume_on_fire semantics, coexistence with Rule 19 / 25 / 34, and the dice-amount union for variable-amount effects. STATUS: CANDIDATE banner removed at this transition; the Rule 16 maintainer-discipline mandate (decision table + Section 10 entry on rule ship) is now satisfied.
+
+**Warlock audit wave 1 (3 sites):** `iron_shield_crescent` (§155 — `on_combat_round` + `is_equipped` condition + 1d6-on-6 + `damage_delta -1 outgoing`), `dog_249` enemy (§249 — `on_combat_round` + 1d6-on-1-2 + `damage_delta +1 outgoing`), `potion_of_invisibility` (`on_user_use` + `in_combat` context + `flee_combat target_section: 105` + `consume_on_fire: true`). `iron_helmet_magic` stays on Rule 19 `stat_modifier.when: equipped` per the strictly-additive coexistence policy. Warlock book continues to validate at 0 schema errors.
+
+**Audit waves 2-6 (Chat #34+):** GrailQuest, Windhammer talents, LW1, GyoG06, WWY. Schema and emulator surface frozen for those waves.
+
+**Files touched:** `codex.schema.json` (title bump v1.19.0 → v1.20.0; new `is_equipped` condition type; `event.amount` union extension; new `dice_amount` / `triggered_effect` / `triggered_effect_action` definitions; new `triggered_effects` array placements on item / enemy / abilities.available / talents.available), `cli-emulator/play.js` (version bump 3.14.0 → 3.15.0; new TRIGGERED EFFECTS section with helpers; hooks at navigateTo / startCombat / runCombatRound / checkCombatEnd / handleCombatAction / applyAction; new `runUserUse` function; `is_equipped` condition evaluator), `index.html` (version bump 3.14.0 → 3.15.0; mirror of play.js helpers; hooks at navigateTo / startCombat / per-round damage application / checkCombatEnd / inventory Use button; `r36_useItem` function), `tests/run.js` (six new composition tests; test count 28 → 34), `gamebook_codex_v2.md` (title bump v2.26.1 → v2.27.0; Rule 36 candidate → shipped transition with STATUS banner removal and closed-design-decisions section; three new Decision Table rows; new Section 10 Rule 36 pre-output checklist entry; Version Identifiers footer bump), `package.json` (version bump 3.14.0 → 3.15.0), books/ff01_warlock_of_firetop_mountain_COMPLETE.json (Warlock iter 12 sub-agent — see follow-on commit for the canonical encoding migration of the 3 audit-wave-1 sites).
+
+---
+
 ## v2.26.1
 
 Codex-doc-only cosmetic cleanup. Scrubs the stale `**Codex version:** 2.10.0` line at the top of the "CODEX VERSION AND COMPATIBILITY" section (line 8 since the section was originally drafted). The authoritative version is the document title at line 1 and the "Version identifiers" section near the end; the line-8 string was a third pinned restatement that drifted out of sync with each release and was carried as a known-dirty-spot from Chat #28 through Chat #31 ("the user has accepted and will NOT scrub" until Chat #32's B12 pick). Removing it eliminates the drift surface permanently. No content change; the section still documents version-compatibility expectations via the canonical-artifacts table immediately below. Title bumped v2.26.0 → v2.26.1; Version identifiers footer bumped v2.26.0 → v2.26.1. No schema, emulator, or test changes. 28/28 tests pass unchanged.

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.19.0",
+  "title": "Gamebook Format (GBF) v1.20.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -309,6 +309,11 @@
                     "type": "string",
                     "description": "Optional. Schema v1.18+. Free-form notes documenting source-text mechanics that the structured `effects` field does NOT auto-apply. Canonical use: per-combat conditional bonuses (Heroic Confidence's +1 CV that lapses on first wound), re-roll-style mechanics (Leap of Fate's three jumping re-rolls), in-section narrative gates (Strong Back's auto-pass on climb-out STR tests), and any other rule whose semantics don't fit the event primitives. The emulator does not read this field — it exists so future re-parsers, sub-agents, and human reviewers can see why a specific source-text bonus was deliberately not encoded. Distinct from the `description` field (full book text) and the `mechanical_effect` field (terse mechanical summary)."
                   },
+                  "triggered_effects": {
+                    "type": "array",
+                    "description": "Optional. Schema v1.20+ (Rule 36). Ordered list of run-time triggered effects that fire on lifecycle events while the player has this ability. Distinguished from `effects[]` (Rule 34, chargen-time auto-apply, fires once at choose_abilities confirm) — `triggered_effects[]` fires repeatedly during play at lifecycle moments (per combat round, per section entered, on rest, etc.). Canonical hypothetical: a Foraging ability with `{trigger: on_section_enter, gate_roll: {dice: 1d10, applies_on: 10}, effect: {type: modify_stat, stat: provisions, amount: 1}}`. See codex doc Rule 36.",
+                    "items": { "$ref": "#/definitions/triggered_effect" }
+                  },
                   "requires_roll": {
                     "type": "object",
                     "description": "If this ability requires a random roll when selected. For example, a weapon-specialization discipline might require a die roll to determine which weapon the character is specialized in, or a spell-selection ability might require a roll on a spell table.",
@@ -355,6 +360,11 @@
                   "parser_notes": {
                     "type": "string",
                     "description": "Same semantics as `rules.abilities.available[].parser_notes`. Free-form notes documenting source-text mechanics that don't fit the event primitives (per-combat conditional bonuses, re-roll mechanics, in-section narrative gates)."
+                  },
+                  "triggered_effects": {
+                    "type": "array",
+                    "description": "Optional. Schema v1.20+ (Rule 36). Same semantics as `rules.abilities.available[].triggered_effects`. Run-time triggered effects fired on lifecycle events while the player has this talent. See codex doc Rule 36.",
+                    "items": { "$ref": "#/definitions/triggered_effect" }
                   }
                 },
                 "required": ["name"]
@@ -678,9 +688,9 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "has_talent", "not", "and", "or", "test_failed", "has_equipped_item", "has_equipped_in_slot", "has_equipped_with_property"]
+          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "has_talent", "not", "and", "or", "test_failed", "has_equipped_item", "has_equipped_in_slot", "has_equipped_with_property", "is_equipped"]
         },
-        "item": { "type": "string", "description": "For has_item: item_id to check in inventory. For has_equipped_item: item_id to check in any equipped slot. For has_equipped_in_slot: optional item_id to require in the named slot (if omitted, the condition evaluates true as long as the slot is non-empty)." },
+        "item": { "type": "string", "description": "For has_item: item_id to check in inventory. For has_equipped_item: item_id to check in any equipped slot. For has_equipped_in_slot: optional item_id to require in the named slot (if omitted, the condition evaluates true as long as the slot is non-empty). For is_equipped (schema v1.20+): item_id whose currently-equipped state is checked — distinguished from has_equipped_item only in intent (is_equipped is the canonical condition for gating Rule 36 triggered_effects on equipment-slot occupancy, while has_equipped_item is the gate for damage_interactions and Rule 17 modifiers); both check the same state." },
         "flag": { "type": "string", "description": "For has_flag: flag name to check." },
         "stat": { "type": "string", "description": "For stat_gte/stat_lte: stat name." },
         "value": { "type": "number", "description": "For stat_gte/stat_lte: threshold value." },
@@ -736,7 +746,13 @@
         },
 
         "stat": { "type": "string", "description": "modify_stat, stat_test: which stat." },
-        "amount": { "type": "number", "description": "modify_stat: change amount (positive or negative)." },
+        "amount": {
+          "oneOf": [
+            { "type": "number" },
+            { "$ref": "#/definitions/dice_amount" }
+          ],
+          "description": "modify_stat: change amount (positive or negative). Schema v1.20+ also accepts a dice-amount object `{ \"kind\": \"dice\", \"expression\": \"2d6\", \"sign\": \"positive\" | \"negative\" }` whose rolled total at firing time becomes the integer delta. The dice-amount form is intended for Rule 36 triggered_effects where the source text specifies a dice-driven heal or damage (canonical: GrailQuest healing potion bottle's 2d6 heal). Pre-v1.20 books and existing section-event uses keep the integer form; the union is strictly additive."
+        },
         "reason": { "type": "string", "description": "modify_stat, remove_item: human-readable explanation." },
         "optional": { "type": "boolean", "description": "modify_stat, add_item: player can choose whether to take/apply this." },
         "modify_initial": { "type": "boolean", "description": "modify_stat: when true, also apply `amount` to `initialStats[stat]` so the adjustment is permanent (reduces or raises the stat's ceiling). Use for book mechanics that say 'your INITIAL stat is reduced by N' or 'increase your INITIAL stat by N'. When false (or absent) the modify_stat only adjusts the current value, which healing can restore up to the unchanged initial. For absolute ceiling caps ('your STRENGTH cannot exceed 11') use `set_initial_to` instead — it assigns rather than deltas." },
@@ -955,7 +971,12 @@
             }
           }
         },
-        "description": { "type": "string" }
+        "description": { "type": "string" },
+        "triggered_effects": {
+          "type": "array",
+          "description": "Schema v1.20+ (Rule 36). Ordered list of run-time triggered effects that fire on lifecycle events while the player is carrying or has-equipped this item. Each entry is a `triggered_effect` declaring a `trigger`, optional `condition` / `gate_roll`, and a required `effect`. Distinguished from `stat_modifier` (Rule 19, passive while-carried/while-equipped stat deltas), `consume` (Rule 25, named-consumable eat_meal substitution), and section-level events (per-section narrative mechanics) — `triggered_effects[]` is for source-text mechanics that fire repeatedly during play at well-defined lifecycle moments (per combat round, per section entered, on user-initiated use, etc.). Strictly additive on first ship: existing Rule 19 / Rule 25 fields remain canonical for their cases; only NEW source-text patterns whose mechanics don't fit those narrower fields go in `triggered_effects[]`. See codex doc Rule 36.",
+          "items": { "$ref": "#/definitions/triggered_effect" }
+        }
       }
     },
 
@@ -984,6 +1005,11 @@
           "type": "array",
           "description": "Schema v1.15+. Per-enemy damage_caps that travel with this enemy type across every section it appears in. Same shape as the per-encounter `damage_caps` field on combat events: each entry is a `{max, direction, condition, reason}` object bounding the post-interaction per-round damage total in the given direction. Use intrinsic_damage_caps for traits that are properties of the enemy type rather than of one specific encounter — e.g., a guardian whose attacks are always non-lethal (capped at N damage per round wherever the player meets it). The emulator merges intrinsic_damage_caps from every enemy in the combat with any per-section damage_caps on the combat event itself, evaluates each entry's condition once at combat start, and freezes the passing entries on `state.combat.appliedDamageCaps`. See codex doc Rule 32 for the full specification.",
           "items": { "$ref": "#/definitions/damage_cap" }
+        },
+        "triggered_effects": {
+          "type": "array",
+          "description": "Schema v1.20+ (Rule 36). Ordered list of run-time triggered effects that fire on combat-lifecycle events for this enemy. Combat triggers (`on_combat_start`, `on_combat_round`, `on_combat_end`) are the typical placements; other triggers are not meaningful on enemies. Canonical example: Warlock §249 Fire-breathing Dog whose breath does +1 damage on a 1d6 roll of 1-2 each round (`{trigger: on_combat_round, gate_roll: {dice: 1d6, applies_on: 1-2}, effect: {type: damage_delta, direction: outgoing, delta: 1}}`). The emulator merges this with any per-section triggered_effects on the combat event and evaluates triggers at the matching lifecycle point during combat. See codex doc Rule 36.",
+          "items": { "$ref": "#/definitions/triggered_effect" }
         }
       },
       "additionalProperties": {
@@ -1104,6 +1130,125 @@
           "description": "Schema v1.19+. Optional per-round gate that converts the cap into a gate-and-cap hybrid keyed on the round's attacker margin. When present, the cap's effective max for the round is computed as: if combat.attacker_margin >= min_attacker_margin, the cap applies normally with `max`; if combat.attacker_margin < min_attacker_margin, the cap blocks all damage in the cap's direction for that round (effective max of 0). Folds the gate-and-cap halves of source-text rules like 'the Dragon will only be able to harm you if it wins a combat round by more than N points... you can only lose a maximum of M points per round lost' into a single damage_cap entry (set min_attacker_margin to N+1, max to M). Round-script contract: the round_script must set combat.attacker_margin = <enemy_score - player_score> (or analogous source-text-defined margin) for the gate to evaluate. If combat.attacker_margin is unset or non-numeric when a min_attacker_margin cap is evaluated, the emulator logs a warning and skips the cap for that round. Canonical example: Windhammer §242 Shieldstone — `{max: 2, min_attacker_margin: 5, condition: <shieldstone_active>, direction: 'outgoing'}` encodes 'Dragon harms only on margin >= 5, capped at 2 EP per round.' Distinguished from `condition` (frozen at combat start, gates the entire fight) — min_attacker_margin is evaluated per round against the current round's attacker margin."
         }
       }
+    },
+
+    "dice_amount": {
+      "type": "object",
+      "required": ["kind", "expression"],
+      "description": "Schema v1.20+ (Rule 36). Dice-driven integer value rolled at firing time. Used as an alternative shape for `modify_stat.amount` in triggered_effects whose source text specifies a dice-driven heal or damage (canonical: GrailQuest healing potion bottle's 2d6 heal per dose). The emulator rolls `expression`, applies `sign`, and uses the rolled total as the integer delta. Strictly additive: the standard integer form of `modify_stat.amount` continues to validate unchanged.",
+      "properties": {
+        "kind": { "type": "string", "enum": ["dice"], "description": "Discriminator. Must be \"dice\"." },
+        "expression": { "type": "string", "description": "Dice expression in the same syntax as `roll_dice.dice` (e.g. '1d6', '2d6', '1d10+2'). The emulator rolls this at firing time and the rolled total becomes the delta." },
+        "sign": {
+          "type": "string",
+          "enum": ["positive", "negative"],
+          "description": "Whether the rolled total is added to or subtracted from the stat. Defaults to 'positive' when absent. For a 'lose 1d6 ENDURANCE' triggered effect, use `sign: negative`."
+        }
+      }
+    },
+
+    "triggered_effect": {
+      "type": "object",
+      "required": ["trigger", "effect"],
+      "description": "Schema v1.20+ (Rule 36). A single run-time triggered effect that fires on a lifecycle event while the player is carrying / has-equipped an item, or has an ability / talent, or is fighting an enemy. Triggered effects live in four places: `items_catalog[].triggered_effects[]`, `enemies_catalog[].triggered_effects[]`, `rules.abilities.available[].triggered_effects[]`, and `rules.talents.available[].triggered_effects[]`. The emulator evaluates each entry's optional `condition` and optional `gate_roll` at the matching lifecycle point during play; passing entries dispatch their `effect`. Distinguished from: Rule 19 `stat_modifier.when` (passive while-carried/while-equipped stat deltas, frozen at combat start), Rule 25 `consume` (named-consumable eat_meal substitution, fires only at eat_meal pause), Rule 34 `effects[]` on abilities/talents (chargen-time auto-apply, fires once at choose_abilities/choose_talents confirm). The triggered_effects family handles run-time mechanics that fire repeatedly at well-defined lifecycle moments. See codex doc Rule 36 for the full specification, worked examples, and coexistence policy.",
+      "properties": {
+        "trigger": {
+          "type": "string",
+          "enum": ["while_equipped", "on_section_enter", "on_combat_start", "on_combat_round", "on_combat_end", "on_eat_meal", "on_rest", "on_user_use"],
+          "description": "Lifecycle moment when the trigger fires. `while_equipped` fires once per combat round while the carrying item occupies its slot (implicit equipment check; only meaningful on `items_catalog[]`). `on_section_enter` fires once when the player enters any section. `on_combat_start` fires once at combat start (after frozen modifiers / damage_interactions / damage_caps resolve). `on_combat_round` fires once per round during combat (after round_script and damage_interactions, before final-state apply). `on_combat_end` fires once at combat end regardless of outcome. `on_eat_meal` fires when an eat_meal pause is satisfied (orthogonal to Rule 25 `consume` — that one fires only when the player CHOOSES a named consumable). `on_rest` fires on a rest event (currently no rest event type ships; the trigger is reserved for source-text rest mechanics). `on_user_use` fires when the player explicitly clicks 'use' on the inventory entry (items only)."
+        },
+        "context": {
+          "type": "string",
+          "enum": ["in_combat", "in_section", "anywhere"],
+          "description": "Meaningful only on `trigger: on_user_use`. Filters when the player may initiate use. `in_combat` = available only during a combat pause; `in_section` = available only between combats (not while a combat is active); `anywhere` (default when absent) = available at any time. Emulator UX freedom: the schema specifies the WHEN; the emulator decides the HOW (button placement, multi-use-per-pause, free-action vs round-cost). For other triggers this field is ignored."
+        },
+        "condition": {
+          "oneOf": [
+            { "$ref": "#/definitions/condition" },
+            { "type": "null" }
+          ],
+          "description": "Optional gate evaluated at trigger-firing time. Same condition union as event conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_talent`, `is_equipped`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`). Distinguished from `gate_roll` — the condition is a deterministic state check; the gate_roll is a dice-driven probabilistic gate. Both may be present on the same entry; both must pass for the effect to fire. Unlike damage_cap / combat_modifier conditions (frozen at combat start), triggered_effect conditions evaluate at each firing — mid-combat state changes do re-evaluate."
+        },
+        "gate_roll": {
+          "type": "object",
+          "description": "Optional probabilistic gate. The emulator rolls `dice` at firing time and the effect fires only if the rolled total matches `applies_on`. Use for source-text mechanics that say 'roll 1d6: on a 6, the shield reduces damage by 1'. Distinguished from `condition` — gate_roll is the per-firing dice gate; condition is the deterministic state check. Both may be present; both must pass.",
+          "required": ["dice", "applies_on"],
+          "properties": {
+            "dice": { "type": "string", "description": "Dice expression in the same syntax as `roll_dice.dice` (e.g. '1d6', '2d6', '1d10')." },
+            "applies_on": {
+              "type": "string",
+              "description": "Inclusive numeric range or single face value as a string. Examples: '6' (single face), '1-2' (inclusive range), '1-5' (inclusive range), '10' (single face on 1d10). Same syntax as `roll_dice.results` keys. The effect fires when the rolled total falls within this expression."
+            }
+          }
+        },
+        "effect": {
+          "$ref": "#/definitions/triggered_effect_action",
+          "description": "Required. The action that fires when trigger + optional condition + optional gate_roll all pass. See `triggered_effect_action` for the full discriminated union (damage-flow operations + flee_combat + reused non-pausing event types)."
+        },
+        "consume_on_fire": {
+          "type": "boolean",
+          "description": "Meaningful only on `items_catalog[].triggered_effects[]`. When true, one copy of the carrying item is `remove_item`'d after the effect fires. Use for single-use scrolls and potions whose mechanic is fully captured by one trigger (e.g. `potion_of_invisibility` with `trigger: on_user_use` + `effect: flee_combat` + `consume_on_fire: true`). Default false. Multi-charge items (charges > 1) need a separate charges mechanism — deferred to a future schema bump."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional human-readable explanation of what the triggered effect does and when. Shown by emulators in the inventory / ability detail panel and written to the playthrough log when the effect fires. Examples: 'Iron Shield with Golden Crescent: roll 1d6, on 6 reduce damage by 1', 'Potion of Invisibility: use to flee combat'."
+        }
+      }
+    },
+
+    "triggered_effect_action": {
+      "oneOf": [
+        { "$ref": "#/definitions/event" },
+        {
+          "type": "object",
+          "required": ["type", "direction"],
+          "description": "Schema v1.20+ (Rule 36). Damage-flow operation in the per-round damage pipeline. Pipeline ordering: Rule 17 combat_modifiers → Rule 18 damage_interactions → Rule 32 frozen damage_caps → Rule 36 shift/multiply/set (damage_delta, damage_multiplier, damage_set) → Rule 36 triggered caps (damage_cap) → apply to state. Multiple Rule 36 caps from different items compose by taking the smallest (extends the Rule 32 v1.15 tightest-cap-wins semantic across both cap layers). All four require `direction` (incoming = damage to enemy, outgoing = damage to player; the player's perspective is canonical).",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["damage_cap", "damage_multiplier", "damage_delta", "damage_set"]
+            },
+            "direction": {
+              "type": "string",
+              "enum": ["incoming", "outgoing"],
+              "description": "Which damage flow the operation affects. `outgoing` = damage out of the player's health (the player is hit). `incoming` = damage out of the enemy's health (the player hits). Player's perspective is canonical and matches the convention used by Rule 18 damage_interactions and Rule 32 damage_caps."
+            },
+            "max": {
+              "type": "number",
+              "minimum": 0,
+              "description": "damage_cap: absolute upper bound on the per-round damage total in the direction. Composes with frozen Rule 32 caps and other Rule 36 caps by tightest-wins. A cap of 0 zeroes the affected damage flow for the round (semantically similar to immunity)."
+            },
+            "multiplier": {
+              "type": "number",
+              "description": "damage_multiplier: multiplicative factor applied to the per-round damage total in the direction. Applied AFTER Rule 18 per-component damage_interactions and BEFORE Rule 36 triggered caps. Use 2 for 'double damage on this hit', 0.5 for 'half damage', 0 for 'no damage this round' (though damage_cap with max 0 is preferred for no-damage)."
+            },
+            "delta": {
+              "type": "number",
+              "description": "damage_delta: signed integer shift applied to the per-round damage total in the direction. Use -1 for 'reduce damage by 1', +1 for 'extra damage this round'. Applied AFTER Rule 18 / Rule 32 frozen caps and BEFORE Rule 36 triggered caps. Final result is clamped to ≥ 0 (no negative damage)."
+            },
+            "value": {
+              "oneOf": [
+                { "type": "number" },
+                { "type": "string", "description": "Symbolic expression evaluated at firing time. Currently 'enemy.max_health' is supported (writes the enemy's full health as the damage total, for vorpal-sword-style insta-kills). Future expressions may be added; books should not invent their own." }
+              ],
+              "description": "damage_set: absolute value to write as the per-round damage total in the direction, replacing whatever the upstream pipeline produced. Use for insta-kill mechanics (`{type: damage_set, direction: incoming, value: \"enemy.max_health\"}` on a vorpal sword 1d6-on-6) and similar source-text 'sets the damage to N' shapes. Rule 36 triggered caps applied AFTER this operation may still clamp it down."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "target_section"],
+          "description": "Schema v1.20+ (Rule 36). Flee-combat operation. Ends the active combat as a flee and navigates the player to `target_section`. Mirrors `combat.flee_to` but for source-text mechanics where the flee is driven by an item / ability / talent rather than a per-combat flee_to. Canonical example: Warlock potion_of_invisibility with `trigger: on_user_use` + `effect: {type: flee_combat, target_section: 105}`. If used outside of an active combat, the emulator logs a warning and skips the effect.",
+          "properties": {
+            "type": { "type": "string", "enum": ["flee_combat"] },
+            "target_section": {
+              "type": ["integer", "string"],
+              "description": "Section id to navigate to on flee. Integer or string (see codex 7.6.8 for string sub-section ids)."
+            }
+          }
+        }
+      ],
+      "description": "Schema v1.20+ (Rule 36). Discriminated union over: (a) the existing non-pausing event types (`modify_stat`, `set_flag`, `clear_flag`, `add_item`, `remove_item`, `script`, etc. — same shape as the standard `event` definition); (b) the four new damage-flow operations (`damage_cap`, `damage_multiplier`, `damage_delta`, `damage_set`); (c) the new `flee_combat` operation. Interactive event types (`combat`, `stat_test`, `roll_dice`, `input_number`, `input_text`, `eat_meal`, `choose_items`, `return_to_caller`) MUST NOT appear here — triggered_effects are dispatched synchronously and cannot pause the section/combat flow."
     }
   }
 }
