@@ -1,11 +1,9 @@
-# THE GAMEBOOK CODEX v2.26.0
+# THE GAMEBOOK CODEX v2.26.1
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
 
 ## CODEX VERSION AND COMPATIBILITY
-
-**Codex version:** 2.10.0
 
 This document is versioned alongside a set of canonical tools: the GBF JSON Schema, the reference CLI emulator, and the browser emulator. Each tool has a version constant that this codex doc expects.
 
@@ -4263,7 +4261,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.26.0 / GBF schema v1.19.0 / CLI emulator v3.14.0 / HTML emulator v3.14.0.**
+**Codex v2.26.1 / GBF schema v1.19.0 / CLI emulator v3.14.0 / HTML emulator v3.14.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
