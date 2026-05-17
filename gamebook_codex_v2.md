@@ -1863,7 +1863,287 @@ The §313/§221/§319 outlier sub-flow ("the player should not be able to redeem
 
 ---
 
-## TABLE OF CONTENTS
+### Rule 36 candidate: Item / Ability / Talent / Enemy Effects with Triggers
+
+**STATUS: CANDIDATE — design captured in Chat #31/#32, not yet enforceable.** This subsection is a design specification for a future schema-additive release. The schema does not yet declare the `triggered_effects[]` field; both reference emulators have no handler for it; no maintained book uses it. The deliverable of this subsection is to capture the design space fully so the schema, emulators, and first audit wave can ship in subsequent releases without redoing the design discussion. Until that ship lands, sub-agent dispatches MUST NOT encode triggered effects on any book — the affected sites continue to live in `parser_notes` strings (the established pre-rule encoding for un-enforced mechanics). The decision table at the top of the Critical Rules section and the per-rule pre-output checklist in Section 10 deliberately omit Rule 36 entries until the rule is shippable; see "Recommended sequencing" below.
+
+**The gap this rule fills.** Across the maintained books there is a recurring family of mechanics that share a structural shape but currently have no canonical encoding: an item, ability, talent, or enemy carries an effect that fires under a specific lifecycle trigger (each combat round, when the player enters a section, when the player rests, when the player clicks "use" in inventory), optionally gated by a source-text dice roll, and dispatches one of a small set of state mutations (cap / scale / shift damage; mutate a stat; set or clear a flag; add or remove an item). Existing rules cover *some* of this space: Rule 19's `stat_modifier.when: "equipped"` handles the special case of "while equipped, bonus to a stat"; Rule 25's `consume` block handles named consumables triggered at `eat_meal` time; Rule 34's `effects[]` array on `rules.abilities.available[]` and `rules.talents.available[]` handles chargen-time auto-apply. Each of these is narrowly scoped to one lifecycle (slot occupation, meal consumption, chargen confirmation). Mechanics that don't fit any of those carve-outs — per-round dice-driven shields and weapons, passive per-section regeneration, user-triggered consumables fired mid-combat, foraging-style passive provision generation — currently survive in `parser_notes` strings on the affected entries with no emulator enforcement. Rule 36 introduces a single primitive whose shape is general enough to cover all of these.
+
+**Why a unified primitive instead of one rule per lifecycle.** Chat #31's design discussion surfaced four reframings, each of which pushed the design wider until the natural shape was a single triggered-effect array with a trigger discriminator rather than N rules each owning one trigger. The reframings are recorded under "Key design framings (from Chat #31)" below — they are sticky and Chat #33+ should NOT re-litigate them without explicit user direction. Briefly: probabilities are the wrong abstraction (dice mechanics carry source-text fidelity and let emulators offer manual-roll / forced-replay UX); `damage_cap` alone is too narrow (the same dice-gate triggers shifts, multipliers, sets, and non-damage effects too); "passive" is too narrow (some items are user-triggered, with the same effect shape); "damage-related" is too narrow (the same triggers can fire stat changes, flag mutations, item grants). The shape that emerged covers all four reframings cleanly with one array per placement and one trigger field per entry.
+
+**The shape (proposed, subject to schema review).** Each placement carries an optional `triggered_effects[]` array. Each array entry has the following fields:
+
+```jsonc
+{
+  "trigger": "<trigger_name>",        // REQUIRED — lifecycle phase or user action
+  "context": "<context_name>",        // OPTIONAL — restricts where the trigger fires
+  "condition": <condition_union>,     // OPTIONAL — state predicate gate (standard event-condition shape)
+  "gate_roll": {                       // OPTIONAL — dice gate
+    "dice": "1d6",                     //   REQUIRED inside gate_roll — dice expression
+    "applies_on": "6"                  //   REQUIRED inside gate_roll — range string matching roll_dice.results keys
+  },
+  "effect": {                          // REQUIRED — what fires when the gate passes
+    "type": "<effect_type>",           //   REQUIRED — discriminator (see "Effect discriminated union" below)
+    ...                                //   per-type fields
+  },
+  "consume_on_fire": true,             // OPTIONAL — remove one copy of the carrying item after firing
+  "reason": "<source-text quote>"      // OPTIONAL — human-readable description
+}
+```
+
+**Field name choice.** The candidate uses `triggered_effects[]` (not `effects[]`) so it does not collide with Rule 34's existing chargen `effects[]` field on `rules.abilities.available[]` and `rules.talents.available[]`. Rule 34's `effects[]` is chargen-time-only (auto-apply at `choose_abilities` / `choose_talents` confirm) and a closed set of non-pausing event types; Rule 36's `triggered_effects[]` is run-time (fires on lifecycle events during play) and a different effect-type union. Keeping the names separate preserves Rule 34's existing semantics unchanged and avoids a backwards-compat migration on any maintained book. A future codex consolidation pass MAY merge them under one name with a `trigger` discriminator (with chargen-time treated as `trigger: "on_grant"`), but that consolidation is out of scope for the candidate ship; see "Open design questions" below.
+
+**Placements.** Four catalog placements carry `triggered_effects[]`:
+
+| Placement | Use cases | Existing field that partially overlaps |
+|---|---|---|
+| `items_catalog[id].triggered_effects[]` | Equipped items with per-round dice gates (Warlock iron_shield_crescent); passive items with per-section effects (hypothetical Ring of Regeneration); user-triggered consumables (Warlock potion_of_invisibility); weapons with on-hit dice gates (hypothetical magic / vorpal swords); shields with on-defend dice gates | Rule 19 `stat_modifier.when` (subset: while_equipped + modify_stat); Rule 25 `consume` (subset: on_eat_meal or on_user_use + modify_stat) |
+| `enemies_catalog[id].triggered_effects[]` | Enemies with per-round dice-driven side effects (Warlock §249 dog fire-breath); enemies with one-shot intro effects; enemies with passive aura effects | (none — `parser_notes` text only today) |
+| `rules.abilities.available[].triggered_effects[]` | Abilities whose effect is per-section / per-rest / per-combat-round rather than chargen-only (hypothetical Foraging ability: 1d10-on-10 → +1 provision per section) | Rule 34 `effects[]` (subset: implicit on_grant + bounded chargen primitives) |
+| `rules.talents.available[].triggered_effects[]` | Talents whose effect is per-combat-round / per-section / dice-gated rather than chargen-only (most Windhammer talents whose mechanical_effect is currently `parser_notes` per Rule 34's deferral) | Rule 34 `effects[]` (same subset as above) |
+
+Standing_modifiers (Rule 23), per-section combat_modifiers (Rule 17), and intrinsic_modifiers (Rule 17 enemy-level) are NOT Rule 36 placements — those operate on the combat-modifier pipeline at well-defined points (rules-section / per-section / per-enemy-type) and have different evaluation semantics (frozen at combat start, additive on inputs). Rule 36 is for *lifecycle-driven dispatch of one of a small set of state mutations*, not for combat-modifier accumulation.
+
+**Trigger taxonomy.** Eight lifecycle triggers + one user-triggered + reserved capacity for source-text-required additions. Each trigger names a specific point in the play loop where the emulator inspects all placements' `triggered_effects[]` arrays, filters to entries whose `trigger` matches, evaluates `context` / `condition` / `gate_roll`, and dispatches the `effect` on each entry that passes. The taxonomy is *closed under what the maintained books need*; a book whose source text requires a trigger not in this list is a candidate for taxonomy extension (file as a codex follow-up, do not invent a trigger name).
+
+| Trigger | Fires when | Canonical / hypothetical example |
+|---|---|---|
+| `while_equipped` | Continuously while the carrying item is in its equipment slot (Rule 19 `slot`); evaluated whenever combat / stat / event scoring reads the affected pipeline | Hypothetical "ring of +1 strength" — same effect class as Rule 19 `stat_modifier.when: "equipped"`, lifted to triggered_effects shape so the same item can carry additional non-while_equipped entries |
+| `on_section_enter` | Once when the player navigates into a section (after section text loads, before events fire) | Hypothetical Ring of Regeneration: +1 ENDURANCE per section visited |
+| `on_combat_start` | Once at the start of every combat the player enters | Hypothetical "rage talisman": +2 ATTACK STRENGTH for combat-round-1 only; intro-only aura buffs |
+| `on_combat_round` | Once per combat round, after the round_script computes attacker/defender margins and damage but before applying damage to state | Warlock iron_shield_crescent (1d6-on-6 → reduce damage by 1); Warlock §249 dog fire-breath (1d6-on-1-2 → +1 STAMINA damage); hypothetical magic sword (1d6-on-6 → double damage); hypothetical vorpal sword (1d6-on-6 → set damage to enemy.max_health) |
+| `on_combat_end` | Once at the end of every combat the player completes (win or loss; the lose-path may end the playthrough before this fires) | Hypothetical "victor's purse": +5 gold per combat won; hypothetical "wounded after combat": -1 ENDURANCE per combat |
+| `on_eat_meal` | When an `eat_meal` event fires in a section AND the player chooses to satisfy it from this item / ability / talent | Rule 25's existing `consume.satisfies_eat_meal: true` is the same trigger lifted into the triggered_effects shape; Rule 25 remains canonical for the eat_meal-specific carve-out |
+| `on_rest` | When a rest event fires (currently no `rest` event type — see Open design questions; the trigger is named in anticipation of source-text rest mechanics not yet encoded) | Hypothetical "regenerating cloak": +2 ENDURANCE per rest |
+| `on_user_use` | When the player clicks the carrying item in the inventory UI's "use" affordance | Warlock potion_of_invisibility (§51 flee Troll combat; §39→§105 vs Warlock); GrailQuest healing potion (per dose: roll 2d6, +X LIFE POINTS); GrailQuest death_spell_scroll (one-use, instant-kill with backfire-on-doubles) |
+
+Reserved-but-not-yet-needed triggers, listed for taxonomy completeness: `on_pickup` / `on_drop` / `on_equip` / `on_unequip` (inventory transitions); `on_damage_taken` / `on_kill` (combat sub-events finer than `on_combat_round`); `on_level_up` (XP-based progression systems not in any maintained book yet); `on_dawn` / `on_dusk` (day-night books not in any maintained book yet). The schema MAY ship a closed enum that excludes these until a source text demands them.
+
+**Context restrictions.** An optional `context` field narrows where a trigger is valid:
+
+- `anywhere` (default if omitted) — trigger fires in every applicable lifecycle phase
+- `in_combat` — trigger fires only when the player is in an active combat; outside combat, the trigger no-ops
+- `in_section` — trigger fires only outside combat (between sections, or during section event resolution before combat starts)
+
+The intended use is `on_user_use` items whose effect is specifically a combat aid (a potion of invisibility that can only be drunk mid-combat) or specifically an out-of-combat aid (a scroll of teleport that doesn't work mid-fight). For most triggers the context is naturally restricted by the trigger itself (e.g., `on_combat_round` is implicitly `in_combat`) and `context` is omitted.
+
+**Dice gate (`gate_roll`).** The `gate_roll` field expresses a source-text dice mechanic that gates whether the effect fires on a given trigger evaluation. Its shape mirrors the existing `roll_dice` event's range-key vocabulary, deliberately, so the same parsing and emulator UX (manual roll prompt, displayed outcome, debug-replay forced roll) applies in both places:
+
+- `dice` — a dice expression string like `"1d6"` or `"2d6"` or `"1d10"` matching the source text's dice mechanic exactly.
+- `applies_on` — a range string like `"6"` (single-value), `"1-2"` (range), `"5+"` (open-upper), `"4-"` (open-lower), matching the `roll_dice.results` key vocabulary. The effect fires when the rolled value falls in the range; otherwise the trigger evaluation is a no-op for this entry.
+
+**Dice, not probabilities.** The source-text shape is preserved verbatim. The schema does NOT permit a `probability: <real_number>` field as a substitute. Two reasons: (1) source-text fidelity is a Rule 1 obligation — `1d6 on 6` is the source-text mechanic, `probability: 0.1667` is an estimation that loses information about what the player actually does at the table; (2) emulator UX requires the dice contract — the CLI offers a manual-roll prompt, the HTML emulator displays the rolled die, the debug-replay mode forces a specific roll outcome for repeatable test runs. None of those UX modes are achievable from a real-number probability. See "Key design framings (from Chat #31)" → reframing (i) for the full rationale.
+
+**`consume_on_fire` semantics.** When `true`, the carrying item is `remove_item`'d after the effect fires (one copy per firing). Applies to `items_catalog[id].triggered_effects[]` only (the field is meaningless on abilities, talents, or enemies). Single-use scrolls and potions set `consume_on_fire: true`; multi-charge items (GrailQuest healing potion bottle's 6 doses) require a separate charges mechanism not designed in this candidate — see Open design questions. The default is `false`: passive items (shields, rings, equipped armor) fire repeatedly without depletion.
+
+**Effect discriminated union.** The `effect` field's `type` discriminator selects which state mutation fires. The union has two halves: new operations on the combat damage pipeline (specific to `on_combat_round` / `on_combat_start` / `on_combat_end` triggers; designed to compose cleanly with Rule 17 / Rule 18 / Rule 32) and reuse of existing event types (standard non-pausing event vocabulary, the same subset Rule 25's `consume.effects` and Rule 34's `effects[]` accept).
+
+*New damage-flow effect operations (proposed).*
+
+| Effect type | Fields | Semantic | Pipeline position |
+|---|---|---|---|
+| `damage_cap` | `{ max: <int>, direction: "incoming" \| "outgoing" }` | Bound the per-direction damage total at `max` (i.e., `clamp(total, 0, max)`). Reuses existing Rule 32 `damage_cap` shape lifted into triggered_effects. | After Rule 17 deltas, after Rule 18 multipliers, AFTER Rule 32 frozen caps, BEFORE applying damage to state |
+| `damage_multiplier` | `{ factor: <number>, direction: "incoming" \| "outgoing" }` | Scale the per-direction damage total by `factor` (typically 0, 0.5, 2, etc.). Distinct from Rule 18 `damage_interactions.multiplier` which is per-component multiplicative; `damage_multiplier` acts on the totaled per-direction damage. | After Rule 18 per-component multipliers, before Rule 32 caps (so a 2× multiplier is still subject to a downstream cap), before Rule 36 `damage_cap` triggered effects (so the multiplier feeds the trigger-frame cap) |
+| `damage_delta` | `{ delta: <int>, direction: "incoming" \| "outgoing" }` | Add `delta` (signed) to the per-direction total. Distinct from Rule 17 `combat_modifiers.delta` which acts on round_script INPUTS; `damage_delta` acts on the totaled per-direction OUTPUT. | After multipliers, before caps. Negative delta clamps at 0 (no healing-via-negative-damage in this primitive). |
+| `damage_set` | `{ value: <int> \| <expression>, direction: "incoming" \| "outgoing" }` | Set the per-direction total to `value`. `value` may be a literal integer OR a structured expression like `{ "kind": "ref", "path": "enemy.max_health" }` for one-shot / vorpal effects. | After all multiplicative / additive shaping, after Rule 32 frozen caps; but BEFORE Rule 36 `damage_cap` triggered effects (so a vorpal hit can still be capped by a defensive triggered effect on the same round) |
+
+The pipeline ordering above is a *proposal*; the schema-and-emulator ship in Chat #33 will need to formalize it and test the composition cases. Two composition cases are worth surfacing now: (a) a magic sword's 1d6-on-6 damage_multiplier(2) firing on the same round as a shield's 1d6-on-6 damage_cap(0) → the cap blocks the doubled damage at 0 (defense wins); (b) a vorpal sword's 1d6-on-6 damage_set(enemy.max_health) firing on the same round as an enemy's intrinsic Rule 32 `damage_cap.max: 10` → the cap clamps the insta-kill to 10 (intrinsic enemy resilience defeats the vorpal). Both compositions feel correct; if they don't, the pipeline ordering needs to be revisited.
+
+*Reused event types (existing schema events, accepted as `triggered_effects[].effect`).* These are the same non-pausing event vocabulary Rule 25's `consume.effects` and Rule 34's `effects[]` accept. The triggered-effect firing dispatches the event with the carrying entry as the implicit source (so `modify_stat` events on items credit the player's stat, etc.).
+
+- `modify_stat` — for stat changes (passive regeneration, foraging-driven provision grants, on-rest heals).
+- `set_flag` / `clear_flag` — for one-time state transitions triggered by lifecycle events (Rule 33 + Rule 36 composition: a flag set by `on_combat_start` could gate downstream events).
+- `add_item` / `remove_item` — for item grants / losses (a "horn of summoning" that adds a follower NPC item on use; an "amulet of charges" that removes its own charges on use).
+- `script` — escape hatch for complex effects that don't fit the discrete types. Use sparingly; the discrete types are preferred so the emulator can render UX hints (per-round dice display, user-use button label).
+
+Event types that REQUIRE a player pause (`combat`, `stat_test`, `eat_meal`, `choose_items`, `roll_dice`, `input_number`, `input_text`) are NOT allowed as `triggered_effects[].effect`. The lifecycle triggers fire in contexts where a pause would break the flow (mid-combat-round, mid-section-enter). Books whose source text requires a pause as part of a triggered effect should encode the affected mechanic at the section level (a `roll_dice` event in the section that introduces the item, branching into different navigation paths), not in `triggered_effects[]`.
+
+**Worked examples (canonical and hypothetical).** All examples below are *encoding sketches*; the actual ship in Chat #33 will validate them against the schema and emulator implementation. Items marked `[canonical]` are real sites in maintained books (audit table below); items marked `[hypothetical]` are illustrative cases the design needs to cover.
+
+*Warlock `iron_shield_crescent` (canonical, §155, currently parser_notes-only).* Source text: *"When wounded in combat, roll 1d6: on 6, damage reduced by 1 point."*
+
+```jsonc
+"items_catalog": {
+  "iron_shield_crescent": {
+    "name": "Iron Shield with Golden Crescent",
+    "type": "armor", "slot": "shield", "equippable": true,
+    "triggered_effects": [
+      {
+        "trigger": "on_combat_round",
+        "condition": { "type": "has_item", "item": "iron_shield_crescent" },
+        "gate_roll": { "dice": "1d6", "applies_on": "6" },
+        "effect": { "type": "damage_delta", "delta": -1, "direction": "outgoing" },
+        "reason": "1d6-on-6: reduce incoming damage by 1 (§155 source rule)"
+      }
+    ]
+  }
+}
+```
+
+The `condition: has_item` gate is slightly redundant (Rule 19 already auto-equips the shield via `slot: "shield"`, so the player has the item if it is equipped) but explicit-condition shape lets the same effect ride on un-equipped items (a pocket talisman that fires while in inventory, not while equipped) — see Open design questions for `trigger: while_equipped` vs `trigger: on_combat_round` + `condition: has_item` distinction.
+
+*Warlock §249 fire-breathing dog (canonical, enemies_catalog `dog_249`, currently parser_notes-only).* Source text: *"Each round roll 1d6: on 1-2, fire breath does 1 extra STAMINA damage."*
+
+```jsonc
+"enemies_catalog": {
+  "dog_249": {
+    "name": "Dog (Fire-breathing)", "skill": 7, "stamina": 6,
+    "triggered_effects": [
+      {
+        "trigger": "on_combat_round",
+        "gate_roll": { "dice": "1d6", "applies_on": "1-2" },
+        "effect": { "type": "damage_delta", "delta": 1, "direction": "outgoing" },
+        "reason": "1d6-on-1-2: +1 STAMINA damage from fire breath (§249 source rule)"
+      }
+    ]
+  }
+}
+```
+
+No `condition` needed — the effect is intrinsic to the enemy (the dog always has fire breath when fought). Direction is `outgoing` (from the player's perspective, damage TO the player; from the enemy's perspective, damage FROM the enemy). The candidate uses the player's perspective consistently: `outgoing` is damage flowing *out of* the player's health; `incoming` is damage flowing *out of* the enemy's health. See "Direction-naming convention" cross-reference to Rule 18.
+
+*Warlock `potion_of_invisibility` (canonical, items_catalog, currently parser_notes-only).* Source text from §51 / §39→§105 supports: a user-triggered consumable that flees the current combat.
+
+```jsonc
+"items_catalog": {
+  "potion_of_invisibility": {
+    "name": "Potion of Invisibility", "type": "consumable",
+    "triggered_effects": [
+      {
+        "trigger": "on_user_use",
+        "context": "in_combat",
+        "effect": { "type": "script", "script_code": "player.flee_combat = true" },
+        "consume_on_fire": true,
+        "reason": "User-triggered: drink potion to flee current combat (§51 Troll, §39→§105 Warlock)"
+      }
+    ]
+  }
+}
+```
+
+This example exposes an open question: the proper `effect.type` for "flee the current combat" — is it `script` (current sketch), a new dedicated `flee_combat` effect type, or a `set_flag` that the round_script reads? Chat #33 should decide based on emulator-implementation review.
+
+*Hypothetical magic sword (1d6-on-6 → double damage).* This is the kind of mechanic many gamebooks describe but no maintained book has yet:
+
+```jsonc
+{
+  "trigger": "on_combat_round",
+  "gate_roll": { "dice": "1d6", "applies_on": "6" },
+  "effect": { "type": "damage_multiplier", "factor": 2, "direction": "incoming" },
+  "reason": "1d6-on-6: double damage on this swing"
+}
+```
+
+*Hypothetical vorpal sword (1d6-on-6 → insta-kill).* The structured-expression value form:
+
+```jsonc
+{
+  "trigger": "on_combat_round",
+  "gate_roll": { "dice": "1d6", "applies_on": "6" },
+  "effect": { "type": "damage_set", "value": { "kind": "ref", "path": "enemy.max_health" }, "direction": "incoming" },
+  "reason": "1d6-on-6: insta-kill (set damage to enemy's max health)"
+}
+```
+
+*Hypothetical fully-negating shield (1d10-on-10 → negate damage).*
+
+```jsonc
+{
+  "trigger": "on_combat_round",
+  "gate_roll": { "dice": "1d10", "applies_on": "10" },
+  "effect": { "type": "damage_cap", "max": 0, "direction": "outgoing" },
+  "reason": "1d10-on-10: negate all incoming damage this round"
+}
+```
+
+*Hypothetical Ring of Regeneration (+1 ENDURANCE per section visited).*
+
+```jsonc
+"items_catalog": {
+  "ring_of_regeneration": {
+    "name": "Ring of Regeneration", "type": "magical", "slot": "ring", "equippable": true,
+    "triggered_effects": [
+      {
+        "trigger": "on_section_enter",
+        "condition": { "type": "is_equipped", "item": "ring_of_regeneration" },
+        "effect": { "type": "modify_stat", "stat": "endurance", "amount": 1, "reason": "+1 per section while equipped" }
+      }
+    ]
+  }
+}
+```
+
+`is_equipped` may need to be a new condition type (the existing schema has `has_item` but not `is_equipped`). Open design question — file as a follow-up.
+
+*Hypothetical Foraging ability (1d10-on-10 → +1 provision per section).*
+
+```jsonc
+"rules.abilities.available": [
+  {
+    "name": "Foraging",
+    "description": "While exploring, you may forage for food.",
+    "triggered_effects": [
+      {
+        "trigger": "on_section_enter",
+        "gate_roll": { "dice": "1d10", "applies_on": "10" },
+        "effect": { "type": "modify_stat", "stat": "provisions", "amount": 1, "reason": "Foraging dice gate" }
+      }
+    ]
+  }
+]
+```
+
+*GrailQuest healing_potion_bottle (canonical, 6 doses of 2d6 LIFE POINTS each).* Multi-charge: requires a `charges` mechanism not yet designed. Sketch only:
+
+```jsonc
+"items_catalog": {
+  "healing_potion_bottle_1": {
+    "name": "Healing Potion Bottle", "type": "consumable",
+    "charges": 6,                         // OPEN DESIGN QUESTION — see below
+    "triggered_effects": [
+      {
+        "trigger": "on_user_use",
+        "effect": { "type": "modify_stat", "stat": "life_points", "amount": "2d6", "clamp_to_initial": true },
+        "consume_on_fire": false,         // charges decrement, not whole-item consume
+        "decrement_charges": 1,           // OPEN — should consume_on_fire become consume_charges_on_fire?
+        "reason": "Per-dose: heal 2d6 LIFE POINTS (cannot exceed starting total)"
+      }
+    ]
+  }
+}
+```
+
+The `modify_stat.amount` as a dice expression (`"2d6"`) is itself a candidate schema extension — the existing schema accepts integer amounts only, with dice-driven amounts going through `roll_dice` events. Open design question: should `modify_stat.amount` accept a dice expression for triggered-effect contexts, or should `triggered_effects[].effect` for variable-amount cases route through a structured `roll_dice`-style sub-event? Defer to Chat #33.
+
+*GrailQuest death_spell_scroll (canonical, one-use with backfire).* Source: *"Roll 2d6: if double 6, double 1, or double 3, the spell kills YOU instead. Any other result kills the opponent."* This is a triggered effect with a *branching* outcome:
+
+```jsonc
+"items_catalog": {
+  "death_spell_scroll": {
+    "name": "Scroll of Death Spell", "type": "magical_scroll",
+    "triggered_effects": [
+      {
+        "trigger": "on_user_use",
+        "context": "in_combat",
+        "gate_roll": { "dice": "2d6", "applies_on": "doubles_1_3_6" },
+        "effect": { "type": "damage_set", "value": { "kind": "ref", "path": "player.endurance" }, "direction": "outgoing" },
+        "consume_on_fire": true,
+        "reason": "2d6 doubles (1-1, 3-3, 6-6) → backfire: caster dies"
+      },
+      {
+        "trigger": "on_user_use",
+        "context": "in_combat",
+        "gate_roll": { "dice": "2d6", "applies_on": "not_doubles_1_3_6" },
+        "effect": { "type": "damage_set", "value": { "kind": "ref", "path": "enemy.endurance" }, "direction": "incoming" },
+        "consume_on_fire": true,
+        "reason": "Any other 2d6: opponent dies"
+      }
+    ]
+  }
+}
+```
+
+Two entries for the same trigger, with mutually-exclusive `gate_roll.applies_on` ranges. The `applies_on` strings `"doubles_1_3_6"` and `"not_doubles_1_3_6"` are NOT in the existing range-key vocabulary — they are sketched here as a structured-range future extension. Open design question: how to express "doubles" and "not doubles" in `applies_on`. Defer to Chat #33.
 
 1. Universal Gamebook Concepts
 2. Output Schema Specification
