@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.15.0';
+const CODEX_EMULATOR_VERSION = '3.16.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -737,6 +737,15 @@ let state = {
   // section with `is_subroutine_entry: true`. Popped by the return_to_caller
   // event handler. Empty by default. See codex section 7.6.8.
   returnStack: [],
+  // Rule 36 v2.28.0 / schema v1.21+. Per-section bookkeeping recorded
+  // at every navigateTo (after currentSection updates) and consulted
+  // by on_section_exit triggered_effects via the
+  // section_had_no_endurance_loss / section_had_no_combat conditions.
+  // Shape: {<healthStat>: <int>, hadCombat: <bool>} once populated,
+  // null before the first navigation. The healthStat key is dynamic
+  // (resolved via gameData.rules.health_stat at snapshot time) so the
+  // structure is series-neutral.
+  sectionEntrySnapshot: null,
 };
 
 // ==================== UTILITY ====================
@@ -2306,6 +2315,20 @@ function navigateTo(sectionId) {
     return;
   }
 
+  // Rule 36 on_section_exit triggers (schema v1.21+ / codex v2.28.0):
+  // fire BEFORE state.currentSection updates to the destination so the
+  // sectionEntrySnapshot from the section being LEFT is still in scope
+  // for condition evaluation (section_had_no_endurance_loss,
+  // section_had_no_combat). Guarded by state.currentSection != null so
+  // the first navigation in a run (chargen-confirm → §1) does not fire
+  // the trigger from a phantom-empty snapshot. The trigger fires on
+  // every form of section-exit: choice navigation, combat-win
+  // navigation, combat-lose navigation, combat-flee navigation, because
+  // every path lands here.
+  if (state.currentSection != null) {
+    r36_dispatchLifecycleTriggers('on_section_exit');
+  }
+
   // Capture the caller before updating currentSection. previousSection
   // is the section we're LEAVING as this call runs; it will become the
   // "caller" that's pushed onto the return stack if the destination is
@@ -2314,6 +2337,18 @@ function navigateTo(sectionId) {
   state.previousSection = callerId;
   state.currentSection = sid;
   state.visitedSections.add(sid);
+
+  // Rule 36 section-bookkeeping snapshot (schema v1.21+): record the
+  // primary-health stat value and a freshly-cleared hadCombat flag for
+  // the section the player is entering. Consulted by the next
+  // on_section_exit dispatch (via section_had_no_endurance_loss /
+  // section_had_no_combat conditions). The primary-health stat is
+  // resolved via gameData.rules.health_stat — the canonical engine
+  // spelling, same field consulted by getCombatStats /
+  // getPlayerHealth / setPlayerHealth.
+  const _healthStat = gameData?.rules?.health_stat || null;
+  state.sectionEntrySnapshot = { hadCombat: false };
+  if (_healthStat) state.sectionEntrySnapshot[_healthStat] = state.stats[_healthStat];
 
   // Codex 7.6.8 subroutine-entry handling. If the destination section
   // is marked is_subroutine_entry: true, push the caller onto the
@@ -3794,7 +3829,10 @@ function handleCombat(event) {
     // combats win on whichever fires first.
     if (c.winAfterRounds !== undefined && c.winAfterRounds !== null && c.roundNum >= c.winAfterRounds) {
       c.combatLog.push(`<span class="lucky">You survived ${c.roundNum} rounds — combat ends in victory.</span>`);
-      // Rule 36 on_combat_end (schema v1.20+).
+      // Rule 36 on_combat_end (schema v1.20+). Mark hadCombat (schema
+      // v1.21+ / R36 v2.28.0) so the upcoming on_section_exit dispatch
+      // sees this section as combat-resolved.
+      if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
       r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
       c.combatOver = true;
       c.combatEndTarget = c.winTo;
@@ -3822,7 +3860,10 @@ function handleCombat(event) {
         // before the player can read what happened. currentEnemyIdx
         // still points at the just-defeated enemy at this point, so the
         // render is safe.
-        // Rule 36 on_combat_end (schema v1.20+).
+        // Rule 36 on_combat_end (schema v1.20+). Mark hadCombat (schema
+        // v1.21+ / R36 v2.28.0) so the upcoming on_section_exit dispatch
+        // sees this section as combat-resolved.
+        if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
         r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
         c.combatOver = true;
         c.combatEndTarget = c.winTo;
@@ -3843,6 +3884,14 @@ function handleCombat(event) {
     const { healthStat } = getCombatStats();
     c.combatLog.push(`<span class="hit">You flee! The enemy strikes as you run. (-${fleeDmg} ${healthStat})</span>`);
     updateStatBar();
+
+    // Rule 36 v2.28.0 / schema v1.21+. Mark hadCombat on the per-section
+    // snapshot so the upcoming on_section_exit dispatch (fired by
+    // navigateTo when the player clicks Continue) sees this section as
+    // combat-resolved. The CLI emulator also dispatches on_combat_end
+    // here; the HTML emulator's pre-existing on_combat_end path on
+    // player-flee is a known parity gap tracked separately.
+    if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
 
     if (getPlayerHealth() <= 0) {
       c.checkCombatEnd();
@@ -4536,6 +4585,28 @@ function evaluateCondition(cond) {
       const eq = state.equipment || {};
       return Object.values(eq).some(id => id === cond.item);
     }
+    case 'section_had_no_endurance_loss': {
+      // Schema v1.21+ (Rule 36 v2.28.0 extension). Mirror of the CLI
+      // implementation. Resolves primary-health stat via
+      // gameData.rules.health_stat; compares state.stats[healthStat]
+      // to state.sectionEntrySnapshot[healthStat]. Defaults to true on
+      // missing snapshot or missing healthStat.
+      const healthStat = gameData?.rules?.health_stat || null;
+      if (!healthStat) return true;
+      const snap = state.sectionEntrySnapshot;
+      if (!snap || snap[healthStat] === undefined) return true;
+      const current = state.stats[healthStat];
+      if (current === undefined) return true;
+      return current >= snap[healthStat];
+    }
+    case 'section_had_no_combat': {
+      // Schema v1.21+ (Rule 36 v2.28.0 extension). Mirror of the CLI
+      // implementation. True iff no combat resolved in this section
+      // (hadCombat flag set by every on_combat_end dispatch path).
+      const snap = state.sectionEntrySnapshot;
+      if (!snap) return true;
+      return !snap.hadCombat;
+    }
     default:
       return true;
   }
@@ -4574,6 +4645,10 @@ function describeCondition(cond) {
       return `Requires equipped item with property: ${cond.property}`;
     case 'is_equipped':
       return `Requires equipped: ${getItemName(cond.item)}`;
+    case 'section_had_no_endurance_loss':
+      return 'Requires: no ENDURANCE loss this section';
+    case 'section_had_no_combat':
+      return 'Requires: no combat this section';
     default:
       return 'Condition not met';
   }
@@ -4827,6 +4902,8 @@ function r36_useItem(itemId) {
   }
   if (fledTo !== null && combat) {
     // Fire on_combat_end before tearing down combat, then navigate.
+    // Mark hadCombat (schema v1.21+ / R36 v2.28.0).
+    if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
     r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
     combat.combatOver = true;
     combat.combatEndTarget = fledTo;
@@ -5151,6 +5228,7 @@ function playAgain() {
     previousSection: null,
     visitedSections: new Set(),
     returnStack: [],
+    sectionEntrySnapshot: null,
   };
   window._lastTestResult = null;
   window._forcedRollQueue = [];
@@ -5479,6 +5557,10 @@ function serializeState() {
     // — otherwise the auto-return path would lose the caller on the
     // first return_to_caller event after a load.
     returnStack: [...(state.returnStack || [])],
+    // Rule 36 v2.28.0 / schema v1.21+. Per-section bookkeeping snapshot
+    // (current health-stat value at section-enter + hadCombat flag).
+    // Serialised so on_section_exit triggers fire correctly across save/load.
+    sectionEntrySnapshot: state.sectionEntrySnapshot ? { ...state.sectionEntrySnapshot } : null,
     _lastTestResult: window._lastTestResult ?? null,
   };
 }
@@ -5499,6 +5581,7 @@ function deserializeState(obj) {
   state.previousSection = obj.previousSection ?? null;
   state.visitedSections = new Set(obj.visitedSections || []);
   state.returnStack = Array.isArray(obj.returnStack) ? [...obj.returnStack] : [];
+  state.sectionEntrySnapshot = obj.sectionEntrySnapshot ? { ...obj.sectionEntrySnapshot } : null;
   window._lastTestResult = obj._lastTestResult ?? null;
 }
 
@@ -5533,7 +5616,21 @@ function loadGame(saveJson) {
   deserializeState(saveJson.state);
   showScreen('game-screen');
   updateReferenceButton();
-  navigateTo(state.currentSection);
+  // navigateTo would (a) fire an on_section_exit trigger from the
+  // just-restored section against the restored snapshot — wrong
+  // semantically, the player is RESUMING not leaving — and (b) clobber
+  // the restored snapshot with one keyed off the resume-point health
+  // value, losing the original section-enter values. Solution: null
+  // currentSection so the exit-trigger guard suppresses the phantom
+  // fire, save the restored snapshot, let navigateTo build its own
+  // (which it overwrites unconditionally), then restore ours so the
+  // next REAL exit evaluates conditions against the original
+  // section-enter bookkeeping.
+  const _resumeTo = state.currentSection;
+  const _resumeSnapshot = state.sectionEntrySnapshot;
+  state.currentSection = null;
+  navigateTo(_resumeTo);
+  if (_resumeSnapshot) state.sectionEntrySnapshot = _resumeSnapshot;
 }
 
 function exportState() {

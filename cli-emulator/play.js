@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.15.0';
+const CODEX_EMULATOR_VERSION = '3.16.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -382,6 +382,15 @@ function initialState(bookPath) {
     // Shape: {wday: 1..7 (1=Sun), hour: 0..23, minute: 0..59}. Null means
     // use the real clock.
     forcedClock: null,
+    // Rule 36 v2.28.0 / schema v1.21+. Per-section bookkeeping recorded
+    // at every navigateTo (after currentSection updates) and consulted
+    // by on_section_exit triggered_effects via the
+    // section_had_no_endurance_loss / section_had_no_combat conditions.
+    // Shape: {<healthStat>: <int>, hadCombat: <bool>} once populated,
+    // null before the first navigation. The healthStat key is dynamic
+    // (resolved via book.rules.health_stat at snapshot time) so the
+    // structure is series-neutral.
+    sectionEntrySnapshot: null,
   };
 }
 
@@ -454,6 +463,36 @@ function evalCondition(cond, state, book) {
       const eq = state.equipment || {};
       return Object.values(eq).some(id => id === cond.item);
     }
+    case 'section_had_no_endurance_loss': {
+      // Schema v1.21+ (Rule 36 v2.28.0 extension). Compares the current
+      // primary-health stat (resolved via book.rules.health_stat) against
+      // the snapshot taken at the most recent section-enter (stored on
+      // state.sectionEntrySnapshot). True iff current value is at or
+      // above the snapshot. If snapshot is missing (defensive default,
+      // pre-any-navigation evaluation), return true. Used by
+      // on_section_exit triggers to gate per-section regen mechanics on
+      // "did the player avoid losing health this section."
+      const healthStat = book?.rules?.health_stat || null;
+      if (!healthStat) return true;
+      const snap = state.sectionEntrySnapshot;
+      if (!snap || snap[healthStat] === undefined) return true;
+      const current = state.stats[healthStat];
+      if (current === undefined) return true;
+      return current >= snap[healthStat];
+    }
+    case 'section_had_no_combat': {
+      // Schema v1.21+ (Rule 36 v2.28.0 extension). True iff no combat
+      // event has resolved in the current section. The hadCombat flag
+      // on the per-section snapshot is set inside the on_combat_end
+      // lifecycle dispatch (covering win, lose, and flee paths) before
+      // the on_section_exit trigger fires, so by the time an
+      // on_section_exit condition evaluates this predicate, the flag
+      // reflects the section's full combat history. If snapshot is
+      // missing (defensive default), return true.
+      const snap = state.sectionEntrySnapshot;
+      if (!snap) return true;
+      return !snap.hadCombat;
+    }
     default: return true;
   }
 }
@@ -476,6 +515,8 @@ function describeCondition(cond) {
     case 'has_equipped_in_slot': return cond.item ? `${cond.slot} slot has ${cond.item}` : `${cond.slot} slot occupied`;
     case 'has_equipped_with_property': return `equipped item has property: ${cond.property}`;
     case 'is_equipped': return `is equipped: ${cond.item}`;
+    case 'section_had_no_endurance_loss': return 'section had no endurance loss';
+    case 'section_had_no_combat': return 'section had no combat';
     default: return cond.type;
   }
 }
@@ -727,9 +768,10 @@ function dispatchTriggeredEvent(effect, state, book, sourceDesc) {
 }
 
 // Dispatch lifecycle triggers that DON'T touch the per-round damage flow
-// (on_section_enter, on_combat_start, on_combat_end, on_eat_meal,
-// on_user_use). Returns { fledTo: <sectionId | null> } so callers can act
-// on a flee_combat effect (only meaningful when combat is active).
+// (on_section_enter, on_section_exit, on_combat_start, on_combat_end,
+// on_eat_meal, on_user_use). Returns { fledTo: <sectionId | null> } so
+// callers can act on a flee_combat effect (only meaningful when combat
+// is active).
 function dispatchLifecycleTriggers(state, book, trigger, options) {
   options = options || {};
   const combat = state.combat;
@@ -1331,12 +1373,38 @@ function navigateTo(state, book, sectionId) {
     state.pause = { type: 'error', message: `Section ${sid} not found` };
     return state;
   }
+  // Rule 36 on_section_exit triggers (schema v1.21+ / codex v2.28.0):
+  // fire BEFORE state.currentSection updates to the destination so the
+  // sectionEntrySnapshot from the section being LEFT is still in scope
+  // for condition evaluation (section_had_no_endurance_loss,
+  // section_had_no_combat). Guarded by state.currentSection != null so
+  // the first navigation in a run (chargen-confirm → §1) does not fire
+  // the trigger from a phantom-empty snapshot. The trigger fires on
+  // every form of section-exit: choice navigation, combat-win
+  // navigation, combat-lose navigation, combat-flee navigation, because
+  // every path lands here.
+  if (state.currentSection != null) {
+    dispatchLifecycleTriggers(state, book, 'on_section_exit');
+  }
   // Capture the caller before updating currentSection. previousSection is
   // the section we're LEAVING as this call runs; it will become the
   // "caller" if the destination is a subroutine entry.
   const callerId = state.currentSection;
   state.previousSection = callerId;
   state.currentSection = sid;
+  // Rule 36 section-bookkeeping snapshot (schema v1.21+): record the
+  // primary-health stat value and a freshly-cleared hadCombat flag for
+  // the section the player is entering. Consulted by the next
+  // on_section_exit dispatch (via section_had_no_endurance_loss /
+  // section_had_no_combat conditions). The primary-health stat is
+  // resolved via book.rules.health_stat (the canonical engine spelling
+  // — the same field consulted by getCombatStats / getPlayerHealth /
+  // setPlayerHealth everywhere else). Resource slots (provisions /
+  // gold / meals) are never the primary-health stat by convention so
+  // they don't need special handling here.
+  const _healthStat = book?.rules?.health_stat || null;
+  state.sectionEntrySnapshot = { hadCombat: false };
+  if (_healthStat) state.sectionEntrySnapshot[_healthStat] = state.stats[_healthStat];
   if (!state.visitedSections.includes(sid)) state.visitedSections.push(sid);
   state.lastTestResult = null;
 
@@ -2771,6 +2839,10 @@ function handleCombatAction(action, args, state, book) {
     }
     if (combat.fleeTo) {
       // Rule 36 on_combat_end: fire before clearing combat (player-initiated flee).
+      // Mark the section-entry snapshot's hadCombat flag BEFORE the dispatch
+      // so any on_combat_end-triggered or downstream on_section_exit conditions
+      // see the section as combat-resolved (schema v1.21+ / Rule 36 v2.28.0).
+      if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
       dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
       state.combat = null;
       return navigateTo(state, book, combat.fleeTo);
@@ -3264,6 +3336,8 @@ function runUserUse(state, book, itemId) {
   }
   if (fledTo !== null && combat) {
     // Fire on_combat_end (R36) before tearing down combat, then navigate.
+    // Mark hadCombat on the section snapshot (schema v1.21+ / R36 v2.28.0).
+    if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     state.combat = null;
     return navigateTo(state, book, fledTo);
@@ -3291,6 +3365,9 @@ function checkCombatEnd(state, book) {
   if (combat.winAfterRounds !== undefined && combat.winAfterRounds !== null && combat.round >= combat.winAfterRounds) {
     state.log.push(`Survived ${combat.round} rounds — combat ends in victory.`);
     // Rule 36 on_combat_end (schema v1.20+): fire before clearing combat.
+    // Mark hadCombat (schema v1.21+ / R36 v2.28.0) so the upcoming
+    // on_section_exit dispatch sees this section as combat-resolved.
+    if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
@@ -3307,6 +3384,9 @@ function checkCombatEnd(state, book) {
     }
     // All enemies defeated
     // Rule 36 on_combat_end (schema v1.20+): fire before clearing combat.
+    // Mark hadCombat (schema v1.21+ / R36 v2.28.0) so the upcoming
+    // on_section_exit dispatch sees this section as combat-resolved.
+    if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
@@ -3357,6 +3437,11 @@ function compactState(state) {
     // save/load. Empty array means the run is still a candidate for
     // TIER 3 CLEAN; any entry downgrades it to TIER 3 PARTIAL.
     manualSets: Array.isArray(state.manualSets) ? state.manualSets : [],
+    // Rule 36 v2.28.0 / schema v1.21+. Per-section bookkeeping snapshot
+    // (current health-stat value at section-enter + hadCombat flag).
+    // Round-tripped through state JSON so on_section_exit triggers
+    // continue to evaluate correctly across act() calls.
+    sectionEntrySnapshot: state.sectionEntrySnapshot ?? null,
     log: state.log.slice(-20), // Keep recent log entries only
   };
   return out;

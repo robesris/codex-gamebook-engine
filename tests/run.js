@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title bumped to v1.20.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title bumped to v1.21.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.20.0', 'schema title at v1.20.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2511,6 +2511,236 @@ test('Rule 36 on_user_use + flee_combat + consume_on_fire navigates and removes 
   assertTrue(!state.inventory.includes('test_potion'), 'consume_on_fire removed potion from inventory');
   assertTrue(!!state.log.find(l => /flee_combat.*test_potion/.test(l)), 'flee_combat logged');
   assertTrue(!!state.log.find(l => /consume_on_fire.*test_potion/.test(l)), 'consume_on_fire logged');
+});
+
+// ============================================================
+// Rule 36 v2.28.0 / Schema v1.21+ on_section_exit trigger +
+// section_had_no_endurance_loss / section_had_no_combat conditions.
+// ============================================================
+// MOTIVATED_BY: LW1's Healing Kai Discipline — "+1 ENDURANCE per
+// numbered section the player passes through in which they were not
+// involved in combat or another situation involving loss of ENDURANCE."
+// The v2.27.0 codex captured this as a known follow-up (the
+// Healing-discipline known_issues.md entry referenced the gap). v2.28.0
+// closes it with the on_section_exit lifecycle trigger and two
+// independent primitive conditions, AND-gated by LW1's wire-up.
+// END_TO_END_VERIFY: Once the books-side sub-agent wires LW1's Healing
+// to use these primitives, drive the CLI through any LW1 clean section
+// run with the Healing discipline selected; confirm ENDURANCE climbs by
+// 1 per clean section, stops climbing on the first combat or
+// non-combat ENDURANCE-loss section, and clamps at the chargen ceiling.
+
+// Build a toy book with the canonical LW1-Healing-shape triggered_effect
+// on a test ability. healthStat 'HP', initial 10, initial_is_max true so
+// the regen clamps.
+function buildHealingTestBook(overrides = {}) {
+  return Object.assign({
+    metadata: { title: 'Synthetic Healing Test', series: 'test' },
+    rules: {
+      stats: [{ name: 'HP', initial_is_max: true }],
+      health_stat: 'HP',
+      combat_system: { round_script: 'combat.damage_to_enemy = 1\ncombat.damage_to_player = 0' },
+      abilities: {
+        available: [{
+          name: 'test_regen',
+          triggered_effects: [{
+            trigger: 'on_section_exit',
+            condition: { type: 'and', conditions: [
+              { type: 'section_had_no_endurance_loss' },
+              { type: 'section_had_no_combat' },
+            ]},
+            effect: { type: 'modify_stat', stat: 'HP', amount: 1, reason: 'test_regen discipline' },
+          }],
+        }],
+      },
+    },
+    character_creation: { steps: [] },
+    sections: {
+      '1': { text: 'start', events: [], choices: [] },
+    },
+    items_catalog: {},
+    enemies_catalog: {},
+  }, overrides);
+}
+
+function _setupHealingState(book, startHP, initialHP) {
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HP: startHP };
+  state.initialStats = { HP: initialHP };
+  state.abilities = ['test_regen'];
+  return state;
+}
+
+// ============================================================
+// Test 35: on_section_exit fires the regen on a clean section.
+// ============================================================
+test('Rule 36 on_section_exit: healing fires on pure-narrative section', () => {
+  const book = buildHealingTestBook({
+    sections: {
+      'A': { text: 'clean', events: [], choices: [{ text: 'go', target: 'B' }] },
+      'B': { text: 'next', events: [], choices: [] },
+    },
+  });
+  const state = _setupHealingState(book, 5, 10);
+  play.navigateTo(state, book, 'A');
+  // First navigation: no exit-trigger fire (currentSection was null).
+  assertEqual(state.stats.HP, 5, 'no regen on first nav into A');
+  play.navigateTo(state, book, 'B');
+  // Exit from A → snapshot showed HP=5 at A-enter, current HP=5 at A-exit,
+  // hadCombat=false. AND-gate passes; regen applies; HP 5 → 6.
+  assertEqual(state.stats.HP, 6, 'regen +1 fired on A→B exit');
+});
+
+// ============================================================
+// Test 36: on_section_exit skips after combat (player wins, even
+// taking zero damage — combat-presence alone blocks regen).
+// ============================================================
+test('Rule 36 on_section_exit: healing skips after combat win (no_combat gate)', () => {
+  const book = buildHealingTestBook({
+    rules: Object.assign({}, buildHealingTestBook().rules, {
+      // Player deals 5 / turn, enemy deals 0 → win in 1 round at full HP.
+      combat_system: { round_script: 'combat.damage_to_enemy = 5\ncombat.damage_to_player = 0' },
+    }),
+    sections: {
+      'A': { text: 'combat', events: [{ type: 'combat', enemy_ref: 'goblin', win_to: 'B', flee_to: null }], choices: [] },
+      'B': { text: 'next', events: [], choices: [] },
+    },
+    enemies_catalog: { goblin: { name: 'Goblin', HP: 5 } },
+  });
+  const state = _setupHealingState(book, 10, 10);
+  play.navigateTo(state, book, 'A');
+  // Combat: enemy at 5 HP, 5 dmg/round → dies on round 1, navigates to B.
+  play.applyAction(state, book, 'attack', []);
+  // Exit from A fired during win-to navigateTo(B). hadCombat was set true
+  // before on_combat_end (which in turn fires before navigate). Regen
+  // gate fails on section_had_no_combat; HP stays at 10 (not 11).
+  assertEqual(state.stats.HP, 10, 'no regen after combat win (no_combat gate blocks)');
+  assertEqual(state.currentSection, 'B', 'navigated to B after combat win');
+});
+
+// ============================================================
+// Test 37: on_section_exit skips after non-combat ENDURANCE loss.
+// Validates section_had_no_endurance_loss as an independent gate.
+// ============================================================
+test('Rule 36 on_section_exit: healing skips after non-combat HP loss (endurance_loss gate)', () => {
+  const book = buildHealingTestBook({
+    sections: {
+      'A': { text: 'trap', events: [{ type: 'modify_stat', stat: 'HP', amount: -2, reason: 'trap' }], choices: [{ text: 'go', target: 'B' }] },
+      'B': { text: 'next', events: [], choices: [] },
+    },
+  });
+  const state = _setupHealingState(book, 5, 10);
+  play.navigateTo(state, book, 'A');
+  // After A's events: HP = 5 - 2 = 3. No combat in section.
+  assertEqual(state.stats.HP, 3, 'A trap applied -2 HP');
+  play.navigateTo(state, book, 'B');
+  // Exit from A: snapshot.HP=5; current HP=3; current < snapshot, so
+  // section_had_no_endurance_loss is false. AND-gate fails; HP stays at 3.
+  assertEqual(state.stats.HP, 3, 'no regen after non-combat HP loss');
+});
+
+// ============================================================
+// Test 38: on_section_exit skips after combat with zero damage.
+// Validates that section_had_no_combat is checked INDEPENDENTLY of
+// section_had_no_endurance_loss — even a zero-damage combat blocks
+// the regen via the combat-presence half of the AND-gate.
+// ============================================================
+test('Rule 36 on_section_exit: healing skips after zero-damage combat (no_combat independent of HP)', () => {
+  const book = buildHealingTestBook({
+    rules: Object.assign({}, buildHealingTestBook().rules, {
+      // Player deals 99, enemy deals 0 → win in 1 round with no HP loss.
+      combat_system: { round_script: 'combat.damage_to_enemy = 99\ncombat.damage_to_player = 0' },
+    }),
+    sections: {
+      'A': { text: 'easy fight', events: [{ type: 'combat', enemy_ref: 'weakling', win_to: 'B', flee_to: null }], choices: [] },
+      'B': { text: 'next', events: [], choices: [] },
+    },
+    enemies_catalog: { weakling: { name: 'Weakling', HP: 1 } },
+  });
+  const state = _setupHealingState(book, 5, 10);
+  play.navigateTo(state, book, 'A');
+  play.applyAction(state, book, 'attack', []);
+  // HP loss: 0. section_had_no_endurance_loss is TRUE (HP at exit = HP at
+  // enter = 5). But section_had_no_combat is FALSE (combat resolved).
+  // AND-gate fails on the no_combat half alone; HP stays at 5 (not 6).
+  assertEqual(state.stats.HP, 5, 'no regen even on zero-damage combat (no_combat independent)');
+  assertEqual(state.currentSection, 'B', 'navigated to B');
+});
+
+// ============================================================
+// Test 39: on_section_exit regen clamps at initial_is_max ceiling.
+// ============================================================
+test('Rule 36 on_section_exit: healing regen clamps at initial_is_max ceiling', () => {
+  const book = buildHealingTestBook({
+    sections: {
+      'A': { text: 'clean', events: [], choices: [{ text: 'go', target: 'B' }] },
+      'B': { text: 'next', events: [], choices: [] },
+    },
+  });
+  // Start at the ceiling (10) with initial=10. Regen should be a no-op.
+  const state = _setupHealingState(book, 10, 10);
+  play.navigateTo(state, book, 'A');
+  play.navigateTo(state, book, 'B');
+  // initial_is_max clamps +1 attempt back down to the ceiling.
+  assertEqual(state.stats.HP, 10, 'regen clamps at initial_is_max ceiling');
+});
+
+// ============================================================
+// Test 40: Multi-section clean run — regen accumulates across many
+// clean exits; clamps at ceiling at the end.
+// ============================================================
+test('Rule 36 on_section_exit: healing accumulates across multi-section clean run', () => {
+  const sections = {};
+  for (let i = 1; i <= 6; i++) {
+    sections[String(i)] = {
+      text: 'clean ' + i,
+      events: [],
+      choices: i < 6 ? [{ text: 'next', target: String(i + 1) }] : [],
+    };
+  }
+  const book = buildHealingTestBook({ sections });
+  const state = _setupHealingState(book, 5, 10);
+  play.navigateTo(state, book, '1');
+  // Five exits (1→2, 2→3, 3→4, 4→5, 5→6). Each clean exit fires +1.
+  // Starting HP=5; expected HP after 5 exits = min(10, 5+5) = 10.
+  for (let i = 2; i <= 6; i++) play.navigateTo(state, book, String(i));
+  assertEqual(state.stats.HP, 10, 'HP climbed from 5 to ceiling 10 across 5 clean exits');
+});
+
+// ============================================================
+// Test 41: Schema back-compat — a v1.20-era book with no
+// on_section_exit references validates clean against the v1.21 schema.
+// ============================================================
+test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A minimal book using only pre-v1.21 vocabulary. No on_section_exit;
+  // no section_had_no_endurance_loss / section_had_no_combat conditions.
+  const book = {
+    metadata: { title: 'Back-compat smoke test', author: 'test', total_sections: 1 },
+    rules: {
+      stats: [{ name: 'HP' }],
+    },
+    character_creation: { steps: [] },
+    sections: {
+      '1': {
+        text: 'test',
+        is_ending: false,
+        events: [{ type: 'modify_stat', stat: 'HP', amount: -1, condition: { type: 'has_flag', flag: 'foo' } }],
+        choices: [{ text: 'end', target: '1' }],
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title is v1.21.0');
 });
 
 // ============================================================

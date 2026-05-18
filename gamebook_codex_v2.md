@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.27.0
+# THE GAMEBOOK CODEX v2.28.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -2412,6 +2412,44 @@ Until the schema is extended with either (a) a dedicated `on_section_exit_if_no_
 
 The clean fix is a schema extension: add `on_section_exit_if_no_combat` to the trigger enum (or `on_section_exit` plus `section_had_no_combat` to the condition union; the former is narrower and fits this single use case, the latter generalises if other mechanics surface that need it). The Healing migration lands when the extension lands — file as a Rule 36 follow-up extension request, not as a freelance trigger-name addition in a book. Until then, LW1's Healing remains a documented gap: the description text is faithful to the source rules, the chargen-pickable ability exists, and the +1 per-section regen is unenforced. A future codex iteration that ships the trigger extension can migrate Healing in a single sub-agent pass without needing to touch the ability's source-text-derived description.
 
+**v2.28.0 extension: `on_section_exit` trigger + `section_had_no_endurance_loss` / `section_had_no_combat` conditions.** Chat #34 closed the v2.27.0 follow-up captured above by shipping the generic-primitive form (option b) — `on_section_exit` as a new lifecycle trigger paired with two independent payload-free conditions. The narrower `on_section_exit_if_no_combat` form (option a) was rejected because it collapses two orthogonal predicates into one trigger name and forecloses the half of the Healing rule that's about "no endurance loss in the section" rather than "no combat in the section." The two predicates are genuinely independent: a section may have a non-combat ENDURANCE-loss event (a stat_test failure penalty, a poison-aura modify_stat, an eat_meal auto-penalty) without any combat dispatching, and the Healing rule's "or in another situation involving loss of ENDURANCE" half blocks regen in exactly that case. Shipping both as separate conditions lets LW1's Healing AND-gate them, and lets future books use either condition alone or compose them with the standard `and`/`or`/`not` boolean operators.
+
+The new trigger fires at the START of `navigateTo`, guarded by `state.currentSection != null`. Order of operations: every section event resolves first (including the combat that landed the win_to / lose_to / flee_to navigation, including the `on_combat_end` lifecycle dispatch); then `on_section_exit` fires from the section being LEFT, with access to the per-section snapshot recorded at section-enter; then `state.currentSection` updates to the destination; then `on_section_enter` fires on the new section. The trigger fires on EVERY form of section-exit — choice navigation, combat-win navigation, combat-lose navigation, combat-flee navigation — so a discipline regen never silently skips a section because the exit came from a non-choice path. The first navigation in a run (the player arriving at §1 from the chargen confirm) is excluded by the `state.currentSection != null` guard; there is no prior section to exit, so the trigger has no source-of-truth state to consult and would fire on phantom-empty snapshot data.
+
+The two new conditions are independent primitives. The snapshot bookkeeping uses the existing `rules.health_stat` field (the same string consulted by `getCombatStats` / `getPlayerHealth` / `setPlayerHealth` everywhere else in the emulators) — no new schema field is introduced. At `navigateTo`, after the destination's `state.currentSection` update, the emulator records `state.sectionEntrySnapshot = {<healthStat>: state.stats[<healthStat>], hadCombat: false}`. `section_had_no_endurance_loss` evaluates `state.stats[<healthStat>] >= state.sectionEntrySnapshot[<healthStat>]` at firing time — current health at-or-above the value at section-enter passes the predicate. `section_had_no_combat` evaluates `!state.sectionEntrySnapshot.hadCombat` — true when no combat resolved during the section. The combat-presence flag is set inside the existing `on_combat_end` dispatch path before the lifecycle trigger fires, so every win / lose / flee path marks the snapshot correctly. When the snapshot is missing (a defensive default reachable only via debug jumps or test fixtures that drive `navigateTo` directly without an initial state setup), both conditions return true rather than crashing on undefined access.
+
+The +1 clamp at initial ENDURANCE is handled by the existing `initial_is_max: true` flag on the primary-health stat declaration in `rules.stats[]` — no new schema field is needed for the regen to cap correctly. The existing `modify_stat` event handler walks `rules.stats[]` for `initial_is_max: true` and clamps the post-event value at `state.initialStats[stat]`. The `on_section_exit` regen runs through the same `modify_stat` event path (via the standard `dispatchTriggeredEvent` helper), so the clamp Just Works for the Healing case without anything Rule-36-specific being added.
+
+**Schema-additive.** Pre-v1.21 books validate unchanged against the v1.21 schema. The condition.type enum gains two new values; the trigger enum gains one. No existing field shape changes, no field is repurposed, no field is removed. A v1.20.0-era book file that does not reference `on_section_exit`, `section_had_no_endurance_loss`, or `section_had_no_combat` produces the same validation error count against v1.21 as it did against v1.20. Books that DO reference the new primitives produce one fewer validation error each, because the v1.20 schema rejected unknown enum values that v1.21 now accepts.
+
+**Canonical worked example (LW1 Healing wire-up shape).** The Lone Wolf Healing Kai Discipline is encoded on the ability:
+
+```json
+{
+  "name": "Healing",
+  "triggered_effects": [{
+    "trigger": "on_section_exit",
+    "condition": {"and": [
+      {"type": "section_had_no_endurance_loss"},
+      {"type": "section_had_no_combat"}
+    ]},
+    "effect": {"type": "modify_stat", "stat": "ENDURANCE", "amount": 1, "reason": "Healing discipline"}
+  }]
+}
+```
+
+The ability still has the chargen-pickable shape it had pre-v2.28.0 (the `name` and `description` fields stay verbatim; the `effects[]` chargen-time array stays empty because the regen is run-time, not chargen-time); the `triggered_effects[]` array is the new wire-up. The books-side migration is a single sub-agent pass against `lw_01_flight_from_the_dark.json`, lands separately from this schema-additive engine ship.
+
+**Verification clauses.** A correctly-encoded `on_section_exit` triggered_effect:
+
+1. **Fires exactly once per section-exit, regardless of exit path.** Choice navigation, combat-win navigation, combat-lose navigation, combat-flee navigation all dispatch the trigger before `state.currentSection` updates. A test fixture that navigates §A → §B via a choice and a test fixture that navigates §A → §B via `combat.win_to` see identical effect application on §A's exit.
+2. **Does NOT fire on the initial `navigateTo('1')` from chargen confirm.** The `state.currentSection != null` guard at the top of `navigateTo` excludes the first navigation in a run.
+3. **`section_had_no_endurance_loss` is sensitive to ALL paths that reduce primary-health stat.** A stat_test failure_penalty, a non-required eat_meal-skip auto-penalty, a damage_interaction tick on a passive item — every path that decrements `state.stats[<healthStat>]` between section-enter and section-exit makes the condition false.
+4. **`section_had_no_combat` is sensitive ONLY to resolved `combat` events.** A section that DECLARES a combat event but routes around it (because a prior choice / event navigated away before the combat dispatched) keeps the flag at false; a section whose combat event fires and resolves (win, lose, or flee) sets the flag to true via the `on_combat_end` lifecycle dispatch.
+5. **The +1 clamp from `initial_is_max: true` is automatic.** The regen modify_stat goes through the standard event handler, which honors the existing clamp. A character at maximum ENDURANCE who passes through a clean section does NOT gain +1 — they stay at the ceiling.
+
+The trigger and conditions ship in `codex-gamebook-engine` schema v1.21.0 / codex v2.28.0 / emulators v3.16.0. The LW1 Healing wire-up lands in a separate books-side sub-agent commit immediately after; `known_issues.md` in the books repo retires the Healing-discipline-unenforced entry at the same time.
+
 ---
 
 ### Rule 37: Multi-Entrant Section Pattern (Predecessor `set_flag` + Variant-Section `has_flag` Choices)
@@ -4473,7 +4511,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.27.0 / GBF schema v1.20.0 / CLI emulator v3.15.0 / HTML emulator v3.15.0.**
+**Codex v2.28.0 / GBF schema v1.21.0 / CLI emulator v3.16.0 / HTML emulator v3.16.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

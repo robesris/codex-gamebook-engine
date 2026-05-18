@@ -6,6 +6,37 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.28.0 / GBF v1.21.0 / emulators v3.16.0 / package.json v3.16.0
+
+**Schema-additive ship — engine side.** Rule 36 (item / ability / talent / enemy effects with triggers) gains the v2.28.0 extension closing the v2.27.0 "Known follow-up: section-exit triggers without combat" gap captured for LW1's Healing Kai Discipline. Ships the `on_section_exit` lifecycle trigger plus two new independent payload-free conditions (`section_had_no_endurance_loss`, `section_had_no_combat`) — the generic-primitive option from the v2.27.0 follow-up note (option b), chosen over the narrower combined `on_section_exit_if_no_combat` trigger (option a) because the Healing rule's two predicates are genuinely orthogonal. LW1's Healing wire-up AND-gates both conditions on an `on_section_exit` trigger; future books can use either condition alone or compose via standard `and` / `or` / `not`. The books-side migration for LW1 lands in a separate sub-agent commit immediately after this engine ship.
+
+**Schema additions:**
+- `condition.type` enum extended with `section_had_no_endurance_loss` and `section_had_no_combat` (both payload-free). Description block documents the snapshot semantics (primary-health resolved via `rules.health_stat`; per-section bookkeeping on `state.sectionEntrySnapshot`).
+- `trigger` enum extended with `on_section_exit`. Description documents the firing point (after all section events resolve, including combat win/lose/flee navigation; before `state.currentSection` updates) and the every-exit-path semantic.
+- Title bumped v1.20.0 → v1.21.0.
+
+**Both reference emulators:**
+- New per-section bookkeeping snapshot (`state.sectionEntrySnapshot = {<healthStat>: <int>, hadCombat: bool}`) recorded at every `navigateTo` after `state.currentSection` updates. Primary-health stat resolved via the existing `rules.health_stat` field — no new schema field introduced.
+- `on_section_exit` dispatched at the top of `navigateTo`, guarded by `state.currentSection != null` so the first navigation in a run (chargen-confirm → §1) does not fire from a phantom-empty snapshot.
+- `hadCombat = true` set on the snapshot at every `on_combat_end` dispatch path (win, lose-by-survive-N-rounds, all-enemies-defeated, player-flee, R36-triggered flee_combat) BEFORE the lifecycle trigger fires, so by the time an exit-trigger condition evaluates `section_had_no_combat` the flag reflects the section's full combat history.
+- `section_had_no_endurance_loss` and `section_had_no_combat` evaluators in both `evalCondition` (CLI) and `evaluateCondition` (HTML). Defensive defaults to true on missing snapshot or missing primary-health stat.
+- HTML save/load: snapshot round-trips via `serializeState` / `deserializeState`; `loadGame` saves and restores the snapshot around its `navigateTo(currentSection)` call to avoid (a) a phantom on_section_exit firing on resume and (b) the snapshot being clobbered by the resume-point health value.
+- The +1 clamp at initial primary-health is handled by the existing `initial_is_max: true` flag on `rules.stats[]` — the regen `modify_stat` goes through the standard event handler and the clamp Just Works.
+
+**Pre-existing parity note (unchanged by this ship):** the HTML emulator's `combatFlee` (player-initiated flee from the combat UI) does NOT dispatch `on_combat_end` before navigating to fleeTo — only the CLI does. This ship sets `state.sectionEntrySnapshot.hadCombat = true` in the HTML flee path so `section_had_no_combat` evaluates correctly even on that path, but the upstream on_combat_end dispatch gap is a separately-tracked follow-up.
+
+**Tests:** test count 34 → 41. Seven new tests covering: regen fires on pure-narrative section (Test 35), regen skips after combat win (Test 36, validates `section_had_no_combat`), regen skips after non-combat HP loss (Test 37, validates `section_had_no_endurance_loss` independently), regen skips after zero-damage combat (Test 38, validates `section_had_no_combat` is checked INDEPENDENTLY of HP delta — the AND-gate's no-combat half fires alone), regen clamps at `initial_is_max` ceiling (Test 39), regen accumulates across a five-clean-section run and clamps at the ceiling (Test 40), and schema back-compat — a v1.20-era book validates clean against the v1.21 schema (Test 41). The schema-title assertions in tests 14 / 16 / 19 / 21 / 27 were bumped v1.20.0 → v1.21.0 to track the schema title.
+
+**Schema-additive verification:** the existing `lw_01_flight_from_the_dark.json` validates against the v1.21 schema with no change in error count (the LW1 book does not yet reference the new primitives — that wire-up lands in the follow-up books-side commit; verifying back-compat is the relevant check here, not new-mechanism uptake).
+
+**Books-side follow-up (separate sub-agent commit):**
+- `lw_01_flight_from_the_dark.json`: replace the `parser_notes` workaround on the Healing ability with a canonical `triggered_effects[{trigger: on_section_exit, condition: {and: [section_had_no_endurance_loss, section_had_no_combat]}, effect: {type: modify_stat, stat: ENDURANCE, amount: 1, reason: 'Healing discipline'}}]`. The chargen-pickable ability shape and source-text-derived description stay unchanged.
+- `known_issues.md`: retire the Healing-discipline-unenforced entry.
+
+**Files touched:** `codex.schema.json` (title bump v1.20.0 → v1.21.0; condition.type enum + two new types; trigger enum + one new type; description blocks extended), `cli-emulator/play.js` (version bump 3.15.0 → 3.16.0; new initialState slot `sectionEntrySnapshot`; navigateTo top-of-function on_section_exit dispatch + snapshot recording; on_combat_end paths mark hadCombat; new evalCondition cases + describeCondition cases; compactState round-trips snapshot), `index.html` (version bump 3.15.0 → 3.16.0; mirror of all play.js changes; combatFlee marks hadCombat; loadGame preserves restored snapshot across the resume navigate), `tests/run.js` (seven new tests; test count 34 → 41; schema-title assertions bumped), `gamebook_codex_v2.md` (title bump v2.27.0 → v2.28.0; Rule 36 "v2.28.0 extension" subsection added after the Known-follow-up subsection — historical text preserved verbatim, the v2.28.0 subsection documents the trigger, conditions, snapshot bookkeeping, schema-additive guarantee, canonical worked example, and verification clauses; Version Identifiers footer bump), `package.json` (version bump 3.15.0 → 3.16.0), `CHANGELOG.md` (this entry).
+
+---
+
 ## v2.27.0 / GBF v1.20.0 / emulators v3.15.0 / package.json v3.15.0
 
 **Schema-additive ship.** Rule 36 (item / ability / talent / enemy effects with triggers) graduates from candidate (Chat #32 v2.26.0) to shipped. Closes the 11 open design questions captured at the candidate stage; lands the `triggered_effects[]` schema, both reference emulator handlers, six new composition tests, decision-table rows, the Section 10 pre-output checklist entry, and Warlock audit wave 1 in a single ship vehicle.
