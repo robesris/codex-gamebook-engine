@@ -705,6 +705,33 @@ When the same enemy type appears in multiple sections and each section states th
 
 The modifier lives on the combat event because that is where the section text describes it. If a different section has a different Vordak encounter that also states the -2 rule, that section's combat event gets its own `combat_modifiers` entry independently. The duplication is intentional: each encounter is self-contained, and the encoding should be derivable from the section text alone without needing to know what other sections say about the same enemy type. The `enemies_catalog` entry for this Vordak carries stats and identity only — no `intrinsic_modifiers` — because the combat rule is stated per-section, not delegated to a catalog.
 
+**Worked example: opposite-sign, disjoint-duration modifier pair (LW1 §283).** Some sections describe a bonus active only in the first round paired with a penalty active from round 2 onward. The canonical LW1 example is §283 (the player gets the drop on a Vordak): *"Due to the surprise of your attack, you may add 2 points to your COMBAT SKILL for the first round of combat only. Unless you have the Kai Discipline of Mindshield, deduct 2 points from your COMBAT SKILL for the second and subsequent rounds of fighting, for the creature is attacking you with the power of its Mindforce as well as with a large black mace!"* The two clauses describe two distinct combat-math effects with disjoint round-windows; the canonical encoding is two `combat_modifiers[]` entries with opposite-sign deltas and disjoint `duration` values:
+
+```json
+"combat_modifiers": [
+  {
+    "target": "player.attack",
+    "delta": 2,
+    "duration": "first_round",
+    "reason": "Surprise attack on the Vordak"
+  },
+  {
+    "target": "player.attack",
+    "delta": -2,
+    "duration": "after_first_round",
+    "condition": {
+      "type": "not",
+      "condition": { "type": "has_ability", "ability": "Mindshield" }
+    },
+    "reason": "Vordak Mindforce attack from round 2 onward (negated by Mindshield)"
+  }
+]
+```
+
+Both entries are frozen at combat start (conditions evaluated once); the emulator applies each only during the rounds matching its `duration`. The two entries are independent — neither references the other — so the round-1 surprise bonus fires unconditionally and the round-2+ Mindforce penalty fires only when the player lacks Mindshield. A Mindshield player sees +2 in round 1 and 0 in subsequent rounds; a non-Mindshield player sees +2 in round 1 and -2 from round 2 onward. The shape generalises to any "bonus for the opening exchange, penalty for the sustained fight" pattern: encode each clause as its own entry, give each entry the `duration` that names its window (`"first_round"` / `"after_first_round"`), and let composition handle the per-round arithmetic. Do NOT collapse the two into a single entry with a runtime round-aware computation — that obscures the source-text mapping and forfeits the emulator's per-round modifier-log display.
+
+**Condition shapes: `has_item` vs. `has_equipped_in_slot`.** Both conditions check inventory state, but they answer different questions and they diverge in a specific case. `has_item` returns true when the item is anywhere in `state.inventory` regardless of equipped state; `has_equipped_in_slot` returns true only when the named item (or any item from that slot) is currently occupying its equipment slot. Default to `has_item` for "if you do not have X" / "if X is in your possession" phrasing — the natural read of "do not have" is inventory presence, not active wielding. The canonical LW1 example is §170's Burrowcrawler fight: *"If you do not have a torch, deduct 3 points from your COMBAT SKILL during this fight."* The encoding gates on `not has_item(torch)` because the rule asks whether the Torch is in the player's possession (in the Backpack), not whether it is currently held in the weapon slot. Use `has_equipped_in_slot` only when the source text specifically demands the item be actively equipped — the canonical example is LW's standing no-weapon rule (Rule 23): *"If you enter combat with no weapons…"* — where the question is whether the weapon slot is occupied, not whether the player is carrying spare weapons in the Backpack. The two conditions diverge when the player has the item in inventory but not equipped: `has_item` returns true, `has_equipped_in_slot` returns false. A parser writing `has_equipped_in_slot` where `has_item` is correct under-fires the rule for any player who carries the item without wielding it; the reverse error over-fires for any player who has the item stashed but isn't actively using it. Source-text phrasing is the canonical signal: "have X" / "if you do not have X" / "X is in your Pack" → `has_item`; "wielding X" / "with no weapon in hand" / "X is equipped" → `has_equipped_in_slot`.
+
 **What's NOT in scope for `combat_modifiers` (use a different mechanism):**
 
 - **Damage scaling (immunities, resistances, weaknesses).** "Enemy is immune to non-silver weapons," "takes half damage from blunt attacks," "takes double damage from fire." These are multiplicative effects on damage *output* from the round_script, not additive deltas on *inputs* to it. Encode them as `damage_interactions` — see Rule 18.
@@ -1017,6 +1044,19 @@ Motivating real-world case: LW1 section 267 has this exact compound-pickup patte
 
 **Relationship to Rule 7 (parser-driven workflow).** Rule 7 describes *how* to scan for pickup phrasing mechanically (regex / keyword search in a parser script). Rule 20 describes *what* vocabulary to scan for and establishes the cross-verification pass as a hard gate. Rule 7 is the method, Rule 20 is the specification. During comprehensive reviews of existing book JSONs that were parsed under an older codex version, Rule 20 is the rule to apply section-by-section, flagging and fixing silently-missing loot events. The vocabulary list in Section 9.5 Phase C is indicative and should be kept in sync with Rule 20; when they differ, Rule 20 is canonical.
 
+**Event ordering: optional pickup before combat.** When a section contains both an item grant and a subsequent combat — the player finds a weapon or piece of equipment in the same section where a fight occurs — the `add_item` event MUST come BEFORE the `combat` event in the section's `events[]` array. The narrative order in the source text is the canonical order in the encoding: the book describes finding the item, then describes the fight, and the encoding mirrors that sequence. The canonical LW1 example is §255: *"The creature that you now face is a Gourgaz… The Prince's Sword lies at your feet. You may pick up and use this weapon if you wish. The Gourgaz is about to strike at you — you must fight him to the death."* Correct encoding:
+
+```json
+"events": [
+  { "type": "add_item", "item": "prince_sword", "optional": true,
+    "reason": "The Prince's Sword lies at your feet; book says 'You may pick up and use this weapon if you wish' — pick up before the Gourgaz fight so the player can wield it." },
+  { "type": "combat", "enemies": [{ "ref": "gourgaz_s255" }], "win_to": 82,
+    "special_rules": "This creature is immune to Mindblast." }
+]
+```
+
+Reversing the order would grant the Prince's Sword only AFTER the Gourgaz combat resolves — the player would fight the creature without the weapon the section's narrative explicitly handed them, and any Rule 19 `stat_modifier` the sword carries (a weapon bonus, an enchantment) would not feed into the combat's frozen modifiers. The encoding is wrong in a way the emulator cannot detect: the combat completes, the item is granted, the player walks out of the section "having" the sword, but the in-section fight ran on the wrong weapon configuration. Optional grants (`optional: true` or with a `condition`) preserve the player's choice but should still appear in narrative order — the emulator asks whether to accept the item before dispatching the combat, so the player's decision is made with the upcoming fight already framed by the section's prose. The rule of thumb: when the source-text narrative grants loot before describing the combat, the `events[]` array preserves that order verbatim; pre-combat loot is `add_item` first, post-combat loot is `add_item` after the `combat` event. Reverse the order ONLY if the source text itself reverses it ("you defeat the creature; on its corpse you find a sword" — `combat` first, `add_item` second), in which case the encoding faithfully tracks the narrative.
+
 ### Rule 21: Provisions / Meals / Rations Are a Resource Counter, Not an Inventory Item
 
 When a book tracks a per-adventure food supply — whatever the book calls it (Meals, Provisions, Rations, Food, Supplies) — the canonical GBF encoding is a **single resource counter at `state.provisions`**, not an item in `items_catalog` or a quantity in `state.inventory`. The counter is configured via the `rules.provisions` block (`enabled`, `starting_amount`, `heal_amount`, `heal_stat`, `when_usable`, `display_name`), and the emulator auto-initialises `state.provisions = rules.provisions.starting_amount` at the start of character creation so the counter has the right value even when `character_creation.steps[]` omits an explicit `set_resource`. The book's term for the counter is carried by `rules.provisions.display_name` (`"Meals"` for Lone Wolf, `"Rations"` for some Fighting Fantasy variants, `"Food"` for some AD&D) — it is a display label only, never a slot name.
@@ -1103,6 +1143,32 @@ At every combat start the emulator evaluates the condition against current state
 **What NOT to encode as a standing modifier.** Per-encounter rules that only fire in one specific section (surprise attack, enemy-specific monologue), per-enemy-type rules (Vordak's Mindblast suppression across every Vordak encounter), and modifiers that compose (a +2 buff in §50 that stacks on top of a -4 standing penalty) — these belong at their natural level. Standing modifiers are the *book-wide* level; use per-section and per-enemy for the other two.
 
 **Verification.** Walk the book's rules section looking for any combat rule phrased as a universal statement ("if you enter combat with…", "whenever you fight…", "while carrying X, your attacks…", "in any combat, the following applies"). Every such rule maps to a `rules.combat_system.standing_modifiers[]` entry. Re-scan all combat events in the book: if the same modifier appears on many (more than ~3) combat events, consider whether it's actually a standing rule that was re-encoded per-section because the standing slot didn't exist at parse time. Consolidate into the standing list, or leave per-section with a note if the rule genuinely varies by encounter.
+
+**How standing, per-section, and per-enemy modifiers compose.** All three modifier layers — `rules.combat_system.standing_modifiers[]` (Rule 23), the combat event's `combat_modifiers[]` (Rule 17 per-section), and each enemy's `enemies_catalog[id].intrinsic_modifiers[]` (Rule 17 per-enemy-type) — are merged into a single list at combat start. The emulator evaluates each entry's `condition` independently against current state, freezes the surviving deltas onto the combat's `appliedModifiers` list, and applies them additively to player / enemy fields before every round's `round_script` invocation. There is NO special handling for opposing-sign entries — a +2 from a standing modifier and a -2 from a per-enemy intrinsic on the same `target` produce a net 0 delta on that field for that fight. This additive composition is the canonical way to encode "an ability grants a bonus EXCEPT against certain enemies": the standing modifier carries the positive bonus gated on the player having the ability, and each excepting enemy carries a per-enemy `intrinsic_modifier` with the opposite-sign delta gated on the same `has_ability` condition. The two layers compose naturally; the standing entry does NOT need a per-enemy carve-out condition listing the immune creatures (that would push enemy-identity knowledge up into the rules section, which the rules section does not have). The cancellation lives in the catalog, where the enemy's identity is the natural primary key.
+
+**Anti-pattern: per-encounter rules in the `enemies_catalog`.** A rule stated only in a single section's combat narrative — and not as a property of the enemy creature type across the book — is a per-encounter modifier and belongs on the combat event's `combat_modifiers[]` (Rule 17), NOT on the enemy's `intrinsic_modifiers[]`. The distinguishing question: does the SAME rule apply across EVERY appearance of this enemy across the whole book (intrinsic — "the Gourgaz at §255 is immune to Mindblast, and so is every other Gourgaz the book introduces"), or is it scoped to this one section's narrative (per-encounter — the §283 Vordak's surprise-attack bonus was specific to the player's situation in that section, not a property of Vordak-the-creature-type)? Promoting a per-section rule to `intrinsic_modifiers` makes it apply at every encounter with the enemy type, including sections where the source text does not describe the rule — silent drift between the encoding and the book's actual prose. The reverse error (encoding a true intrinsic rule per-section) is recoverable through duplication, which is annoying but visible; the catalog-leak error is invisible because the rule applies "for free" wherever the enemy is referenced, and a parser reviewing one section at a time will not notice the extra modifier coming from the catalog. When in doubt, encode per-section; consolidation into `intrinsic_modifiers` happens only on clear evidence the trait is a property of the enemy type (typically the book states the immunity as a creature property in a rules-section monster paragraph, or the same wording repeats across every section the enemy appears in).
+
+**Worked example: Mindblast standing bonus + per-enemy immunity cancellation.** Lone Wolf's Mindblast Kai Discipline grants `+2 COMBAT SKILL` in every combat, except against creatures the book flags as immune ("This creature is immune to Mindblast" — LW1 §133 Winged Serpent, §170 Burrowcrawler, §255 Gourgaz, §342 Vordak). The canonical Rule 23 + Rule 17 encoding splits the rule across two layers:
+
+```json
+// rules.combat_system.standing_modifiers[]
+{
+  "target": "player.attack",
+  "delta": 2,
+  "condition": { "type": "has_ability", "ability": "Mindblast" },
+  "reason": "Mindblast psychic combat bonus"
+}
+
+// enemies_catalog["winged_serpent_s133"].intrinsic_modifiers[]
+{
+  "target": "player.attack",
+  "delta": -2,
+  "condition": { "type": "has_ability", "ability": "Mindblast" },
+  "reason": "Immune to Mindblast"
+}
+```
+
+A Mindblast-equipped player fighting the Winged Serpent: standing fires (+2 on `player.attack`), intrinsic fires (-2 on the same target), net 0 — Mindblast contributes nothing for this fight, which is what "immune" means. A Mindblast-equipped player fighting a non-immune enemy (a regular Giak): standing fires (+2), no intrinsic entry exists on the enemy, net +2 — the player sees the full Mindblast bonus. A non-Mindblast player fighting either enemy: both `has_ability` conditions fail, neither entry contributes, net 0 — Mindblast is not available, so neither the bonus nor its cancellation applies. The pattern generalises: any "ability X grants Y unless the enemy is immune to X" rule encodes the bonus as a standing modifier gated on `has_ability(X)` and the immunity as a per-enemy intrinsic with the opposite-sign delta gated on the same `has_ability(X)` condition. The standing entry NEVER carries an enemy-identity carve-out (`condition: {not: {enemy_is: ...}}` is not the right shape — it pushes enemy identity into the rules block where it does not belong); the cancellation lives in the catalog where enemy identity is the row key.
 
 ### Rule 24: `remove_inventory_category` for Whole-Category Inventory Loss
 
@@ -2252,6 +2318,22 @@ The audit surface is wider than this initial pass; sub-agents will need a thorou
 - **Rule 32** (per-round damage caps) — frozen-at-combat-start caps on combat events / enemies. Rule 36's `damage_cap` effect is per-round trigger-evaluated, on items / abilities / talents / enemies. Pipeline-ordering and tightest-cap-wins composition documented above.
 - **Rule 33** (item-state flags) — Rule 36 entries that fire `set_flag` / `clear_flag` compose with Rule 33's flag-state semantics; no conflict.
 - **Rule 34** (auto-applied chargen effects on abilities and talents) — chargen-only `effects[]` on the same placements as Rule 36's run-time `triggered_effects[]`. Separate fields, separate semantics, no migration required. See "Coexistence" above.
+
+**Known follow-up: section-exit triggers without combat (LW1 Healing Discipline).** The Lone Wolf Healing Kai Discipline grants +1 ENDURANCE per numbered section the player passes through in which they were NOT involved in combat. The mechanic is canonical Rule 36 territory in shape (a triggered effect on an ability that fires on a lifecycle phase and dispatches a `modify_stat`), but the v2.27.0 trigger taxonomy does NOT cover it: the trigger union lacks `on_section_exit_if_no_combat`, and the condition union lacks a `section_had_no_combat` predicate. The natural firing point is at section exit, AFTER the emulator has observed whether any combat resolved in the section — neither of the existing triggers fits cleanly:
+
+- `on_section_enter` fires too early (the section's combat, if any, has not yet been dispatched, so the "no combat occurred" predicate cannot be evaluated).
+- `on_combat_end` fires only in sections that have combat (the opposite of what the rule needs).
+- `on_section_exit` is not in the candidate's 8 + 1 taxonomy at all; even if it were added, the condition union does not currently expose a `state.combat_resolved_this_section` predicate, so the "no combat" half of the rule has no expressible gate.
+
+Until the schema is extended with either (a) a dedicated `on_section_exit_if_no_combat` trigger or (b) a generic `on_section_exit` trigger paired with a new `not_in_combat_this_section` condition type, encode the LW1 Healing mechanic ONLY in `rules.abilities[Healing].mechanical_effect` and the ability's `description` as text-only narrative documentation, and add a `parser_notes` entry (if the book carries one) flagging the mechanic as unsupported by the current emulators. The discipline still APPEARS at chargen — the player can pick it and the book's text describes it correctly — but no per-section state mutation fires.
+
+**Do NOT attempt workarounds.** Two workaround patterns are intuitive and both produce incorrect state:
+
+1. **`on_section_enter` + Rule 15 condition gating on "no combat this section."** The condition cannot detect FUTURE events in the same section — the section's combat dispatches AFTER section_enter. A parser attempting this workaround fires the +1 regen on every section entry; if the section then dispatches a combat that reduces the player below the regen value's threshold, the player receives a heal they should not have gotten. The check needs to run after the section's events, not before.
+
+2. **`script` events or `set_flag` patterns at section-level.** The emulator does not expose a post-combat / pre-navigation hook at the section level for an ability's effect to ride on. A `script` event placed after the combat in the section's `events[]` would fire on EVERY player passing through that section regardless of ability state, which is the wrong dispatch model — the regen is a property of the Healing ability, not the section. Worse, the workaround would need to be copied into every numbered section in the book (or at minimum every non-combat section), which is the same "spread one effect across N sections" anti-pattern Rule 36's design framing (ii) was created to avoid; the canonical home for the effect is the ability, not each section.
+
+The clean fix is a schema extension: add `on_section_exit_if_no_combat` to the trigger enum (or `on_section_exit` plus `section_had_no_combat` to the condition union; the former is narrower and fits this single use case, the latter generalises if other mechanics surface that need it). The Healing migration lands when the extension lands — file as a Rule 36 follow-up extension request, not as a freelance trigger-name addition in a book. Until then, LW1's Healing remains a documented gap: the description text is faithful to the source rules, the chargen-pickable ability exists, and the +1 per-section regen is unenforced. A future codex iteration that ships the trigger extension can migrate Healing in a single sub-agent pass without needing to touch the ability's source-text-derived description.
 
 1. Universal Gamebook Concepts
 2. Output Schema Specification
