@@ -397,6 +397,68 @@ The rule: for every combat event, open the section that introduces the enemy, fi
 
 If you find yourself writing the same special_rules string on multiple enemies, audit whether the book actually says that for each of them, or whether you're templating. Templating is an error.
 
+**Combat-event shape canonicalization: singleton uses `enemy_ref`; multi-entrant uses `enemies[] + mode`.** The schema admits two distinct shapes for the `combat` event's enemy reference, and the choice between them is determined by the source-text mechanic, not by parser preference. A combat against a single enemy uses the flat `enemy_ref: "<catalog_id>"` field directly on the combat event; a combat against two or more enemies fought **consecutively in a single continuous engagement** (the player engages enemy 1, and when enemy 1 falls the player continues into enemy 2 carrying whatever ENDURANCE / HP / damage state remained from the first exchange) uses `enemies: [{ref: "<id1>"}, {ref: "<id2>"}], mode: "sequential"`. The two shapes are NOT interchangeable encodings of the same mechanic; they describe different fights.
+
+The discriminating test is whether the source text frames the fight as **one continuous combat against multiple foes** ("You must fight these two Doomwolves in succession, without resting between them," "The three guards attack as one — fight them as a single combat with their combined ENDURANCE"). That is the multi-entrant case and takes `enemies[] + mode`. A section that simply *contains* multiple separate `combat` events, each with its own win/lose paths, is **not** multi-entrant — each combat event is its own singleton against a single enemy and takes its own `enemy_ref`. The number of combat events in the section's `events[]` is independent of the shape question: a section can have one multi-entrant combat against three foes, three singleton combats against one foe each, or any other combination, and the shape of each combat event is decided by that event's own mechanic.
+
+The two shapes have slightly different emulator paths: the singleton path reads `enemy_ref` and loads one enemy data object; the multi-entrant path walks the `enemies[]` array, queues each entry, and advances through them as each falls. A fresh parser that emits `enemies: [{ref: "<id>"}], mode: "sequential"` for a singleton fight produces validation-passing JSON that is structurally heavier and routes through the multi-entrant code path unnecessarily. Canonicalize on `enemy_ref` for every single-enemy combat. The codex's worked examples in Rule 8, Rule 17, Rule 23, and elsewhere uniformly use `enemy_ref` for singleton illustrations; multi-entrant examples (when they appear) are explicitly labelled as such and use `enemies[] + mode` to demonstrate the consecutive-fight mechanic. Existing books whose canonical encoding uses `enemies[] + mode` for every combat (including singletons) reflect a pre-canonicalization style that the production line accepts as legacy but does not produce on fresh parses or sub-agent re-runs.
+
+**Post-combat player-fork: `combat.win_to: null` + section-level choices.** The standard combat-event shape carries `win_to: <section>` and `lose_to: <section>` — the emulator auto-advances to `win_to` after victory and to `lose_to` after defeat, and the section's `choices[]` is typically empty (or absent) because the fight's outcome decides the next section without further player input. But some sections present a **player choice immediately after victory** — the source text reads "If you win the fight, you may either flee through the door (turn to A) or pursue the wounded enemy (turn to B)." This is not a deterministic post-combat advance; it is a player decision that the emulator must surface as choices. The canonical encoding sets `combat.win_to: null` explicitly (signalling "no auto-advance after victory; fall through to section-level choices") and places each post-victory option as a normal entry in the section's `choices[]` array, each with its own `target`. The emulator handles `combat.win_to: null` by NOT auto-advancing after victory; instead it proceeds the same way it would for any non-combat section, presenting the `choices[]` to the player.
+
+Worked example: §X ends in combat against a single Doomwolf, and after victory the player may either flee (turn to §A) or pursue (turn to §B). The encoding:
+
+```json
+{
+  "events": [
+    {
+      "type": "combat",
+      "enemy_ref": "doomwolf_sX",
+      "win_to": null,
+      "lose_to": 99,
+      "special_rules": null
+    }
+  ],
+  "choices": [
+    { "text": "If you win and wish to flee through the door, turn to A.",  "target": "A", "condition": null },
+    { "text": "If you win and wish to pursue the wounded beast, turn to B.", "target": "B", "condition": null }
+  ]
+}
+```
+
+The `lose_to` still carries the defeat-path target (§99) so loss is deterministic; only the victory path is forked. The `win_to: null` is **explicit**, not omitted — an absent `win_to` is a schema-validity failure for combat events, and a parser that drops the key rather than setting it to `null` produces a different shape than the canonical post-fork pattern. This is the same mechanism the codex documents for "events between combats" (where `win_to: null` lets the emulator continue through subsequent events in `events[]` after a fight resolves), applied to the player-choice case: after victory the emulator falls through to the section's choices instead of auto-advancing.
+
+A parser encoding "If you win, you may choose…" must use this shape rather than synthesizing a sub-section as a post-combat landing pad (the legacy pre-Rule-22 workaround for branching state). Sub-sections for post-combat player forks are obsolete; the `win_to: null` + section-level choices shape is the canonical encoding for this mechanic.
+
+**Anti-pattern: don't duplicate `combat.win_to` with a redundant `choices[]` entry.** The mirror error of the post-combat-fork pattern is treating *every* combat as if it needed both a `win_to` and a parallel "If you win, turn to N" choice entry. When a section ends in a single combat against a single enemy with a single deterministic post-victory destination, the encoding is `combat.win_to: N` and that is sufficient — the emulator advances to §N automatically after victory and the player never needs to make a choice. A parser that ALSO emits `choices: [{text: "If you win the fight, turn to N", target: N, condition: null}]` is duplicating the navigation path: the choice's target matches the combat's `win_to`, so the player is routed to §N regardless of which path runs, but the player should never see the choice in the first place because the combat already decided the route.
+
+The narrative phrase "If you win the fight, turn to N" maps to `combat.win_to: N`, NOT to a separate `choices[]` entry. The `choices[]` array is for **player decisions** ("If you wish to do X, turn to A; if you wish to do Y, turn to B"), not for **automatic post-combat advancement**. Encoding the post-victory advance as a choice misframes the mechanic: it suggests the player has a decision to make after winning when in fact the book gives only one path.
+
+Wrong:
+
+```json
+{
+  "events": [
+    { "type": "combat", "enemy_ref": "giak_sX", "win_to": 270, "lose_to": null, "special_rules": null }
+  ],
+  "choices": [
+    { "text": "If you win the fight, turn to 270.", "target": 270, "condition": null }
+  ]
+}
+```
+
+Right:
+
+```json
+{
+  "events": [
+    { "type": "combat", "enemy_ref": "giak_sX", "win_to": 270, "lose_to": null, "special_rules": null }
+  ],
+  "choices": []
+}
+```
+
+**Exception (post-combat player fork — see above).** If the source text presents a genuine post-victory choice ("If you win, you may flee to A or pursue to B"), the post-combat-fork pattern applies: `combat.win_to: null` plus multiple `choices[]` entries. The anti-pattern is specifically duplicating a *single deterministic* win path with a redundant choice. The two patterns are distinguished by what the source text actually says: one route after victory → `win_to: <route>`, no choices; multiple routes after victory → `win_to: null`, all routes as choices. Never both: never `win_to: <route>` plus a redundant choice that restates the same route, and never `win_to: null` paired with zero choices (which would leave the player stranded on the section with no exit after victory).
+
 ### Rule 9: Multi-Event Sections
 
 A single section often contains several mechanical effects in one incident. For example: "the explosion throws you against the wall; you lose 6 ENDURANCE, and your COMBAT SKILL is permanently reduced by 1 from the injury. The Vordak Gem shatters." This section has three events:
@@ -1205,6 +1267,21 @@ That single event replaces what would otherwise be 10-20 `remove_item` events on
 **When NOT to use it.** The category primitive is correct for "lose the whole bag / the whole category" events; it is NOT correct for selective loss ("you lose any one Special Item of your choice"), for partial loss ("you lose half your Meals"), or for conditional loss ("any Special Item that is made of iron is rusted and destroyed"). Selective loss uses `choose_items` (loss variant — schema does not yet have this event, tracked separately); partial loss uses `modify_stat` on a resource counter; conditional loss decomposes into per-id `remove_item` events gated on conditions, or a `script` event that walks the catalog. Rule 24 is scoped narrowly: a single inventory category, removed wholesale, no selection and no gating.
 
 **Relationship to equipment slots.** When `remove_inventory_category` removes an item that is currently equipped, the emulator auto-unequips it (same hook as `remove_item`). The slot becomes empty; the player's `player.equipment` map no longer carries that item. This is important for Rule 19 interactions: losing the Backpack might also mean losing the Helmet or weapon that was stored inside it, and those items' equipped-state bonuses should drop off when the items are removed. The emulator handles this automatically — parsers and encoding authors do not need to emit companion unequip events.
+
+**Relationship to the provisions counter (Rule 21).** `remove_inventory_category` walks `state.inventory` and drops every item whose `items_catalog[id].inventory_category` matches the event's `category` field — but it does NOT touch resource counters held outside `state.inventory`. The provisions counter (Rule 21: a single `state.provisions` slot, not an item in `items_catalog`) is the canonical case: Meals / Rations / Provisions are narratively stored inside the Backpack ("you carry your Meals in the Pack") but mechanically tracked as a scalar on `state.provisions`, so `remove_inventory_category: backpack` will strip the inventoried items in the backpack category and leave `state.provisions` at whatever value it had. When the source text describes losing the Backpack **and the things inside it**, the encoding requires BOTH events — the category removal AND a companion `modify_stat` on `provisions` to zero the counter. Emit them as adjacent events on the same branch:
+
+```json
+{ "type": "remove_inventory_category", "category": "backpack",
+  "reason": "The Kraan rips away your Backpack — you lose the Pack and all its Equipment" },
+{ "type": "modify_stat", "stat": "provisions", "amount": -99,
+  "reason": "Your Meals were stored in the lost Backpack" }
+```
+
+The `-99` (or any large negative number bigger than the player's possible maximum provisions count) effectively zeros the counter; the emulator clamps non-negative stats at zero, so a `-99` delta against a current value of, say, 3 produces `state.provisions = 0`, not `-96`. The pattern intentionally uses a magnitude-overshoot delta rather than a hard `set_stat` because the player's actual provisions at the moment of loss is unknown to the parser (it depends on prior eats), and any reset-to-zero formulation that depended on knowing the current value would be brittle. The `-99` idiom is the canonical "zero the counter" delta for resource counters that auto-clamp at zero.
+
+Worked example — LW1 §188 (the Kraan-strips-Backpack section). The source text reads "the Kraan has ripped away your Backpack. You have lost the Pack and all the Equipment that was inside it." The canonical reading is that "Equipment inside the Pack" includes the Meals counter (Meals are narratively carried in the Backpack per the LW1 rules section), so the encoding emits both events in sequence on the §188 branch that fires the loss. A parser that emits only the `remove_inventory_category` event will silently leave the provisions counter at its previous value — the player will appear to have lost the Backpack and every inventoried item in it, but will still be carrying Meals "loose" with no Backpack to hold them, which contradicts the source-text framing.
+
+**Generalization (non-item resources don't auto-clear with their narrative container).** Any time a book uses a Rule 21 resource counter (`state.provisions`, declared-stat currency, or any other scalar slot configured via `rules.provisions` or the schema's resource-slot mechanism) that is narratively stored inside an inventory category that the book later strips wholesale, the counter requires its own `modify_stat` reset event alongside the `remove_inventory_category`. The codex's encoding model deliberately separates "items in inventory" (visited by category-walks) from "resource scalars" (slot-addressed only); this is a feature, not a bug — most resource counters (gold, currency, EXPERIENCE) are NOT narratively bound to any inventory category and should NOT vanish when a category is stripped. The pairing rule applies *only* when the source text frames the resource as physically carried inside the lost container ("the Meals were in the Pack"); for resources stored elsewhere or stored abstractly (a currency tracked on a character sheet, EXPERIENCE earned for the journey), `remove_inventory_category` correctly leaves them alone.
 
 **Verification.** Every `remove_inventory_category` event carries a valid `category` string that matches at least one `items_catalog[id].inventory_category` value in the book. If the category doesn't match any item, the event is a no-op (not an error, but usually a parser bug — the author meant a category that doesn't exist). During comprehensive review, cross-check the category value against the catalog to catch typos. Also: if a section's text describes losing "the Pack and all its Equipment" but the encoding is a sequence of `remove_item` events rather than `remove_inventory_category`, that's a pre-v1.8 encoding that should be migrated to the new shape during the next sub-agent pass.
 
@@ -2334,6 +2411,85 @@ Until the schema is extended with either (a) a dedicated `on_section_exit_if_no_
 2. **`script` events or `set_flag` patterns at section-level.** The emulator does not expose a post-combat / pre-navigation hook at the section level for an ability's effect to ride on. A `script` event placed after the combat in the section's `events[]` would fire on EVERY player passing through that section regardless of ability state, which is the wrong dispatch model — the regen is a property of the Healing ability, not the section. Worse, the workaround would need to be copied into every numbered section in the book (or at minimum every non-combat section), which is the same "spread one effect across N sections" anti-pattern Rule 36's design framing (ii) was created to avoid; the canonical home for the effect is the ability, not each section.
 
 The clean fix is a schema extension: add `on_section_exit_if_no_combat` to the trigger enum (or `on_section_exit` plus `section_had_no_combat` to the condition union; the former is narrower and fits this single use case, the latter generalises if other mechanics surface that need it). The Healing migration lands when the extension lands — file as a Rule 36 follow-up extension request, not as a freelance trigger-name addition in a book. Until then, LW1's Healing remains a documented gap: the description text is faithful to the source rules, the chargen-pickable ability exists, and the +1 per-section regen is unenforced. A future codex iteration that ships the trigger extension can migrate Healing in a single sub-agent pass without needing to touch the ability's source-text-derived description.
+
+---
+
+### Rule 37: Multi-Entrant Section Pattern (Predecessor `set_flag` + Variant-Section `has_flag` Choices)
+
+**The rule:** Some sections in a gamebook can be reached from multiple distinct predecessor paths, and the section's narrative — or, more commonly, its choices — varies based on which predecessor the player came from. The canonical encoding uses **predecessor-set flags**: each predecessor section that reaches the multi-entrant section emits a distinctive `set_flag` (or `clear_flag`) event before the navigation, and the multi-entrant section gates its variant `choices[]` (or, when narrative branches are needed, its variant events) on `has_flag` conditions. The pattern uses only existing primitives — flags (the schema's standard book-state slots), section events (Rule 9), and choice conditions (Rule 15) — composed deliberately so that the multi-entrant section "knows" how the player arrived without the emulator needing any special-cased "previous section" concept.
+
+**The shape.** Three parts work together:
+
+1. The **predecessor section(s)** each set a distinctive book-scoped flag via a `set_flag` event in their `events[]` *before* the navigation that lands the player on the multi-entrant section. The flag name should encode both the book id and the predecessor identity (`<bookid>_came_from_<N>`) so that nothing collides across books or between unrelated multi-entrant sections within one book.
+2. **Every other predecessor** that *could* reach the multi-entrant section but should NOT activate the variant emits the corresponding `clear_flag` event (or the variant section's gating uses `has_flag` predicates that default-false on an unset flag, which is the natural state). The `clear_flag` is canonical when the multi-entrant section is reachable via revisit and the flag could otherwise persist across journeys; for one-shot entries, leaving the flag unset on the default-arrival predecessors is sufficient.
+3. The **multi-entrant section** writes `has_flag` (or `not has_flag`) conditions on each of its variant choices (or events, if narrative-level variation is needed) so that only the choices appropriate to the actual entry path render. When the same logical option appears with different targets per path — the common case for "the way you came" rephrasings — encode each variant as a separate `choices[]` entry, each gated on the matching `has_flag` or `not has_flag` condition.
+
+**Canonical worked example — LW1 §147 + §42 + §28.** Section §147 (a mossy hut where the player is hungry and must eat a Meal) is reachable from two distinct predecessors: §42 (a crossroads where the player chose "west") and §28 (a path junction where the player chose "south"). LW1's footnote 5 on §147 says: *"If you have just reached this section for the first time from Section 42, read the last sentence and two choices as follows: '…If you wish to follow it, turn to 28. If you wish to return the way you have come, turn to 42.'"* The choices that the printed page shows (suitable for the §28-arrival, the "default" path) are "follow it → 42, return → 28"; the §42-arrival path swaps the targets to "follow it → 28, return → 42."
+
+The canonical encoding:
+
+**§42** emits the marker before navigating:
+
+```json
+"42": {
+  "events": [
+    { "type": "set_flag", "flag": "lw1_came_from_42",
+      "reason": "Mark §42-arrival for §147's footnote-5 narrative variant" }
+  ],
+  "choices": [
+    { "text": "Or if you prefer to go west, turn to 147.", "target": 147, "condition": null }
+    /* ...other §42 choices... */
+  ]
+}
+```
+
+**§28** explicitly clears the marker (so a §147-revisit that came via §28 doesn't carry residue from a prior §42-arrival):
+
+```json
+"28": {
+  "events": [
+    { "type": "clear_flag", "flag": "lw1_came_from_42",
+      "reason": "§28-arrival is the default-printed-text path; clear any prior §42 marker" }
+  ],
+  "choices": [
+    { "text": "If you wish to head south, turn to 147.", "target": 147, "condition": null }
+    /* ...other §28 choices... */
+  ]
+}
+```
+
+**§147** carries both variants in its `choices[]`, each gated on the flag:
+
+```json
+"147": {
+  "events": [
+    { "type": "eat_meal", "required": true, "penalty_stat": "ENDURANCE", "penalty_amount": -3,
+      "condition": { "type": "not", "condition": { "type": "has_ability", "ability": "Hunting" } } }
+  ],
+  "choices": [
+    { "text": "If you wish to follow it, turn to 42.", "target": 42,
+      "condition": { "type": "not", "condition": { "type": "has_flag", "flag": "lw1_came_from_42" } } },
+    { "text": "If you wish to return the way you have come, turn to 28.", "target": 28,
+      "condition": { "type": "not", "condition": { "type": "has_flag", "flag": "lw1_came_from_42" } } },
+    { "text": "If you wish to follow it, turn to 28.", "target": 28,
+      "condition": { "type": "has_flag", "flag": "lw1_came_from_42" } },
+    { "text": "If you wish to return the way you have come, turn to 42.", "target": 42,
+      "condition": { "type": "has_flag", "flag": "lw1_came_from_42" } }
+  ]
+}
+```
+
+A player arriving via §28 (no flag set) sees the first two choices and not the last two; a player arriving via §42 (flag set) sees the last two and not the first two. The `eat_meal` event fires the same way on both paths because it is genuinely shared — only the navigation differs.
+
+**When NOT to use it.** The flag-gated approach is right when **most of the multi-entrant section is shared** and only specific choices or local branches differ. The heuristic: if the shared content is roughly 70% or more of the section (same narrative text, same events, same most-of-the-choices), the flag-gated single section is the natural shape. If the variants diverge substantially — different narrative paragraphs for each entry path, different items granted, different events fired, different majority-of-the-choices — encode the variants as separate destination sections (e.g., §147a, §147b) and let each predecessor route to its own destination. The flag-gated approach concentrates the variant logic on a single section, which is readable when the variations are localized but becomes unreadable when nearly everything diverges.
+
+The other anti-pattern in this space is the **predecessor-side fork**: a parser might be tempted to make §42 and §28 each route to a synthesized intermediate section that then forwards to §147, with the intermediate carrying the variant choices inline. This re-introduces the legacy sub-section workaround that Rule 22 specifically displaces; the canonical primitives (flags + conditions on a single shared section) handle the pattern cleanly without synthesized intermediates.
+
+**Composition with other rules.** Rule 37 uses Rule 15 conditions (`has_flag` / `not has_flag` are first-class members of the condition union) and Rule 27's flag taxonomy (`<bookid>_came_from_<N>` flags follow the same scoping conventions as `skill_` / `talent_` / `class_` flags — book-scoped, narrative-state, not in `rules.stats[]` or `rules.abilities[]`). The flag name SHOULD be book-scoped (`lw1_came_from_42`, not bare `came_from_42`) because cross-book conflict is otherwise easy to introduce when a second book's §42 arrives at its own multi-entrant section. The flag name SHOULD NOT carry the `skill_` / `talent_` / `class_` prefix because those are reserved for player-capability flags per Rule 27; a came-from-flag is journey state, not capability state.
+
+**Verification.** When a parser encounters source text on a section like "If you came from §A, do X; if you came from §B, do Y" — or a footnote/errata that re-reads the section's choices conditionally on the entry path — the canonical encoding requires three checks: (1) each predecessor section that reaches the multi-entrant section emits the appropriate `set_flag` or `clear_flag` event before its navigation choice; (2) the multi-entrant section's variant choices each carry a `has_flag` / `not has_flag` condition naming the same flag; (3) the flag name is book-scoped (`<bookid>_came_from_<N>`) and does not collide with any Rule 27 capability prefix. If a section's choices imply path-dependence but the predecessors don't set distinguishing flags, the encoding is incomplete — a parser should add the `set_flag` events to the predecessors rather than working around the gap in the multi-entrant section's logic.
+
+---
 
 1. Universal Gamebook Concepts
 2. Output Schema Specification
