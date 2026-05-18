@@ -309,7 +309,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | Hidden-information puzzle solved from an illustration (counting objects, decoding a glyph) | Section 8.2 | `input_number` event referencing the illustration; the answer is the section to turn to |
 | Password / text entry ("speak the word of opening") | Section 8.3 | `input_text` event with the expected string |
 | Multi-enemy combat ("you face three Giaks, fight them one at a time") | Section 8.5 | A sequence of `combat` events sharing a `win_to` chain |
-| Section that just says "turn to N" with no choice and no rolls | Section 8.6 | A single `continue` event with `target: N` and no `choices[]` |
+| Section that just says "turn to N" with no choice and no rolls | Section 8.6 | A one-entry `choices[]` array with a single unconditional choice (`text: "Continue"`, `target: N`, `condition: null`) — see §8.6. There is NO `continue` event type in the schema. |
 | Mid-adventure inventory selection ("you may take any 3 items from this room") | Section 8.7 | `choose_items` event with the catalog filter |
 | Currency the book treats as a first-class character-sheet stat (GrailQuest GOLD) vs. an auxiliary resource (LW Gold Crowns) | Section 7.2 → currency-encoding section | Stat encoding (declare in `rules.stats[]`, use `set_resource` matching the stat name) vs. canonical-slot encoding (canonical lowercase `gold` slot) — pick one, never both |
 | A schema field exists but the codex didn't know to use it for this specific book's mechanic and it's a true one-off | Step 3a-2 (Targeted Fix) | Targeted Fix mode — but if you are a maintainer of a first-party book, prefer Rule 16 first |
