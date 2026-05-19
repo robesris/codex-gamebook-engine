@@ -6,6 +6,39 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.29.0 / GBF v1.22.0 / emulators v3.17.0 / package.json v3.17.0
+
+**Schema-additive ship — engine side.** Rule 11 (Starting Resources That Require Rolls Are Character Creation Steps) gains the v2.29.0 extension closing the long-standing "starting-equipment table" gap captured in LW1's chargen step 8 (the R10 starting-equipment data bug carried since Chat #2 / known_issues line 66). Ships the `roll_table` chargen action with per-result `effects[]` mirroring the `roll_dice.results[range].effects` shape from Rule 22 / schema v1.8+. The roll's matched entry fires its events through the chargen-safe handler path (`modify_stat`, `add_item`, `set_flag`, `clear_flag`, `set_resource`); the rolled value itself is ephemeral — NOT written to any stat slot. Replaces the pre-v1.22 antipattern of `roll_stat` into a scratch slot (`state.stats.starting_equipment_roll`, `state.stats.weaponskill_weapon`) whose rolled value never flowed to any pickup event. The LW1 books-side migration (chargen steps 4 + 8 → `roll_table`) lands in a separate sub-agent commit immediately after this engine ship.
+
+**Schema additions:**
+- `character_creation_step.action` enum extended with `roll_table`.
+- New optional `prompt` property on `character_creation_step` (string, mirrors `roll_dice.prompt`).
+- New optional `results` property on `character_creation_step` — map of range keys (single face values or inclusive ranges, same syntax as `roll_dice.results` keys) to `{text, effects[]}` objects. The `effects[]` array references the shared `#/definitions/event` schema; chargen-safe non-pausing event types are the only legal entries per Rule 11's v2.29.0 subsection.
+- Title bumped v1.21.0 → v1.22.0.
+
+**CLI emulator (`cli-emulator/play.js`):**
+- Version bump 3.16.0 → 3.17.0.
+- `processCreationSteps` gains a `roll_table` branch that pauses on `{type: 'character_creation_roll_table', step_index, formula, prompt, results}`.
+- New `case 'character_creation_roll_table'` in the action dispatcher: rolls the formula, looks up the matching results-map entry (single-key match preferred, inclusive-range fallback — same logic as the existing `roll_dice` results lookup at line 2592), logs the matched entry's `text`, and dispatches each effect in the matched entry's `effects[]` through `handleEvent`. Defensive guard: if an inner event returns `'pause'` or `'navigate'`, logs a warning and skips remaining effects (schema forbids interactive event types here per Rule 11's v2.29.0 subsection).
+
+**HTML emulator (`index.html`):**
+- Version bump 3.16.0 → 3.17.0.
+- New helper `findRollTableMatch(results, total)` colocated with `applyChargenEffect` — returns `{key, entry}` or null. Single-key match preferred, inclusive-range fallback.
+- Phase-1 chargen flow gains a `roll_table` branch that auto-rolls, finds the match, defers `add_item` effects to the existing phase-1 `items[]` collection (so the post-loop dedup + autoEquip handles them uniformly with the existing `add_item` action), and applies other effects via `applyChargenEffect`. Renders the matched entry's `text` and the rolled value into the chargen stat-roll display alongside the other rolls.
+- Deferred-conditional-step path gains a parallel `roll_table` branch. `add_item` effects inline dedup-add into `state.inventory` + `autoEquipOnAdd` since the phase-1 items[] post-loop has already run by deferral time.
+
+**Tests:** test count 41 → 45. Four new tests covering: `roll_table` fires effects on single-key match (Test 42, validates the canonical LW1 step-8 shape with three sample R10 outcomes — broadsword item-add, +2 provisions, +12 gold — and asserts the rolled value did NOT land in a scratch stat slot); `roll_table` fires effects on inclusive-range match (Test 43, validates the `"0-4"` / `"5-9"` range-key syntax); `roll_table` respects `character_creation_step.condition` (Test 44, the schema v1.6+ condition gate skips the roll_table step entirely when the condition is false — no pause, no effects, creation advances to next step); schema back-compat — a v1.21-era book with no `roll_table` references validates clean against the v1.22 schema (Test 45). The schema-title assertions in tests 14 / 16 / 19 / 21 / 27 / 41 were bumped v1.21.0 → v1.22.0 to track the schema title.
+
+**Schema-additive verification:** Test 45's minimal book uses `roll_stat` + `roll_resource` chargen actions and validates clean against v1.22 with zero errors. The existing maintained books (LW1, Warlock, GrailQuest, Windhammer, GyoG06, WWY) all validate clean against v1.22 with zero errors — pre-v1.22 books with no `roll_table` references see no change in error count.
+
+**Books-side follow-up (separate sub-agent commit):**
+- `lw_01_flight_from_the_dark.json`: migrate chargen step 8 (starting-equipment R10) to `roll_table` with the 10-row table from the source rules (0=Broadsword, 1=Sword, 2=Helmet, 3=Two Meals, 4=Chainmail Waistcoat, 5=Mace, 6=Healing Potion, 7=Quarterstaff, 8=Spear, 9=12 Gold Crowns). Migrate chargen step 4 (Weaponskill weapon-type R10) to `roll_table` with the conditional gate preserved (`condition: {type: has_ability, ability: Weaponskill}`); per-result `effects[]` set a per-weapon flag so downstream Rule 23 standing-modifier logic can read the selection (the sub-agent decides the exact flag shape based on what the book's downstream conditions, if any, require). Drop the `state.stats.starting_equipment_roll` and `state.stats.weaponskill_weapon` scratch slots from anywhere they appear.
+- `known_issues.md`: retire line 66 (LW1 `starting_equipment_roll` step 8 data bug). Retire line 68 (LW1 §36 `roll_dice.results[range].effects` schema extension) as stale — Rule 22 / schema v1.8+ already shipped this and §36 is already using the canonical encoding.
+
+**Files touched:** `codex.schema.json` (title bump v1.21.0 → v1.22.0; `character_creation_step.action` enum + `roll_table`; new `prompt` and `results` properties; description blocks extended), `cli-emulator/play.js` (version bump 3.16.0 → 3.17.0; new chargen pause case `roll_table`; new action-dispatcher case `character_creation_roll_table` with range-key lookup + effects dispatch via handleEvent), `index.html` (version bump 3.16.0 → 3.17.0; new helper `findRollTableMatch`; phase-1 chargen branch; deferred-conditional-step branch), `tests/run.js` (four new tests; test count 41 → 45; schema-title assertions bumped), `gamebook_codex_v2.md` (title bump v2.28.0 → v2.29.0; Rule 11 "v2.29.0 extension" subsection added — documents the action, semantics, range-key syntax, condition gating, anti-pattern, schema-additive guarantee, canonical worked example, and verification clauses; decision-table row added at the top of Critical Rules; Rule 11 verification-checklist entry extended with bullet (c) for `roll_table`; Version Identifiers footer bump), `package.json` (version bump 3.16.0 → 3.17.0), `CHANGELOG.md` (this entry).
+
+---
+
 ## v2.28.0 / GBF v1.21.0 / emulators v3.16.0 / package.json v3.16.0
 
 **Schema-additive ship — engine side.** Rule 36 (item / ability / talent / enemy effects with triggers) gains the v2.28.0 extension closing the v2.27.0 "Known follow-up: section-exit triggers without combat" gap captured for LW1's Healing Kai Discipline. Ships the `on_section_exit` lifecycle trigger plus two new independent payload-free conditions (`section_had_no_endurance_loss`, `section_had_no_combat`) — the generic-primitive option from the v2.27.0 follow-up note (option b), chosen over the narrower combined `on_section_exit_if_no_combat` trigger (option a) because the Healing rule's two predicates are genuinely orthogonal. LW1's Healing wire-up AND-gates both conditions on an `on_section_exit` trigger; future books can use either condition alone or compose via standard `and` / `or` / `not`. The books-side migration for LW1 lands in a separate sub-agent commit immediately after this engine ship.

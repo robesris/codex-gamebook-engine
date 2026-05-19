@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title bumped to v1.21.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title bumped to v1.22.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title at v1.21.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2740,7 +2740,152 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.21.0', 'schema title is v1.21.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title is v1.22.0');
+});
+
+// ============================================================
+// Test 42: roll_table fires effects[] on a single-key match
+// (Rule 11 v2.29.0 extension / schema v1.22+).
+// ============================================================
+// MOTIVATED_BY: LW1 starting-equipment table (step 8) — pre-v1.22 the
+// roll wrote to a scratch `state.stats.starting_equipment_roll` slot
+// and no event fired, so the player ended chargen without the rolled
+// item. The roll_table action selects the matching results-map entry
+// and applies its effects via the chargen-safe event handler.
+// END_TO_END_VERIFY: drive LW1 chargen through step 8; provide_roll a
+// fixed value (e.g. 3 = "Two Meals"); confirm state.provisions
+// increased by 2 and no scratch stat was created.
+test('roll_table fires effects on single-key match', () => {
+  const book = buildBook({
+    character_creation: {
+      steps: [{
+        action: 'roll_table',
+        formula: 'R10',
+        results: {
+          '0': { text: 'Broadsword', effects: [{ type: 'add_item', item: 'broadsword' }] },
+          '3': { text: 'Two Meals', effects: [{ type: 'modify_stat', stat: 'provisions', amount: 2 }] },
+          '9': { text: '12 Gold Crowns', effects: [{ type: 'modify_stat', stat: 'gold', amount: 12 }] },
+        },
+      }],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  play.startCharacterCreation(state, book);
+  assertEqual(state.pause && state.pause.type, 'character_creation_roll_table', 'paused on roll_table');
+
+  play.applyAction(state, book, 'provide_roll', ['3']);
+  assertEqual(state.provisions, 2, 'provisions +2 from single-key match');
+  assertEqual(state.gold, 0, 'gold untouched (other branches did not fire)');
+  assertTrue(!state.inventory.includes('broadsword'), 'unmatched branch did not fire');
+  assertEqual(state.stats.starting_equipment_roll, undefined, 'no scratch stat written — roll value is ephemeral');
+  assertTrue(state.creationDone, 'creation completed');
+});
+
+// ============================================================
+// Test 43: roll_table fires effects[] on an inclusive-range match
+// (range keys like "0-4" match the same way as roll_dice.results).
+// ============================================================
+// MOTIVATED_BY: range-key support — books may bucket multiple rolls
+// to the same outcome (e.g. "0-4 = sword, 5-9 = mace"). Without range
+// support, authors would have to enumerate every face value.
+// END_TO_END_VERIFY: drive a synthetic chargen with a range-key
+// table; confirm the rolled value picks the right bucket.
+test('roll_table fires effects on inclusive-range match', () => {
+  const book = buildBook({
+    character_creation: {
+      steps: [{
+        action: 'roll_table',
+        formula: 'R10',
+        results: {
+          '0-4': { text: 'Sword', effects: [{ type: 'add_item', item: 'sword' }] },
+          '5-9': { text: 'Mace',  effects: [{ type: 'add_item', item: 'mace' }] },
+        },
+      }],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  play.startCharacterCreation(state, book);
+
+  play.applyAction(state, book, 'provide_roll', ['7']);
+  assertTrue(state.inventory.includes('mace'), 'rolled 7 → mace via 5-9 range');
+  assertTrue(!state.inventory.includes('sword'), 'sword bucket did not fire');
+});
+
+// ============================================================
+// Test 44: roll_table respects character_creation_step.condition.
+// (schema v1.6+ gating still works on the new action.)
+// ============================================================
+// MOTIVATED_BY: LW1 Weaponskill weapon-type roll — should fire only
+// when the player picked the Weaponskill discipline. The v1.6+
+// chargen condition gate must apply uniformly to all chargen
+// actions, including the new roll_table.
+// END_TO_END_VERIFY: drive LW1 chargen through step 4 WITHOUT picking
+// Weaponskill; confirm the roll_table step is skipped (no pause,
+// no effect mutation, no scratch stat) and creation proceeds.
+test('roll_table respects step condition (skipped when false)', () => {
+  const book = buildBook({
+    character_creation: {
+      steps: [{
+        action: 'roll_table',
+        formula: 'R10',
+        condition: { type: 'has_flag', flag: 'never_set' },
+        results: {
+          '0': { text: 'A', effects: [{ type: 'add_item', item: 'item_a' }] },
+        },
+      }],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  play.startCharacterCreation(state, book);
+
+  assertTrue(state.pause && state.pause.type !== 'character_creation_roll_table', 'roll_table step did NOT pause — condition gated it');
+  assertTrue(!state.inventory.includes('item_a'), 'no effect from skipped step');
+  assertTrue(state.creationDone, 'creation completed without prompting');
+});
+
+// ============================================================
+// Test 45: Schema back-compat — a v1.21-era book with no roll_table
+// references validates clean against the v1.22 schema.
+// ============================================================
+// MOTIVATED_BY: roll_table is schema-additive — the action enum
+// gains one new value and two new optional properties. Pre-v1.22
+// books with no roll_table references must validate unchanged.
+test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A minimal book using only pre-v1.22 chargen actions.
+  const book = {
+    metadata: { title: 'Back-compat smoke test', author: 'test', total_sections: 1 },
+    rules: {
+      stats: [{ name: 'HP' }, { name: 'GOLD' }],
+    },
+    character_creation: {
+      steps: [
+        { action: 'roll_stat', stat: 'HP', formula: '2d6' },
+        { action: 'roll_resource', resource: 'GOLD', formula: 'R10' },
+      ],
+    },
+    sections: {
+      '1': {
+        text: 'test',
+        is_ending: false,
+        events: [],
+        choices: [{ text: 'end', target: '1' }],
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title bumped to v1.22.0');
 });
 
 // ============================================================

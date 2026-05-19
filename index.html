@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.16.0';
+const CODEX_EMULATOR_VERSION = '3.17.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -1442,6 +1442,43 @@ function startCharacterCreation() {
         <span class="stat-value">${total}</span>
       `;
       rollContainer.appendChild(div);
+    } else if (step.action === 'roll_table') {
+      // Schema v1.22+ / codex v2.29+ (Rule 11 extension). Roll the
+      // formula, find the matching entry in step.results, then apply
+      // each effect in the matched entry's effects[] array. The rolled
+      // value is ephemeral — NOT written to any stat slot. Only
+      // chargen-safe non-pausing event types are legal in effects[]
+      // per Rule 11's v2.29.0 subsection. `add_item` effects defer to
+      // the phase-1 `items[]` collection so the post-phase-1 dedup +
+      // autoEquip loop (lines below) handles them uniformly; other
+      // effect types apply via applyChargenEffect. Display the matched
+      // entry's text alongside the roll value so the player sees both
+      // the random outcome and what they received.
+      const result = rollDice(step.formula);
+      const match = findRollTableMatch(step.results, result.total);
+      if (match) {
+        if (Array.isArray(match.entry.effects)) {
+          for (const sub of match.entry.effects) {
+            if (sub.type === 'add_item' && sub.item) {
+              items.push(sub.item);
+            } else {
+              applyChargenEffect(sub);
+            }
+          }
+        }
+      } else {
+        console.warn(`roll_table: no result-table match for rolled total ${result.total}`);
+      }
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
+      const label = (match && match.entry.text) ? match.entry.text : 'Result';
+      div.innerHTML = `
+        <span class="stat-name">${label}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
+        <span class="stat-value">${result.total}</span>
+      `;
+      rollContainer.appendChild(div);
     } else if (step.action === 'choose_one') {
       interactiveSteps.push({ type: 'choose_one', step });
     } else if (step.action === 'choose_abilities') {
@@ -1575,6 +1612,44 @@ function processCreationSteps(steps, items) {
         <span class="stat-name">${displayLabel}</span>
         <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
         <span class="stat-value">${total}</span>
+      `;
+      rollContainer.appendChild(div);
+    } else if (step.action === 'roll_table') {
+      // Schema v1.22+ / codex v2.29+ (Rule 11 extension). Conditional
+      // deferral of roll_table — the condition gated this step at the
+      // pre-pass and we're now running it after the interactive steps
+      // populated state. Roll, match, apply effects; same shape as the
+      // unconditional phase-1 branch above except `add_item` effects
+      // dedup-add directly into state.inventory + autoEquip (since
+      // the phase-1 items[] post-loop has already run by the time
+      // we get here). The canonical use case is LW1's Weaponskill
+      // weapon-type roll, which is gated on the player picking the
+      // Weaponskill discipline in the preceding choose_abilities step.
+      const result = rollDice(step.formula);
+      const match = findRollTableMatch(step.results, result.total);
+      if (match) {
+        if (Array.isArray(match.entry.effects)) {
+          for (const sub of match.entry.effects) {
+            if (sub.type === 'add_item' && sub.item) {
+              if (!state.inventory.includes(sub.item)) state.inventory.push(sub.item);
+              autoEquipOnAdd(sub.item);
+              items.push(sub.item);
+            } else {
+              applyChargenEffect(sub);
+            }
+          }
+        }
+      } else {
+        console.warn(`deferred roll_table: no result-table match for rolled total ${result.total}`);
+      }
+      const div = document.createElement('div');
+      div.className = 'stat-roll';
+      const rollLabel = step.formula.startsWith('R10') ? `R10 = [${result.rolls[0]}]` : `${step.formula} = [${result.rolls.join(', ')}]`;
+      const label = (match && match.entry.text) ? match.entry.text : 'Result';
+      div.innerHTML = `
+        <span class="stat-name">${label}</span>
+        <span class="dice-result">${rollLabel}${result.bonus ? ` ${result.op || '+'} ${result.bonus}` : ''}</span>
+        <span class="stat-value">${result.total}</span>
       `;
       rollContainer.appendChild(div);
     } else if (step.action === 'add_item') {
@@ -1981,6 +2056,23 @@ function applyChargenEffect(event) {
     default:
       console.warn('applyChargenEffect: unsupported event type at chargen: ' + event.type);
   }
+}
+
+// Schema v1.22+ / codex v2.29+ (Rule 11 extension). Find the entry in a
+// roll_table results map that matches a rolled total. Returns
+// `{key, entry}` or null. Single-key match preferred; falls back to
+// inclusive-range matching (same syntax as roll_dice.results keys).
+function findRollTableMatch(results, total) {
+  if (!results) return null;
+  const singleKey = String(total);
+  if (results[singleKey]) return { key: singleKey, entry: results[singleKey] };
+  for (const [key, val] of Object.entries(results)) {
+    if (key.includes('-')) {
+      const [lo, hi] = key.split('-').map(Number);
+      if (total >= lo && total <= hi) return { key, entry: val };
+    }
+  }
+  return null;
 }
 
 function processAbilityRolls(section, rollAbilities, idx, steps, items) {

@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.28.0
+# THE GAMEBOOK CODEX v2.29.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -265,6 +265,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 |---|---|---|
 | "Roll dice / pick a number" to determine a starting **stat** (COMBAT SKILL, STAMINA, SKILL, LUCK, HP — anything declared in `rules.stats[]`) at character creation | Rule 11 | `roll_stat` action with the declared stat name and the formula |
 | "Roll dice / pick a number" to determine a starting **resource** (Gold Crowns, Provisions, Meals, or any currency the book treats as a counter rather than a free-form stat) at character creation | Rule 11 (schema v1.6+ `roll_resource`) | `roll_resource` action writing to the canonical slot (`gold` / `provisions` / `meals`) or to a declared-stat-currency matching `rules.stats[].name`. NEVER `roll_stat` into a scratch stat name like `starting_gold_crowns` — that rolls but the value never reaches the slot the game reads from, so the player's currency display stays at zero |
+| "Roll dice / pick a number, consult the table" — character-creation roll whose result selects from a per-row table of items, resources, or flag-set events (LW1 step 8 starting-equipment table; Weaponskill weapon-type table) | Rule 11 (schema v1.22+ `roll_table`) | `roll_table` action with `formula` and a `results` map keyed by single face values or inclusive ranges (same key syntax as `roll_dice.results`). Each entry carries `text` (player-facing label) and `effects[]` (chargen-safe events — `modify_stat`, `add_item`, `set_flag`, `clear_flag`, `set_resource`). The rolled value is ephemeral; do NOT write it to a stat slot. NEVER `roll_stat` into a scratch slot like `starting_equipment_roll` — that rolls but the value never wires to any pickup or counter event |
 | "Combat stat is computed from other stats" — e.g. `CV = Strength + Agility + bonuses`, `Attack = Skill + Weapon + Bonus`, `Hit = Dex + Class + Level` | Section 7.5 → "Games without `attack_stat`" | `rules.attack_stat: null`; do NOT declare the derived name in `rules.stats[]`; round_script computes the derived value from component stats inside Lua |
 | "Player distributes N points among M stats" / "you have 50 points to spend across these five attributes" / "Choose / distribute points among your attributes" | Rule 26 (schema v1.10+) | `character_creation.steps[]` entry with `action: "distribute_points"`, `total_points: N`, and `stats: [{name, min, max}, ...]` covering every point-distributed stat. Every `name` must also appear in `rules.stats[]` (with no `generation` formula — the `distribute_points` step is the initialiser). Both emulators present this as a point-buy UI and reject invalid allocations. Do NOT paper over with `manual_set` or with a scratch `roll_stat` — Rule 26 is the canonical encoding. |
 | "You may only use one weapon at a time" / "wear one helmet" / "the chainmail you are wearing" / any "worn / wielded / equipped" language | Rule 19 | `equippable: true`, `slot: "<name>"`, `equip_timing`, `auto_equip` on the items_catalog entry; `stat_modifier.when: "equipped"` for slot-gated bonuses |
@@ -528,9 +529,49 @@ The emulator routes the total into `state.gold`, the stat bar shows "Gold Crowns
 
 **Scope of `roll_resource`.** Use it whenever the rules text says "pick," "roll," or "choose" to determine a starting quantity of a canonical resource (gold/currency, provisions/meals/rations, or any declared-stat-currency). Use `roll_stat` (the original action) for rolls whose target is a regular character-sheet stat (`COMBAT SKILL`, `STAMINA`, `SKILL`, `LUCK`). The distinguishing test: does the rolled value land in `state.stats[...]` or in `state.gold` / `state.provisions` / `state.meals`? The former is `roll_stat`; the latter is `roll_resource`.
 
-**Starting-equipment tables** (LW1 step 8 style: "roll R10, consult the table, note the item that matches your roll") are a separate pattern that neither `roll_stat` nor `roll_resource` handles cleanly — the roll determines *which event fires*, not a scalar value. That's tracked in the engine backlog as a future `roll_table` character-creation action with per-result `effects` similar to `roll_dice.results[range].effects`. Until it lands, encode the table in a `script` step or flag the gap and stop (the v2.9.0 codex deliberately does not provide a workaround here; see DEV_PROCESS.md failure mode 4 for why).
+**Starting-equipment tables** (LW1 step 8 style: "roll R10, consult the table, note the item that matches your roll") are a separate pattern that neither `roll_stat` nor `roll_resource` handles cleanly — the roll determines *which event fires*, not a scalar value. The schema v1.22 / codex v2.29.0 `roll_table` chargen action is the canonical encoding for this shape; see the "v2.29.0 extension" subsection below.
 
-The general rule: if the rules text uses the word "pick," "roll," or "choose" to determine an initial resource quantity, the character_creation step must be one that actually prompts the player (or script) to produce that quantity AND writes it to the slot the game reads from. `roll_resource` is the schema action for the latter.
+The general rule: if the rules text uses the word "pick," "roll," or "choose" to determine an initial resource quantity, the character_creation step must be one that actually prompts the player (or script) to produce that quantity AND writes it to the slot the game reads from. `roll_resource` is the schema action for a scalar quantity (gold, provisions); `roll_table` is the schema action for a per-result table whose entries determine which event fires.
+
+#### v2.29.0 extension: the `roll_table` chargen action (schema v1.22+)
+
+LW1's character-creation step 8 ("Pick R10; 0=Broadsword, 1=Sword, 2=Helmet, 3=Two Meals, 4=Chainmail Waistcoat, 5=Mace, 6=Healing Potion, 7=Quarterstaff, 8=Spear, 9=12 Gold Crowns") is the canonical example: the roll selects *which event fires*, not a scalar value. Pre-v1.22 the only available encoding was `roll_stat` into a scratch slot (`state.stats.starting_equipment_roll`), but the slot was a dead end — no `add_item`, `modify_stat`, or `set_resource` was wired to its rolled value, so the player ended chargen with the rolled number floating in state.stats and zero of the actual equipment. That's the LW1 step 8 data bug carried since Chat #2.
+
+**Canonical shape.**
+
+```json
+{
+  "action": "roll_table",
+  "formula": "R10",
+  "prompt": "Pick a number from the Random Number Table to determine your starting equipment.",
+  "results": {
+    "0": { "text": "Broadsword",       "effects": [{ "type": "add_item", "item": "broadsword", "category": "weapons" }] },
+    "1": { "text": "Sword",            "effects": [{ "type": "add_item", "item": "sword", "category": "weapons" }] },
+    "2": { "text": "Helmet (+2 END)",  "effects": [{ "type": "add_item", "item": "helmet", "category": "special_items" }] },
+    "3": { "text": "Two Meals",        "effects": [{ "type": "modify_stat", "stat": "provisions", "amount": 2 }] },
+    "4": { "text": "Chainmail Waistcoat (+4 END)", "effects": [{ "type": "add_item", "item": "chainmail_waistcoat", "category": "special_items" }] },
+    "5": { "text": "Mace",             "effects": [{ "type": "add_item", "item": "mace", "category": "weapons" }] },
+    "6": { "text": "Healing Potion",   "effects": [{ "type": "add_item", "item": "healing_potion", "category": "special_items" }] },
+    "7": { "text": "Quarterstaff",     "effects": [{ "type": "add_item", "item": "quarterstaff", "category": "weapons" }] },
+    "8": { "text": "Spear",            "effects": [{ "type": "add_item", "item": "spear", "category": "weapons" }] },
+    "9": { "text": "12 Gold Crowns",   "effects": [{ "type": "modify_stat", "stat": "gold", "amount": 12 }] }
+  }
+}
+```
+
+**Semantics.** The emulator rolls `formula`, finds the result-table entry whose key matches (single face value like `"3"` or inclusive range like `"3-5"`, same syntax as `roll_dice.results` keys), and applies each effect in the matched entry's `effects[]` array via the standard chargen-safe event handlers (`modify_stat`, `add_item`, `set_flag`, `clear_flag`, `set_resource`). The roll value itself is **ephemeral** — the v1.22 emulator does NOT write it to any stat slot, and authors should NOT add a `stat` field to a `roll_table` step expecting the value to land somewhere. If the book needs the roll value durably (rare — only when a downstream condition reads the literal rolled number), use `roll_stat` with a declared stat instead; if the book needs both a durable value AND a per-result event, split into a `roll_stat` step followed by a `roll_table` whose results read the rolled stat (uncommon enough that no maintained book uses this composition yet).
+
+**Pause / interactivity scope.** `effects[]` MUST hold only chargen-safe non-pausing event types: `modify_stat`, `add_item`, `set_flag`, `clear_flag`, `set_resource`. Interactive types (`combat`, `stat_test`, `roll_dice`, `input_number`, `input_text`, `eat_meal`, `choose_items`) are forbidden here because the chargen flow has no pause-resumption mechanism for nested interactive events. If a book's roll-table source text describes a result that requires interactive resolution (e.g. "if you roll a 9, fight the Giak"), promote the resolution to a section-level event reached via `set_flag` + a section transition.
+
+**Range keys.** `roll_table` accepts the same range-key syntax as `roll_dice.results`: a single face value (`"3"`, `"6"`) or an inclusive range (`"0-4"`, `"5-9"`, `"10-12"`). The emulator looks up the rolled total as a single-key match first and falls back to range matching, mirroring `roll_dice`'s lookup. Two range keys MUST NOT overlap (the matcher returns the first match); books with overlapping ranges are data bugs.
+
+**Condition gating.** The existing schema v1.6+ `character_creation_step.condition` continues to work — a `roll_table` step gated on `{type: has_ability, ability: Weaponskill}` only fires for players who picked Weaponskill in a preceding `choose_abilities` step. This is the canonical migration target for LW1 step 4 (Weaponskill weapon-type table: 0=Dagger, 1=Spear, 2=Mace, 3=Short Sword, 4=Warhammer, 5=Sword, 6=Axe, 7=Sword, 8=Quarterstaff, 9=Broadsword) — pre-v1.22 the step wrote the roll value to a scratch `weaponskill_weapon` stat slot, but the rolled value never flowed to any downstream rule. Post-v1.22 the step is a conditional `roll_table` whose effects set the per-weapon flag (or apply whatever Rule 23 standing-modifier the book's weapon-skill rules require) directly.
+
+**Anti-pattern this rule replaces.** `roll_stat` into a scratch stat name (`starting_equipment_roll`, `weaponskill_weapon`, etc.) that is not declared in `rules.stats[]` and is not read by any downstream condition or event. Same class of bug as the pre-v1.6 `roll_stat: "gold_crowns"` (closed by `roll_resource`): the roll succeeds and writes a value into state, but the slot is a dead end. The `roll_table` action closes the bug class at the codex rule level (Rule 11 now points at the right shape) AND at the schema level (the action is distinct from `roll_stat`, so a parser cannot silently choose the wrong one for table rolls).
+
+**Schema-additive.** Pre-v1.22 books validate unchanged against the v1.22 schema. The `character_creation_step.action` enum gains one new value (`roll_table`); two new optional properties (`prompt`, `results`) are added. No existing field shape changes, no field is repurposed, no field is removed. A v1.21.0-era book file that does not reference `roll_table` produces the same validation error count against v1.22 as it did against v1.21.
+
+**Verification.** For every `character_creation.steps[]` entry whose source text describes a roll-with-a-table (the rules section uses phrasing like "consult the table," "find the item matching your roll," or lists per-result outcomes), the emitted step MUST be `roll_table` with a complete `results` map. A `roll_stat` step that writes to a scratch slot not declared in `rules.stats[]` (and not read by any downstream condition or event) is a Rule 11 violation and should be migrated to `roll_table`.
 
 ### Rule 12: Do Not Duplicate Penalty Events Already Modeled by `eat_meal`
 
@@ -4404,7 +4445,7 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 10 (Enemy ID naming).** Every recurring generic enemy name (Giak, Goblin, Kraan, Skeleton, Guard, Rat) uses the `<enemy>_s<N>` suffix where N is the section that introduces that variant. Bare snake-case ids only appear on genuinely unique antagonists with one stat block in the entire book.
 
-**Rule 11 (Starting resources from rolls).** If the book's rules section uses the word "pick," "roll," "choose," or "distribute" to determine a starting stat or resource, the matching `character_creation.steps[]` entry is a step that *actually rolls or prompts* AND writes the result to the slot the game reads from. Specifically: (a) for declared stats (`COMBAT SKILL`, `SKILL`, `STAMINA`, `LUCK`, etc.), the step is `roll_stat` with the declared stat name from `rules.stats[]`; (b) for canonical resources (gold/provisions/meals) or declared-stat-currencies, the step is `roll_resource` with `resource` set to the canonical slot name or the declared stat name — NEVER `roll_stat` into a scratch stat like `starting_gold_crowns` that doesn't flow to `state.gold`. After character creation completes, every stat declared in `rules.stats[]` holds a real value, every canonical resource slot the book's rules text mentions holds a real value, and there are no stats or resources left at 0 or undefined unless the book explicitly says so. No `set_resource` entry carries `amount: 0` with a "pick a number" source; that's the anti-pattern Rule 11 exists to catch.
+**Rule 11 (Starting resources from rolls).** If the book's rules section uses the word "pick," "roll," "choose," or "distribute" to determine a starting stat or resource, the matching `character_creation.steps[]` entry is a step that *actually rolls or prompts* AND writes the result to the slot the game reads from. Specifically: (a) for declared stats (`COMBAT SKILL`, `SKILL`, `STAMINA`, `LUCK`, etc.), the step is `roll_stat` with the declared stat name from `rules.stats[]`; (b) for canonical resources (gold/provisions/meals) or declared-stat-currencies, the step is `roll_resource` with `resource` set to the canonical slot name or the declared stat name — NEVER `roll_stat` into a scratch stat like `starting_gold_crowns` that doesn't flow to `state.gold`; (c) **schema v1.22+: for starting-equipment tables or any chargen roll whose result selects from a per-row table of items/resources/flag-set events**, the step is `roll_table` with `formula` and a `results` map keyed by single face values or inclusive ranges, each entry carrying `text` and `effects[]` — the chargen-safe events that actually fire (`modify_stat`, `add_item`, `set_flag`, `clear_flag`, `set_resource`). NEVER `roll_stat` into a scratch slot like `starting_equipment_roll` that doesn't wire to any pickup event. After character creation completes, every stat declared in `rules.stats[]` holds a real value, every canonical resource slot the book's rules text mentions holds a real value, every roll-table outcome the book's rules describe lands as a real inventory/resource/flag change, and there are no stats or resources left at 0 or undefined unless the book explicitly says so. No `set_resource` entry carries `amount: 0` with a "pick a number" source; that's the anti-pattern Rule 11 exists to catch.
 
 **Rule 12 (No duplicate penalty events).** For every `eat_meal` with a `penalty_amount`, I did NOT also emit a `modify_stat` for the same loss in the same section. The same check for `combat` flee damage, `roll_dice` per-branch effects, and `stat_test` outcomes — never a parallel `modify_stat` for a value already covered by a structured event.
 
@@ -4511,7 +4552,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.28.0 / GBF schema v1.21.0 / CLI emulator v3.16.0 / HTML emulator v3.16.0.**
+**Codex v2.29.0 / GBF schema v1.22.0 / CLI emulator v3.17.0 / HTML emulator v3.17.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.16.0';
+const CODEX_EMULATOR_VERSION = '3.17.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1266,6 +1266,23 @@ function processCreationSteps(state, book) {
         formula: step.formula,
       };
       return state;
+    } else if (step.action === 'roll_table') {
+      // Schema v1.22+ / codex v2.29+ (Rule 11 extension). A chargen roll
+      // whose result selects a per-range entry whose `effects[]` are
+      // applied via the standard handleEvent path. The rolled value is
+      // ephemeral — NOT written to any stat slot. Pause on a dedicated
+      // pause type carrying the step's results map; the 'act' handler
+      // rolls the formula, picks the matching entry, and dispatches the
+      // effects. See Rule 11's v2.29.0 extension subsection for the full
+      // story and the LW1 starting-equipment worked example.
+      state.pause = {
+        type: 'character_creation_roll_table',
+        step_index: state.creationStep,
+        formula: step.formula,
+        prompt: step.prompt || null,
+        results: step.results || {},
+      };
+      return state;
     } else if (step.action === 'choose_one') {
       state.pause = {
         type: 'character_creation_choose_one',
@@ -2269,6 +2286,60 @@ function applyAction(state, book, action, args) {
         }
       }
       state.log.push(`Rolled ${step.formula} = ${result.rolls.join(',')} => ${rname} ${total}`);
+      state.creationStep++;
+      return processCreationSteps(state, book);
+    }
+
+    case 'character_creation_roll_table': {
+      // Schema v1.22+ / codex v2.29+ (Rule 11 extension). Roll the
+      // formula, find the matching entry in the step's results map
+      // (single key or inclusive range, same syntax as roll_dice.results
+      // keys), and apply each effect in the matched entry's effects[]
+      // array via handleEvent. The rolled value itself is ephemeral —
+      // NOT written to any stat slot. Only chargen-safe non-pausing
+      // event types are legal in effects[]; if an inner event returns
+      // 'pause' or 'navigate' the chargen flow is broken (the schema
+      // forbids interactive event types here — see Rule 11 v2.29.0
+      // subsection). The common case is all modify_stat / add_item /
+      // set_flag / clear_flag / set_resource events.
+      const step = book.character_creation.steps[state.pause.step_index];
+      let result;
+      if (action === 'provide_roll') {
+        const vals = args.map(Number);
+        result = rollDice(step.formula, vals);
+      } else {
+        result = rollDice(step.formula);
+      }
+      const results = step.results || {};
+      let matchedEntry = null, matchedKey = null;
+      if (results[String(result.total)]) {
+        matchedEntry = results[String(result.total)];
+        matchedKey = String(result.total);
+      } else {
+        for (const [key, val] of Object.entries(results)) {
+          if (key.includes('-')) {
+            const [lo, hi] = key.split('-').map(Number);
+            if (result.total >= lo && result.total <= hi) {
+              matchedEntry = val;
+              matchedKey = key;
+              break;
+            }
+          }
+        }
+      }
+      state.log.push(`Rolled ${step.formula} = ${result.rolls.join(',')} => ${result.total}${matchedKey ? ` (matches ${matchedKey})` : ' (no result-table match)'}`);
+      if (matchedEntry) {
+        if (matchedEntry.text) state.log.push(matchedEntry.text);
+        if (Array.isArray(matchedEntry.effects)) {
+          for (const subEvent of matchedEntry.effects) {
+            const sub = handleEvent(subEvent, state, book);
+            if (sub === 'pause' || sub === 'navigate') {
+              state.log.push('[Warning: roll_table effects[] must hold only chargen-safe non-pausing events. Remaining effects skipped.]');
+              break;
+            }
+          }
+        }
+      }
       state.creationStep++;
       return processCreationSteps(state, book);
     }
