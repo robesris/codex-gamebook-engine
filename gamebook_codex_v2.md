@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.29.0
+# THE GAMEBOOK CODEX v2.30.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -304,6 +304,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "If you have visited this section before, …" / one-time visit flags | Rule 15 + Section 7.6 | `set_flag` on first visit, conditional events gated on `has_flag` thereafter |
 | "Subroutine section that returns to where you came from" | Section 7.6 → Pattern 7.6.8 | `script` event using `state.return_to_section` set by the caller before navigating |
 | Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects — "if 4 or lower, lose 2 ENDURANCE and turn to 140; if 5 or higher, turn to 323" | Rule 22 (Pattern 7.6.9) | `roll_dice` event with per-range `effects` (array of event objects) plus `target`. Schema v1.8+. Effects run AFTER the range match and BEFORE navigation, so a single event mutates state and moves the player. Falls back to `script` only when the effects array cannot express the branching (cumulative loops, conditional re-rolls, complex multi-stage logic). |
+| "If you kill him within N rounds of combat, turn to X / If you are still fighting after N rounds of combat, turn to Y / You may evade after M rounds by turning to Z" / "After M rounds of combat you position yourself to flee" | Rule 38 (schema v1.23+ round-count combat semantics) | Combat event carries `end_after_rounds: N, end_to: Y` for the broken-off auto-end AND/OR `flee_available_after_round: M` for the round-gated evade. Post-combat choices carry `combat_round_count_lte: N` (the kill-within-N branch) and `combat_round_count_gte: N+1` (the still-fighting branch). NEVER a `script` event that reads `combat.round` and calls `navigate_to` — that hides the round-cap from structured enforcement |
 | Book-wide combat rule stated in the *rules section* (not in any specific encounter) — "if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while wearing the Ring of Hostility all enemies attack at +1", any universal combat rule keyed on player state | Rule 23 | `rules.combat_system.standing_modifiers[]` (schema v1.8+). One `combat_modifier` entry per rule, with `target` dot-path, signed `delta`, optional `condition` for "applies when…" rules, optional `reason`. Emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start. Never re-encode the same rule per-section — that's lossy (misses fights the parser forgets) and redundant. |
 | Section describes losing an entire inventory category — "you lose the Pack and all the Equipment that was inside it" (LW1 §188 Kraan Backpack loss), "your weapons are confiscated", "all your Special Items are stripped from you" | Rule 24 | `remove_inventory_category` event (schema v1.8+) with `category` matching the book's own `inventory_category` string (e.g. `"backpack"`, `"special"`, `"weapons"`). Single event replaces per-id `remove_item` sequences; auto-unequips any equipped items whose id falls in the removed category. |
 | Computed navigation: "add up your gold and turn to that section" / cipher-style page jumps | Section 8.1 | `input_number` event with `target: "computed"` and a documented formula |
@@ -2568,6 +2569,108 @@ The other anti-pattern in this space is the **predecessor-side fork**: a parser 
 
 **Verification.** When a parser encounters source text on a section like "If you came from §A, do X; if you came from §B, do Y" — or a footnote/errata that re-reads the section's choices conditionally on the entry path — the canonical encoding requires three checks: (1) each predecessor section that reaches the multi-entrant section emits the appropriate `set_flag` or `clear_flag` event before its navigation choice; (2) the multi-entrant section's variant choices each carry a `has_flag` / `not has_flag` condition naming the same flag; (3) the flag name is book-scoped (`<bookid>_came_from_<N>`) and does not collide with any Rule 27 capability prefix. If a section's choices imply path-dependence but the predecessors don't set distinguishing flags, the encoding is incomplete — a parser should add the `set_flag` events to the predecessors rather than working around the gap in the multi-entrant section's logic.
 
+### Rule 38: Round-Count Combat Semantics (`end_after_rounds`, `flee_available_after_round`, `combat_round_count_lte/gte`)
+
+Some gamebook combats branch on **how many rounds the fight lasted** rather than the win/lose outcome alone. The canonical Lone Wolf example is §231 / §339 ("If you kill him within 4 rounds of combat, turn to 94. If you are still fighting after 4 rounds of combat, turn to 203. You may evade more fighting after 2 rounds of combat by dashing through the front door — turn to 7.") and §43 ("After three rounds of combat, you position yourself so that you can run down the hill. If you wish to evade at this time then turn to 106."). Three distinct mechanical primitives surface in these sections:
+
+1. **Auto-end after N rounds** — combat is broken off at round N regardless of who is winning, navigating to a consequence section. §231's "still fighting after 4 rounds → 203" is the canonical case. Distinct from `win_after_rounds` (Rule 31, treated as victory) and from defeat-by-health (treated as loss): this is the **neither-side-won** semantic.
+2. **Round-gated flee** — the flee action is blocked until the player has fought at least N rounds, modeling the in-fiction setup time the source text describes ("After three rounds of combat, you position yourself so that you can run down the hill"). The flee target is reachable only from round N onwards.
+3. **Post-combat round-count branching** — after the fight ends (by any path), the section's choices branch on the round number the fight ended at: "if you killed him within 4 rounds → branch X" vs "if you took longer → branch Y."
+
+**Schema v1.23+ / codex v2.30.0 ships these three as schema-additive extensions.**
+
+**Combat-event fields (additive on the `combat` event):**
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "robber_s231",
+  "win_to": null,
+  "flee_to": 7,
+  "flee_available_after_round": 2,
+  "end_after_rounds": 4,
+  "end_to": 203
+}
+```
+
+- `end_after_rounds: N` — combat auto-ends after `N` rounds without a victory/loss verdict.
+- `end_to: <section_id>` — destination when `end_after_rounds` fires. Null/absent means "fall through to the section's choices," which is the right shape when the section uses post-combat round-count conditions to branch.
+- `flee_available_after_round: M` — flee action is rejected until `combat.round >= M`. The reference emulators reject a flee with a log line ("Cannot flee yet — must fight N more rounds") when invoked before the threshold; the flee button in the HTML emulator is disabled/hidden until the round window opens.
+
+**State bookkeeping.** `state.lastCombatRoundCount` is set to `combat.round` at every `on_combat_end` dispatch path (win, lose-by-survive-N-rounds, all-enemies-defeated, player-flee, R36-triggered `flee_combat`, and the new `end_after_rounds` auto-end path) BEFORE the lifecycle trigger fires. Initial value is `null` (the never-fought baseline). The reference emulators round-trip this field through `compactState` / save-load so the slot survives mid-session persistence.
+
+**Condition primitives (additive to `condition.type` enum):**
+
+- `{type: combat_round_count_lte, value: N}` — true iff `state.lastCombatRoundCount <= N`. Use for "kill within N rounds" branches.
+- `{type: combat_round_count_gte, value: N}` — true iff `state.lastCombatRoundCount >= N`. Use for "still fighting after N rounds" branches.
+
+Both conditions return **false** (NOT true) when `state.lastCombatRoundCount === null` — the safe default for a stale condition reached without a prior combat is non-firing, not phantom-firing. This protects sections whose post-combat choices are reached via an alternate entry path (debug jump, errata variant) from spuriously firing the round-count branch.
+
+**Canonical worked examples.**
+
+LW1 §231 "kill-within-4 / still-fighting / evade-via-front-door" pattern:
+
+```json
+{
+  "text": "...You are about to ask the price of the potions when the bamboo screen crashes down and a young man leaps at you...",
+  "events": [
+    {
+      "type": "combat",
+      "enemy_ref": "robber_s231",
+      "win_to": null,
+      "flee_to": 7,
+      "flee_available_after_round": 2,
+      "end_after_rounds": 4,
+      "end_to": 203
+    }
+  ],
+  "choices": [
+    { "text": "If you kill him within 4 rounds of combat, turn to 94.",
+      "target": 94,
+      "condition": {"type": "combat_round_count_lte", "value": 4} },
+    { "text": "If you are still fighting after 4 rounds of combat, turn to 203.",
+      "target": 203,
+      "condition": {"type": "combat_round_count_gte", "value": 5} },
+    { "text": "You may evade more fighting after 2 rounds of combat by dashing through the front door. If you wish to do this, turn to 7.",
+      "target": 7,
+      "condition": null }
+  ]
+}
+```
+
+The combat resolves one of four ways: (a) win at round R ≤ 4 → falls through to choices, only the "kill within 4" choice's condition fires, player turns to 94; (b) `end_after_rounds: 4` fires at round 4 if neither win nor flee nor defeat occurred — auto-navigates to 203; (c) flee at round ≥ 2 → goto 7 directly (and the post-combat choices are irrelevant because flee navigated already); (d) player dies → standard defeat path. The third choice is intentionally `condition: null` and target 7 — it duplicates the flee_to target as a player-readable narrative choice, kept for documentation symmetry with the source text (the source lists three player options; the combat's `flee_to` is the engine-enforcement half).
+
+LW1 §43 "evade-after-3" pattern:
+
+```json
+{
+  "events": [
+    {
+      "type": "combat",
+      "enemy_ref": "black_bear_s43",
+      "win_to": null,
+      "flee_to": 106,
+      "flee_available_after_round": 3
+    }
+  ],
+  "choices": [
+    { "text": "After three rounds of combat, you position yourself so that you can run down the hill. If you wish to evade at this time then turn to 106 and chance being wounded as you flee.",
+      "target": 106,
+      "condition": null }
+  ]
+}
+```
+
+The `flee_available_after_round: 3` blocks the flee action until the player has fought three rounds; the narrative choice mirrors the source text. The flee_to (106) is the consequence section.
+
+**Anti-pattern this rule replaces.** Pre-v1.23 the only way to encode §231's "still fighting after 4 rounds → 203" was either (a) a `script` event that read `combat.round` and called `navigate_to(203)` at round 4 (works but bypasses the structured combat-flow primitives and obscures the round-cap semantic from a reader of the JSON), or (b) leaving the choices with `condition: null` and trusting the player's honor system to pick the right branch (the current LW1 encoding pre-Chat-#35). Both shapes hide the round-count mechanic from the engine's enforcement layer; the v1.23 primitives make the mechanic first-class.
+
+**Compositional notes.** `end_after_rounds` and `win_after_rounds` are mutually exclusive on the same combat event — a fight either has a survive-to-win semantic (Rule 31) or a broken-off-without-verdict semantic (Rule 38), not both. `flee_available_after_round` is orthogonal and can coexist with either round-cap field. The `combat_round_count_lte/gte` conditions work on any combat-end path (including `win_after_rounds` victories and player-flee navigations), so a book that wants to gate post-combat choices on round count without auto-ending can use the conditions alone.
+
+**Schema-additive.** Pre-v1.23 books validate unchanged against the v1.23 schema. The `condition.type` enum gains two new values; the combat event gains three new optional properties; `state.lastCombatRoundCount` is a new initialState slot defaulting to null. No existing field shape changes, no field is repurposed, no field is removed. A v1.22-era book that does not reference any of the new primitives produces the same validation error count against v1.23 as it did against v1.22.
+
+**Verification.** For every section in a book whose source text mentions "rounds of combat" or "after N rounds" in a choice or as a setup phrase, the corresponding `combat` event AND the section's choices MUST use the appropriate Rule 38 primitives. Specifically: (a) "kill within N rounds → X" / "still fighting after N rounds → Y" patterns → the combat carries `end_after_rounds: N, end_to: Y` AND the choices carry `combat_round_count_lte: N` / `combat_round_count_gte: N+1` conditions; (b) "evade after M rounds → Z" patterns → the combat carries `flee_to: Z, flee_available_after_round: M` AND the narrative choice mirroring the evade option is left for documentation symmetry. A `roll_dice` or `script` event that re-implements the round-count branching is a Rule 38 violation and should be migrated to the structured primitives.
+
 ---
 
 1. Universal Gamebook Concepts
@@ -4497,6 +4600,8 @@ Walk this list in order before emitting the final JSON. Any "no" answer means re
 
 **Rule 36 (Item / ability / talent / enemy triggered effects, schema v1.20+).** For every source-text mechanic described as a *per-lifecycle* effect carried by a specific item, ability, talent, or enemy — per-combat-round dice-gated damage shifts/caps (Warlock §155 iron_shield_crescent, §249 fire-breathing dog), passive per-section effects (hypothetical Ring of Regeneration, Foraging ability), or user-initiated consumables (Warlock potion_of_invisibility) — the effect is encoded as a `triggered_effects[]` entry on the carrying catalog placement (`items_catalog[]`, `enemies_catalog[]`, `rules.abilities.available[]`, or `rules.talents.available[]`). Each entry carries `trigger` (one of the 8+1 enum values), optional `condition` (state predicate, including the new `is_equipped` type), optional `gate_roll: {dice, applies_on}` (dice-driven gate), required `effect` (damage-flow operation `damage_delta` / `damage_multiplier` / `damage_set` / `damage_cap` with `direction: incoming | outgoing`; `flee_combat` with `target_section`; or any non-pausing event type), and optional `consume_on_fire: true` (items only — remove one copy on firing). Pipeline ordering within a combat round: Rule 17 → Rule 18 → Rule 32 frozen caps → Rule 36 shift/multiply/set → Rule 36 caps → apply. NO source-text mechanic with a per-lifecycle dice gate is encoded as a Rule 17 `combat_modifier` (those are frozen at combat start, additive on inputs — not per-round dice gates); NO triggered effect is spread across N section-level events (the canonical home is the catalog entry, not every section that fights the affected enemy); NO single-use scroll / potion is encoded with `consume_on_fire: true` AND a parallel section-level `remove_item` (the consume_on_fire flag handles removal). Coexistence: Rule 19 `stat_modifier.when: equipped`, Rule 25 `consume.satisfies_eat_meal`, and Rule 34 `effects[]` (chargen) remain canonical for their narrow cases; Rule 36 is strictly additive on first ship. Variable-amount effects (dice-driven heals like GrailQuest's 2d6 healing potion) use the `modify_stat.amount` integer-or-dice-expression union (schema v1.20+): `{ "kind": "dice", "expression": "2d6", "sign": "positive" }`. Multi-charge items (charges > 1) are deferred to a future schema bump; sites needing charges stay in `parser_notes` until then.
 
+**Rule 38 (Round-count combat semantics, schema v1.23+).** For every section whose source text mentions "rounds of combat" or "after N rounds" in a choice line or as a setup phrase for the encounter, I encoded the round-count mechanic using the appropriate Rule 38 primitives. Specifically: (a) for "kill within N rounds → X / still fighting after N rounds → Y" patterns (canonical LW1 §231 / §339), the combat event carries `end_after_rounds: N, end_to: Y` and the choices carry `combat_round_count_lte: N` (the kill-within branch) and `combat_round_count_gte: N+1` (the still-fighting branch); (b) for "evade after M rounds → Z" patterns (canonical LW1 §43), the combat event carries `flee_to: Z, flee_available_after_round: M` and the narrative choice mirroring the evade option is left for documentation symmetry. NO `script` event re-implements the round-count branching by reading `combat.round` and calling `navigate_to`; NO post-combat choice gating on round count is left `condition: null` and trusted to the player's honor system. The two condition primitives default to false when `state.lastCombatRoundCount === null` so stale conditions reached without a prior combat do not fire spuriously. `end_after_rounds` and `win_after_rounds` (Rule 31) are mutually exclusive on the same combat event — a fight is either survive-to-win or broken-off-without-verdict, not both. `flee_available_after_round` is orthogonal and composes with either round-cap field.
+
 **Section 2.1a (Endings placement, schema v1.11+).** The book's `death_endings` and `victory_endings` lists are placed consistently — either both inside `metadata.confidence.{death,victory}_endings` as section-id arrays (single-chat parses, matching the four maintained books) OR both at the top level (`book.death_endings`, `book.victory_endings`) as section-id arrays with integer counts in `metadata.confidence.{death,victory}_endings` (multi-chunk accumulators per Section 9.9). I did NOT mix the two placements within one book (no array at top level AND a duplicating array in confidence), I did NOT silently migrate from one shape to the other mid-merge, and every section id listed in either placement also appears in `sections{}` with `is_ending: true` and the matching `ending_type` (`"death"` for death endings; `"victory"` or `"continuation"` for victory endings).
 
 **Section 7 / 7.5 (Derived combat stats).** If the book's combat stat is computed from other stats (e.g., `CV = Strength + Agility + weapon bonuses`, `Attack = Skill + Weapon`, `Hit = Dex + Class`), then `rules.attack_stat` is null AND the derived name is NOT declared in `rules.stats[]` AND the round_script computes the derived value from its component stats inside Lua. I did not set `rules.attack_stat: "combat_value"` (or any other derived name) and then leave `combat_value` undeclared and uninitialised. **Combat-modifier targets on derived-stat books:** every per-fight modifier on a derived-stat combat targets either a component field the round_script reads (`player.strength`, `player.weapon_bonus`, etc.) OR a generic accumulator slot the round_script reads as additive (`player.attack` / `enemy.attack`, even though `attack_stat: null`). NO `combat_modifier` entry targets the derived stat name itself (`player.combat_value`, `player.attack_strength`) — that field doesn't exist on the player table because the derived value is computed inside Lua each round. NO `modify_stat` event in any section uses the derived stat name as `stat:` — that event silently no-ops because the derived stat is not a real player-table slot. Per-fight modifiers on derived-stat books go in `combat_modifiers` on the combat event (Rule 17); persistent stat changes go in `modify_stat` on a real **component** stat (`stat: "strength"` etc.).
@@ -4552,7 +4657,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.29.0 / GBF schema v1.22.0 / CLI emulator v3.17.0 / HTML emulator v3.17.0.**
+**Codex v2.30.0 / GBF schema v1.23.0 / CLI emulator v3.18.0 / HTML emulator v3.18.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

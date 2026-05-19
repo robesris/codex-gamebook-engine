@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.17.0';
+const CODEX_EMULATOR_VERSION = '3.18.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -746,6 +746,11 @@ let state = {
   // (resolved via gameData.rules.health_stat at snapshot time) so the
   // structure is series-neutral.
   sectionEntrySnapshot: null,
+  // Schema v1.23+ / codex v2.30 (Rule 38). Round number the most recent
+  // combat ended on (1-based). Set at every on_combat_end dispatch path
+  // BEFORE the lifecycle trigger fires. Null = no combat resolved yet;
+  // combat_round_count_lte/gte conditions return false on null.
+  lastCombatRoundCount: null,
 };
 
 // ==================== UTILITY ====================
@@ -3135,6 +3140,11 @@ function handleCombat(event) {
   // this threshold. Player-death takes priority; enemy-defeat-by-
   // health continues to also win.
   const winAfterRounds = event.win_after_rounds;
+  // Schema v1.23+ (Rule 38) — round-cap auto-end (no verdict).
+  const endAfterRounds = event.end_after_rounds;
+  const endTo = event.end_to;
+  // Schema v1.23+ (Rule 38) — round-gate on flee.
+  const fleeAvailableAfterRound = event.flee_available_after_round;
 
   // Sum the deltas of every applied combat_modifier whose dot-path target
   // matches the given string (e.g. "player.attack") AND which is active
@@ -3309,7 +3319,18 @@ function handleCombat(event) {
     } else if (enemy.currentHealth > 0 && playerHealth > 0) {
       html += `<button class="btn" onclick="combatAttack()">Attack</button>`;
       if (c.fleeTo) {
-        html += `<button class="btn btn-danger btn-small" onclick="combatFlee()">Flee</button>`;
+        // Schema v1.23+ / codex v2.30 (Rule 38): hide flee button until
+        // the round-gate window opens (`flee_available_after_round`).
+        // Canonical example: LW1 §43 "After three rounds of combat,
+        // you position yourself so that you can run down the hill."
+        const fleeReady = c.fleeAvailableAfterRound === undefined || c.fleeAvailableAfterRound === null
+                          || c.roundNum >= c.fleeAvailableAfterRound;
+        if (fleeReady) {
+          html += `<button class="btn btn-danger btn-small" onclick="combatFlee()">Flee</button>`;
+        } else {
+          const missing = c.fleeAvailableAfterRound - c.roundNum;
+          html += `<button class="btn btn-small" disabled title="Flee available after ${c.fleeAvailableAfterRound} rounds">Flee (in ${missing} round${missing === 1 ? '' : 's'})</button>`;
+        }
       }
     }
     html += `</div>`;
@@ -3430,6 +3451,8 @@ function handleCombat(event) {
   // Store combat state for callbacks — all mutable state lives here
   window._combat = {
     enemies, currentEnemyIdx: 0, mode, winTo, fleeTo, specialRules, winAfterRounds,
+    // Schema v1.23+ (Rule 38)
+    endAfterRounds, endTo, fleeAvailableAfterRound,
     // Schema v1.20+ (Rule 36): enemy catalog ids for triggered_effects lookup.
     enemyRefs: enemies.map(en => en.ref).filter(r => typeof r === 'string'),
     // Frozen, condition-evaluated list of active modifiers for this
@@ -3925,9 +3948,29 @@ function handleCombat(event) {
       // v1.21+ / R36 v2.28.0) so the upcoming on_section_exit dispatch
       // sees this section as combat-resolved.
       if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+      state.lastCombatRoundCount = c.roundNum;
       r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
       c.combatOver = true;
       c.combatEndTarget = c.winTo;
+      c.renderCombat();
+      return;
+    }
+
+    // Schema v1.23+ / codex v2.30 (Rule 38). Round-cap auto-end —
+    // combat is broken off without a verdict after endAfterRounds
+    // rounds. Distinct from winAfterRounds (treated as victory): this
+    // is the "the fight is broken off" semantic. Player-defeat and
+    // player-flee paths take priority (handled above / in combatFlee).
+    // Routes to endTo if set, otherwise falls back to currentSection
+    // so the section's choices render (typically gated on
+    // combat_round_count_gte conditions for that pattern).
+    if (c.endAfterRounds !== undefined && c.endAfterRounds !== null && c.roundNum >= c.endAfterRounds) {
+      c.combatLog.push(`<span>Combat broken off after ${c.roundNum} rounds.</span>`);
+      if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+      state.lastCombatRoundCount = c.roundNum;
+      r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
+      c.combatOver = true;
+      c.combatEndTarget = (c.endTo !== undefined && c.endTo !== null) ? c.endTo : state.currentSection;
       c.renderCombat();
       return;
     }
@@ -3956,6 +3999,7 @@ function handleCombat(event) {
         // v1.21+ / R36 v2.28.0) so the upcoming on_section_exit dispatch
         // sees this section as combat-resolved.
         if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+        state.lastCombatRoundCount = c.roundNum;
         r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
         c.combatOver = true;
         c.combatEndTarget = c.winTo;
@@ -3969,6 +4013,18 @@ function handleCombat(event) {
 
   window.combatFlee = function() {
     const c = window._combat;
+    // Schema v1.23+ / codex v2.30 (Rule 38): round-gate. Block the
+    // flee until c.roundNum >= fleeAvailableAfterRound. The flee
+    // button is normally hidden by getAvailableActions / the combat UI
+    // until the gate opens, but this defensive check ensures any
+    // direct invocation (debug tool, scripted harness) is also gated.
+    if (c.fleeAvailableAfterRound !== undefined && c.fleeAvailableAfterRound !== null
+        && c.roundNum < c.fleeAvailableAfterRound) {
+      const missing = c.fleeAvailableAfterRound - c.roundNum;
+      c.combatLog.push(`<span>Cannot flee yet — must fight ${missing} more round${missing === 1 ? '' : 's'}.</span>`);
+      c.renderCombat();
+      return;
+    }
     const fleeRules = gameData.rules.escaping || {};
     const fleeDmg = fleeRules.flee_damage || 2;
 
@@ -3980,10 +4036,10 @@ function handleCombat(event) {
     // Rule 36 v2.28.0 / schema v1.21+. Mark hadCombat on the per-section
     // snapshot so the upcoming on_section_exit dispatch (fired by
     // navigateTo when the player clicks Continue) sees this section as
-    // combat-resolved. The CLI emulator also dispatches on_combat_end
-    // here; the HTML emulator's pre-existing on_combat_end path on
-    // player-flee is a known parity gap tracked separately.
+    // combat-resolved. Schema v1.23+ (Rule 38): also stamp
+    // lastCombatRoundCount so post-combat conditions evaluate correctly.
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+    state.lastCombatRoundCount = c.roundNum;
 
     if (getPlayerHealth() <= 0) {
       c.checkCombatEnd();
@@ -4699,6 +4755,17 @@ function evaluateCondition(cond) {
       if (!snap) return true;
       return !snap.hadCombat;
     }
+    case 'combat_round_count_lte': {
+      // Schema v1.23+ / codex v2.30 (Rule 38). Mirror of CLI. Returns
+      // false when state.lastCombatRoundCount is null — safe default
+      // for a stale condition reached without a prior combat.
+      if (state.lastCombatRoundCount === null || state.lastCombatRoundCount === undefined) return false;
+      return state.lastCombatRoundCount <= cond.value;
+    }
+    case 'combat_round_count_gte': {
+      if (state.lastCombatRoundCount === null || state.lastCombatRoundCount === undefined) return false;
+      return state.lastCombatRoundCount >= cond.value;
+    }
     default:
       return true;
   }
@@ -4741,6 +4808,10 @@ function describeCondition(cond) {
       return 'Requires: no ENDURANCE loss this section';
     case 'section_had_no_combat':
       return 'Requires: no combat this section';
+    case 'combat_round_count_lte':
+      return `Requires: last combat lasted ≤ ${cond.value} rounds`;
+    case 'combat_round_count_gte':
+      return `Requires: last combat lasted ≥ ${cond.value} rounds`;
     default:
       return 'Condition not met';
   }
@@ -4994,8 +5065,10 @@ function r36_useItem(itemId) {
   }
   if (fledTo !== null && combat) {
     // Fire on_combat_end before tearing down combat, then navigate.
-    // Mark hadCombat (schema v1.21+ / R36 v2.28.0).
+    // Mark hadCombat (schema v1.21+ / R36 v2.28.0). Schema v1.23+
+    // (Rule 38): also stamp lastCombatRoundCount.
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+    state.lastCombatRoundCount = combat.roundNum;
     r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
     combat.combatOver = true;
     combat.combatEndTarget = fledTo;
@@ -5321,6 +5394,7 @@ function playAgain() {
     visitedSections: new Set(),
     returnStack: [],
     sectionEntrySnapshot: null,
+    lastCombatRoundCount: null,
   };
   window._lastTestResult = null;
   window._forcedRollQueue = [];
@@ -5653,6 +5727,8 @@ function serializeState() {
     // (current health-stat value at section-enter + hadCombat flag).
     // Serialised so on_section_exit triggers fire correctly across save/load.
     sectionEntrySnapshot: state.sectionEntrySnapshot ? { ...state.sectionEntrySnapshot } : null,
+    // Rule 38 / schema v1.23+. Round-count of the most recent combat.
+    lastCombatRoundCount: state.lastCombatRoundCount ?? null,
     _lastTestResult: window._lastTestResult ?? null,
   };
 }
@@ -5674,6 +5750,7 @@ function deserializeState(obj) {
   state.visitedSections = new Set(obj.visitedSections || []);
   state.returnStack = Array.isArray(obj.returnStack) ? [...obj.returnStack] : [];
   state.sectionEntrySnapshot = obj.sectionEntrySnapshot ? { ...obj.sectionEntrySnapshot } : null;
+  state.lastCombatRoundCount = obj.lastCombatRoundCount ?? null;
   window._lastTestResult = obj._lastTestResult ?? null;
 }
 

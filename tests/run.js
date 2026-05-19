@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title bumped to v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title bumped to v1.23.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title at v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2740,7 +2740,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title is v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title is v1.23.0');
 });
 
 // ============================================================
@@ -2885,7 +2885,218 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.22.0', 'schema title bumped to v1.22.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title bumped to v1.23.0');
+});
+
+// ============================================================
+// Test 46: end_after_rounds auto-ends combat without a verdict
+// and navigates to end_to (Rule 38 / schema v1.23+).
+// ============================================================
+// MOTIVATED_BY: LW1 §231 / §339 "still fighting after 4 rounds
+// of combat, turn to 203" — the broken-off-without-verdict
+// combat semantic. Pre-v1.23 the only encodings were `script` or
+// honor-system choices. The Rule 38 primitive makes the round-
+// cap first-class and routes deterministically.
+// END_TO_END_VERIFY: drive a synthetic combat with
+// end_after_rounds: 4 + end_to: '2'; fight 4 rounds without
+// defeat; confirm combat ends, currentSection === '2', and
+// state.lastCombatRoundCount === 4.
+test('end_after_rounds auto-ends combat at round threshold and navigates to end_to', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0' },
+    },
+    sections: {
+      '1': {
+        text: 'broken-off combat',
+        events: [{
+          type: 'combat',
+          enemy_ref: 'test_enemy_01',
+          win_to: null,
+          end_after_rounds: 4,
+          end_to: '2',
+          flee_to: null,
+        }],
+        choices: [],
+      },
+      '2': { text: 'broken off', events: [], choices: [] },
+    },
+    enemies_catalog: { test_enemy_01: { name: 'Test Enemy', HEALTH: 100 } },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { HEALTH: 20 };
+  state.inventory = [];
+  state.equipment = {};
+
+  play.navigateTo(state, book, '1');
+  assertTrue(state.combat, 'combat started');
+  assertEqual(state.combat.endAfterRounds, 4, 'endAfterRounds passed through');
+  assertEqual(state.combat.endTo, '2', 'endTo passed through');
+
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(state.combat, 'combat still active after 3 rounds');
+  play.applyAction(state, book, 'attack', []);
+
+  assertTrue(!state.combat, 'combat ended at round 4 cap');
+  assertEqual(state.currentSection, '2', 'navigated to end_to');
+  assertEqual(state.lastCombatRoundCount, 4, 'lastCombatRoundCount set to end-round');
+});
+
+// ============================================================
+// Test 47: combat_round_count_lte gates a post-combat choice
+// (the "kill within N rounds" branch).
+// ============================================================
+// MOTIVATED_BY: LW1 §231 "If you kill him within 4 rounds of
+// combat, turn to 94" — the post-combat condition primitive.
+// END_TO_END_VERIFY: drive a combat that wins at round 2 (low
+// enemy health); confirm a choice gated on
+// combat_round_count_lte: 4 is selectable AND a choice gated on
+// combat_round_count_gte: 5 is NOT selectable.
+test('combat_round_count_lte gates post-combat choice (kill-within-N branch)', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      combat_system: { round_script: 'combat.damage_to_enemy = 100\ncombat.damage_to_player = 0' },
+    },
+    sections: {
+      '1': {
+        text: 'kill quick',
+        events: [{ type: 'combat', enemy_ref: 'glass_jaw', win_to: null, flee_to: null }],
+        choices: [
+          { text: 'kill within 4 rounds', target: '2', condition: { type: 'combat_round_count_lte', value: 4 } },
+          { text: 'still fighting', target: '3', condition: { type: 'combat_round_count_gte', value: 5 } },
+        ],
+      },
+      '2': { text: 'killed fast', events: [], choices: [] },
+      '3': { text: 'slow', events: [], choices: [] },
+    },
+    enemies_catalog: { glass_jaw: { name: 'Glass Jaw', HEALTH: 1 } },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { HEALTH: 20 };
+  state.inventory = [];
+  state.equipment = {};
+
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(!state.combat, 'combat ended at round 1 (enemy defeated)');
+  assertEqual(state.lastCombatRoundCount, 1, 'lastCombatRoundCount set to 1');
+
+  const choices = book.sections['1'].choices;
+  assertTrue(play.evalCondition(choices[0].condition, state, book), 'kill-within-4 choice available');
+  assertTrue(!play.evalCondition(choices[1].condition, state, book), 'still-fighting choice gated off');
+});
+
+// ============================================================
+// Test 48: flee_available_after_round blocks flee until the
+// round-gate window opens (Rule 38).
+// ============================================================
+// MOTIVATED_BY: LW1 §43 "After three rounds of combat, you
+// position yourself so that you can run down the hill. If you
+// wish to evade at this time then turn to 106." Pre-v1.23 the
+// flee was always available — honor-system tracking of "after
+// three rounds." The Rule 38 round-gate makes the constraint
+// first-class.
+// END_TO_END_VERIFY: drive a combat with
+// flee_available_after_round: 3 + flee_to: '2'; attempt flee at
+// round 1 → reject, combat still active; attempt flee at round
+// 3 → flees successfully, navigates to '2'.
+test('flee_available_after_round blocks flee before threshold', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      escaping: { flee_damage: 0 },
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0' },
+    },
+    sections: {
+      '1': {
+        text: 'positioning',
+        events: [{
+          type: 'combat',
+          enemy_ref: 'test_enemy_01',
+          win_to: null,
+          flee_to: '2',
+          flee_available_after_round: 3,
+        }],
+        choices: [],
+      },
+      '2': { text: 'fled', events: [], choices: [] },
+    },
+    enemies_catalog: { test_enemy_01: { name: 'Test Enemy', HEALTH: 100 } },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { HEALTH: 20 };
+  state.inventory = [];
+  state.equipment = {};
+
+  play.navigateTo(state, book, '1');
+  assertEqual(state.combat.fleeAvailableAfterRound, 3, 'gate passed through');
+
+  // Attempt flee at round 0 — should be rejected.
+  play.applyAction(state, book, 'flee', []);
+  assertTrue(state.combat, 'flee rejected before threshold — combat still active');
+  assertEqual(state.currentSection, '1', 'no navigation occurred');
+
+  // Fight to round 3.
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.combat.round, 3, 'reached round 3');
+
+  // Flee at round 3 — should succeed.
+  play.applyAction(state, book, 'flee', []);
+  assertTrue(!state.combat, 'flee accepted at round 3');
+  assertEqual(state.currentSection, '2', 'navigated to flee_to');
+  assertEqual(state.lastCombatRoundCount, 3, 'lastCombatRoundCount set on flee');
+});
+
+// ============================================================
+// Test 49: Schema back-compat — a v1.22-era book with no
+// Rule 38 references validates clean against the v1.23 schema.
+// ============================================================
+// MOTIVATED_BY: Rule 38 is schema-additive — the condition.type
+// enum gains two new values; the combat event gains three new
+// optional properties. Pre-v1.23 books must validate unchanged.
+test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  const book = {
+    metadata: { title: 'Back-compat smoke test', author: 'test', total_sections: 1 },
+    rules: { stats: [{ name: 'HP' }] },
+    character_creation: { steps: [{ action: 'roll_stat', stat: 'HP', formula: '2d6' }] },
+    sections: {
+      '1': {
+        text: 'test',
+        is_ending: false,
+        events: [{ type: 'combat', enemy_ref: 'foo', win_to: '1', flee_to: null }],
+        choices: [{ text: 'end', target: '1', condition: { type: 'has_flag', flag: 'x' } }],
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title is v1.23.0');
 });
 
 // ============================================================

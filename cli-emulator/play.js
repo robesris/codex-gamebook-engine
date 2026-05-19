@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.17.0';
+const CODEX_EMULATOR_VERSION = '3.18.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -391,6 +391,17 @@ function initialState(bookPath) {
     // (resolved via book.rules.health_stat at snapshot time) so the
     // structure is series-neutral.
     sectionEntrySnapshot: null,
+    // Schema v1.23+ / codex v2.30 (Rule 38). Round number the most recent
+    // combat ended on (1-based). Set at every on_combat_end dispatch path
+    // (win, lose-by-survive-N-rounds, all-enemies-defeated, player-flee,
+    // R36-triggered flee_combat, and the new end_after_rounds auto-end
+    // path) BEFORE the lifecycle trigger fires, so combat_round_count_lte
+    // and combat_round_count_gte conditions on post-combat choices /
+    // events evaluate against the round the fight actually ended on.
+    // Null = no combat has resolved yet; the two condition primitives
+    // return false on null (safe default — stale conditions reached
+    // without a prior combat do not fire spuriously).
+    lastCombatRoundCount: null,
   };
 }
 
@@ -493,6 +504,22 @@ function evalCondition(cond, state, book) {
       if (!snap) return true;
       return !snap.hadCombat;
     }
+    case 'combat_round_count_lte': {
+      // Schema v1.23+ / codex v2.30 (Rule 38). True iff
+      // state.lastCombatRoundCount <= cond.value. Defaults to false
+      // when no combat has resolved yet (lastCombatRoundCount === null)
+      // — the safe default for a stale condition reached without a
+      // prior combat is non-firing, not phantom-firing.
+      if (state.lastCombatRoundCount === null || state.lastCombatRoundCount === undefined) return false;
+      return state.lastCombatRoundCount <= cond.value;
+    }
+    case 'combat_round_count_gte': {
+      // Schema v1.23+ / codex v2.30 (Rule 38). True iff
+      // state.lastCombatRoundCount >= cond.value. Same null-safe
+      // default as combat_round_count_lte.
+      if (state.lastCombatRoundCount === null || state.lastCombatRoundCount === undefined) return false;
+      return state.lastCombatRoundCount >= cond.value;
+    }
     default: return true;
   }
 }
@@ -517,6 +544,8 @@ function describeCondition(cond) {
     case 'is_equipped': return `is equipped: ${cond.item}`;
     case 'section_had_no_endurance_loss': return 'section had no endurance loss';
     case 'section_had_no_combat': return 'section had no combat';
+    case 'combat_round_count_lte': return `last combat lasted <= ${cond.value} rounds`;
+    case 'combat_round_count_gte': return `last combat lasted >= ${cond.value} rounds`;
     default: return cond.type;
   }
 }
@@ -1898,6 +1927,17 @@ function startCombat(event, state, book) {
     // checkCombatEnd ends the fight in victory once combat.round
     // reaches this threshold, regardless of remaining enemy health.
     winAfterRounds: event.win_after_rounds,
+    // Schema v1.23+ (Rule 38): round-cap auto-end. When set,
+    // checkCombatEnd ends the fight WITHOUT a verdict once combat.round
+    // reaches this threshold. Distinct from winAfterRounds (treated as
+    // victory): this is the broken-off semantic. Routes to endTo if
+    // set, otherwise falls through to the section's choices.
+    endAfterRounds: event.end_after_rounds,
+    endTo: event.end_to,
+    // Schema v1.23+ (Rule 38): round-gate on flee. When set, the flee
+    // action is rejected until combat.round >= fleeAvailableAfterRound.
+    // Only meaningful when fleeTo is also set.
+    fleeAvailableAfterRound: event.flee_available_after_round,
     // Frozen, condition-evaluated modifier list for this combat.
     appliedModifiers,
     // Frozen, condition-evaluated damage_interactions list for this combat.
@@ -2093,7 +2133,16 @@ function getAvailableActions(state, book) {
         actions.push({ name: 'skip_post_round', description: 'Skip post-round action' });
       } else {
         actions.push({ name: 'attack', description: 'Attack' });
-        if (combat.fleeTo) actions.push({ name: 'flee', description: 'Flee' });
+        if (combat.fleeTo) {
+          // Schema v1.23+ (Rule 38): hide flee action until the round-gate
+          // window opens. Player can still attempt to flee earlier — the
+          // act handler will reject with a log line — but the canonical
+          // surface is to omit it from the action list so an automated
+          // harness sees the action as unavailable until round N.
+          const fleeRoundGate = combat.fleeAvailableAfterRound;
+          const fleeReady = fleeRoundGate === undefined || fleeRoundGate === null || combat.round >= fleeRoundGate;
+          if (fleeReady) actions.push({ name: 'flee', description: 'Flee' });
+        }
       }
       // Rule 36 on_user_use (schema v1.20+, in-combat context): list items
       // whose triggered_effects[] has on_user_use reachable from combat.
@@ -2899,6 +2948,16 @@ function handleCombatAction(action, args, state, book) {
   }
 
   if (action === 'flee') {
+    // Schema v1.23+ / codex v2.30 (Rule 38): round-gate. If
+    // fleeAvailableAfterRound is set, reject the flee until the
+    // player has fought enough rounds. The combat continues; the
+    // player can try again next round.
+    if (combat.fleeAvailableAfterRound !== undefined && combat.fleeAvailableAfterRound !== null
+        && combat.round < combat.fleeAvailableAfterRound) {
+      const missing = combat.fleeAvailableAfterRound - combat.round;
+      state.log.push(`Cannot flee yet — must fight ${missing} more round${missing === 1 ? '' : 's'}.`);
+      return state;
+    }
     const fleeRules = book.rules?.escaping || {};
     const fleeDmg = fleeRules.flee_damage || 2;
     setPlayerHealth(state, book, Math.max(0, getPlayerHealth(state, book) - fleeDmg));
@@ -2914,6 +2973,7 @@ function handleCombatAction(action, args, state, book) {
       // so any on_combat_end-triggered or downstream on_section_exit conditions
       // see the section as combat-resolved (schema v1.21+ / Rule 36 v2.28.0).
       if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+      state.lastCombatRoundCount = combat.round;
       dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
       state.combat = null;
       return navigateTo(state, book, combat.fleeTo);
@@ -3409,6 +3469,7 @@ function runUserUse(state, book, itemId) {
     // Fire on_combat_end (R36) before tearing down combat, then navigate.
     // Mark hadCombat on the section snapshot (schema v1.21+ / R36 v2.28.0).
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+    state.lastCombatRoundCount = combat.round;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     state.combat = null;
     return navigateTo(state, book, fledTo);
@@ -3439,10 +3500,32 @@ function checkCombatEnd(state, book) {
     // Mark hadCombat (schema v1.21+ / R36 v2.28.0) so the upcoming
     // on_section_exit dispatch sees this section as combat-resolved.
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+    state.lastCombatRoundCount = combat.round;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
     if (winTo) return navigateTo(state, book, winTo);
+    return processNextEvent(state, book);
+  }
+
+  // Schema v1.23+ / codex v2.30 (Rule 38). Round-cap auto-end — combat
+  // is broken off without a victory/loss verdict after end_after_rounds
+  // rounds. Distinct from win_after_rounds (Rule 31, treated as victory):
+  // this is the "the fight is broken off" semantic. Player-defeat and
+  // player-flee paths take priority (handled earlier in the round loop).
+  // Routes to end_to if set, otherwise falls through to the section's
+  // choice list (combine with combat_round_count_gte conditions for
+  // that pattern). Sets state.lastCombatRoundCount to combat.round
+  // BEFORE the lifecycle trigger fires, mirroring the other dispatch
+  // paths so post-combat conditions evaluate against the right round.
+  if (combat.endAfterRounds !== undefined && combat.endAfterRounds !== null && combat.round >= combat.endAfterRounds) {
+    state.log.push(`Combat broken off after ${combat.round} rounds.`);
+    if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+    state.lastCombatRoundCount = combat.round;
+    dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
+    const endTo = combat.endTo;
+    state.combat = null;
+    if (endTo !== undefined && endTo !== null) return navigateTo(state, book, endTo);
     return processNextEvent(state, book);
   }
 
@@ -3458,6 +3541,7 @@ function checkCombatEnd(state, book) {
     // Mark hadCombat (schema v1.21+ / R36 v2.28.0) so the upcoming
     // on_section_exit dispatch sees this section as combat-resolved.
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
+    state.lastCombatRoundCount = combat.round;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
@@ -3513,6 +3597,11 @@ function compactState(state) {
     // Round-tripped through state JSON so on_section_exit triggers
     // continue to evaluate correctly across act() calls.
     sectionEntrySnapshot: state.sectionEntrySnapshot ?? null,
+    // Rule 38 / schema v1.23+. Round number the most recent combat ended
+    // on; null until the first combat resolves. Round-tripped through
+    // state JSON so combat_round_count_lte/gte conditions on choices
+    // and events continue to evaluate correctly across act() calls.
+    lastCombatRoundCount: state.lastCombatRoundCount ?? null,
     log: state.log.slice(-20), // Keep recent log entries only
   };
   return out;

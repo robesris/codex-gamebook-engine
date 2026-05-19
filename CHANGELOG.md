@@ -6,6 +6,50 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.30.0 / GBF v1.23.0 / emulators v3.18.0 / package.json v3.18.0
+
+**Schema-additive ship — engine side.** New **Rule 38: Round-Count Combat Semantics** ships three composable primitives for combat sections whose source text branches on how many rounds the fight lasted. Canonical LW1 sites: §231 / §339 ("kill within 4 rounds → X / still fighting after 4 rounds → Y / evade after 2 rounds via the front door") and §43 ("after three rounds you position yourself to flee"). Pre-v1.23 these were either honor-system choice gates (`condition: null` on all branches) or hand-rolled `script` events reading `combat.round` — both shapes hide the round-count mechanic from the engine's enforcement layer. The Rule 38 primitives make the mechanic first-class.
+
+**Three primitives, all additive:**
+
+1. **`combat_round_count_lte` / `combat_round_count_gte` conditions** read `state.lastCombatRoundCount` (1-based round number the most recent combat ended on, set at every `on_combat_end` dispatch path BEFORE the lifecycle trigger fires). Default to **false** when no combat has resolved yet (lastCombatRoundCount === null) — safe non-firing on a stale condition reached without a prior combat.
+2. **`combat.end_after_rounds` + `combat.end_to`** — round-cap auto-end with no victory/loss verdict ("the fight is broken off"). Distinct from `win_after_rounds` (Rule 31, treated as victory) and from defeat-by-health (treated as loss). Routes to `end_to` if set, otherwise falls through to the section's choice list (combine with `combat_round_count_gte` choice conditions for that pattern). Mutually exclusive with `win_after_rounds` on the same combat event.
+3. **`combat.flee_available_after_round`** — round-gate on the flee action. The flee button is hidden in both emulators until `combat.round >= flee_available_after_round`; defensive guard in both `act` handlers rejects an early flee with a log line. Orthogonal to the round-cap fields.
+
+**Schema additions:**
+- `condition.type` enum: + `combat_round_count_lte`, `combat_round_count_gte`. `condition.value` description extended for round-count usage.
+- `combat` event: + `end_after_rounds` (integer, minimum 1), + `end_to` (integer | string | null), + `flee_available_after_round` (integer, minimum 1).
+- Title bumped v1.22.0 → v1.23.0.
+
+**CLI emulator (`cli-emulator/play.js`, 3.17.0 → 3.18.0):**
+- New `state.lastCombatRoundCount` slot (initial null) in `initialState`; round-tripped through `compactState`.
+- Combat-state init reads `event.end_after_rounds`, `event.end_to`, `event.flee_available_after_round` and stores them on the combat object as `endAfterRounds` / `endTo` / `fleeAvailableAfterRound`.
+- All four `on_combat_end` dispatch paths (player-flee, R36 flee_combat, win-by-survive-N-rounds, all-enemies-defeated) set `state.lastCombatRoundCount = combat.round` BEFORE firing the lifecycle trigger, mirroring the `hadCombat` snapshot stamp pattern.
+- New round-cap auto-end check in `checkCombatEnd` AFTER the `win_after_rounds` check (so survive-to-win takes priority on a fight configured as both): when `combat.round >= combat.endAfterRounds`, log "Combat broken off after N rounds", stamp `lastCombatRoundCount`, dispatch `on_combat_end`, clear `state.combat`, navigate to `endTo` (or fall through to `processNextEvent` for the section's choices).
+- Flee handler (`action === 'flee'`) defensive round-gate guard: rejects with a log line if `combat.round < combat.fleeAvailableAfterRound`.
+- `getAvailableActions` hides the flee action when the round-gate hasn't opened yet.
+- New `evalCondition` cases for `combat_round_count_lte` / `_gte` with null-safe defaults; new `describeCondition` cases for human-readable logging.
+
+**HTML emulator (`index.html`, 3.17.0 → 3.18.0):**
+- Same `state.lastCombatRoundCount` slot + round-trip through `serializeState` / `deserializeState` (so combat-round-gated post-combat conditions survive save/load).
+- Combat init reads the three new combat-event fields and stores them on `window._combat`.
+- Round loop adds the round-cap auto-end check after the survive-N-rounds check; sets `lastCombatRoundCount`, fires R36 on_combat_end, marks hadCombat, sets `combatEndTarget` to `endTo` or currentSection. Mirrors the CLI flow.
+- All three `on_combat_end` paths in the HTML combat loop now stamp `state.lastCombatRoundCount = c.roundNum` before the dispatch.
+- `combatFlee` rejects an early flee with a combat-log line; flee button render in the round-action panel hides (disabled placeholder shown) until the round-gate window opens.
+- `evaluateCondition` + `describeCondition` mirror CLI logic.
+
+**Tests:** test count 45 → 49. Four new tests: end_after_rounds auto-ends combat without verdict and navigates to end_to (Test 46); combat_round_count_lte gates a post-combat choice with a glass-jaw enemy that dies at round 1 (Test 47); flee_available_after_round blocks flee at round 0 then accepts at round 3, with lastCombatRoundCount stamped on the successful flee (Test 48); schema back-compat — a v1.22-era book with no Rule 38 references validates clean against v1.23 (Test 49). Schema-title assertions in 7 sites bumped v1.22.0 → v1.23.0.
+
+**Schema-additive verification:** all 6 maintained books (LW1, Warlock, GrailQuest, Windhammer, GyoG06, WWY) validate clean against v1.23 with 0 errors — Rule 38 is purely additive on enum/property surface and no existing field shape changed.
+
+**Books-side follow-up (separate sub-agent commit):**
+- `lw_01_flight_from_the_dark.json`: migrate §231 / §339 to `end_after_rounds: 4 + end_to: 203` + post-combat choices gated on `combat_round_count_lte: 4` / `combat_round_count_gte: 5`; migrate §43 to `flee_available_after_round: 3`. Drop any `condition: null` honor-system choice gating on round-count branches.
+- `known_issues.md`: open the round-count condition gap entry if not already tracked; close it as resolved in the same commit.
+
+**Files touched:** `codex.schema.json` (title bump v1.22.0 → v1.23.0; condition.type enum + two new types; combat event + three new properties; `condition.value` description extended), `cli-emulator/play.js` (version bump 3.17.0 → 3.18.0; lastCombatRoundCount initialState slot + compactState round-trip; four on_combat_end stamp sites; new round-cap auto-end branch in checkCombatEnd; flee round-gate guard + action hiding; evalCondition + describeCondition cases), `index.html` (version bump 3.17.0 → 3.18.0; mirror of all play.js changes; combatFlee gate + round-cap auto-end + flee button hiding + serialize/deserialize round-trip), `tests/run.js` (four new tests; test count 45 → 49; schema-title assertions bumped v1.22.0 → v1.23.0 across 7 sites), `gamebook_codex_v2.md` (title bump v2.29.0 → v2.30.0; new Rule 38 section after Rule 37 with worked LW1 §231 / §43 examples; new decision-table row; new pre-output checklist Rule 38 entry; Version Identifiers footer bump), `package.json` (version bump 3.17.0 → 3.18.0), `CHANGELOG.md` (this entry).
+
+---
+
 ## v2.29.0 / GBF v1.22.0 / emulators v3.17.0 / package.json v3.17.0
 
 **Schema-additive ship — engine side.** Rule 11 (Starting Resources That Require Rolls Are Character Creation Steps) gains the v2.29.0 extension closing the long-standing "starting-equipment table" gap captured in LW1's chargen step 8 (the R10 starting-equipment data bug carried since Chat #2 / known_issues line 66). Ships the `roll_table` chargen action with per-result `effects[]` mirroring the `roll_dice.results[range].effects` shape from Rule 22 / schema v1.8+. The roll's matched entry fires its events through the chargen-safe handler path (`modify_stat`, `add_item`, `set_flag`, `clear_flag`, `set_resource`); the rolled value itself is ephemeral — NOT written to any stat slot. Replaces the pre-v1.22 antipattern of `roll_stat` into a scratch slot (`state.stats.starting_equipment_roll`, `state.stats.weaponskill_weapon`) whose rolled value never flowed to any pickup event. The LW1 books-side migration (chargen steps 4 + 8 → `roll_table`) lands in a separate sub-agent commit immediately after this engine ship.
