@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title bumped to v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title bumped to v1.24.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title at v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2740,7 +2740,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title is v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title is v1.24.0');
 });
 
 // ============================================================
@@ -2885,7 +2885,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title bumped to v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title bumped to v1.24.0');
 });
 
 // ============================================================
@@ -3066,6 +3066,166 @@ test('flee_available_after_round blocks flee before threshold', () => {
 });
 
 // ============================================================
+// Test 50: add_item.quantity accumulates copies on stackable items.
+// ============================================================
+// MOTIVATED_BY: Rule 39 (schema v1.24+) — LW1 §113 "take two
+// Laumspur potions" was previously encoded either as a parallel-id
+// pair (`laumspur_1`, `laumspur_2`) or as a single add_item that
+// silently dropped the second copy via set-semantics. With
+// stackable: true on the catalog entry and quantity: 2 on the
+// add_item event, both copies land in inventory.
+// END_TO_END_VERIFY: drive the CLI emulator through LW1 to §113
+// once that section is migrated; confirm state.inventory holds
+// two 'laumspur' entries and the inventory render shows "× 2".
+test('Rule 39 v2.31.0: add_item.quantity accumulates on stackable item', () => {
+  const book = buildBook({
+    items_catalog: {
+      healing_herb: { name: 'Healing Herb', type: 'consumable', stackable: true },
+    },
+    sections: {
+      '1': {
+        text: 'forage',
+        events: [{ type: 'add_item', item: 'healing_herb', quantity: 3 }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+
+  play.navigateTo(state, book, '1');
+
+  const heaps = state.inventory.filter(id => id === 'healing_herb');
+  assertEqual(heaps.length, 3, 'three copies of stackable item accumulated');
+});
+
+// ============================================================
+// Test 51: add_item.quantity is set-semantic on non-stackable items.
+// ============================================================
+// MOTIVATED_BY: Rule 39 composition — quantity > 1 on a
+// non-stackable item collapses to a single inventory entry via
+// the existing set-semantics dedup. This is the equippable-item
+// shape (two copies of the same sword make no sense) and the
+// alternate-path-grant shape (LW1's `sword` granted at §15/§62/§184
+// — each section is a first-pickup from a different branch).
+// END_TO_END_VERIFY: drive the CLI emulator through a custom test
+// book where a section fires `add_item glow_orb quantity: 5` with
+// glow_orb declared without `stackable`; confirm state.inventory
+// holds exactly one 'glow_orb' entry.
+test('Rule 39 v2.31.0: add_item.quantity set-semantic on non-stackable item', () => {
+  const book = buildBook({
+    items_catalog: {
+      glow_orb: { name: 'Glow Orb', type: 'key_item' },
+    },
+    sections: {
+      '1': {
+        text: 'try',
+        events: [{ type: 'add_item', item: 'glow_orb', quantity: 5 }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+
+  play.navigateTo(state, book, '1');
+
+  const heaps = state.inventory.filter(id => id === 'glow_orb');
+  assertEqual(heaps.length, 1, 'non-stackable item deduped to one copy');
+});
+
+// ============================================================
+// Test 52: remove_item.quantity removes N copies one at a time.
+// ============================================================
+// MOTIVATED_BY: Rule 39 — `remove_item.quantity` is the mirror of
+// `add_item.quantity`. Splices one copy at a time up to quantity;
+// over-remove tail is a no-op. Use case: a section that consumes
+// multiple rations or potions in one beat.
+// END_TO_END_VERIFY: drive the CLI emulator through a custom test
+// section that fires `remove_item healing_herb quantity: 2` after
+// the player has accumulated three copies; confirm one copy
+// remains. Fire it again with quantity: 5 (over-remove); confirm
+// no copies remain and no error fires.
+test('Rule 39 v2.31.0: remove_item.quantity splices N copies; over-remove is no-op', () => {
+  const book = buildBook({
+    items_catalog: {
+      healing_herb: { name: 'Healing Herb', type: 'consumable', stackable: true },
+    },
+    sections: {
+      '1': {
+        text: 'consume some',
+        events: [{ type: 'remove_item', item: 'healing_herb', quantity: 2 }],
+        choices: [],
+        is_ending: false,
+      },
+      '2': {
+        text: 'consume the rest plus extras',
+        events: [{ type: 'remove_item', item: 'healing_herb', quantity: 5 }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.inventory = ['healing_herb', 'healing_herb', 'healing_herb'];
+
+  play.navigateTo(state, book, '1');
+  assertEqual(state.inventory.filter(id => id === 'healing_herb').length, 1, 'one copy left after remove quantity: 2');
+
+  play.navigateTo(state, book, '2');
+  assertEqual(state.inventory.filter(id => id === 'healing_herb').length, 0, 'over-remove is no-op; no error');
+});
+
+// ============================================================
+// Test 53: Schema back-compat — a v1.23-era book with no
+// Rule 39 references validates clean against the v1.24 schema.
+// ============================================================
+// MOTIVATED_BY: Rule 39 is schema-additive — `add_item.quantity`,
+// `remove_item.quantity`, and `items_catalog[id].stackable` are
+// all new optional fields. Pre-v1.24 books must validate unchanged.
+test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  const book = {
+    metadata: { title: 'Back-compat smoke test', author: 'test', total_sections: 1 },
+    rules: { stats: [{ name: 'HP' }] },
+    character_creation: { steps: [{ action: 'add_item', item: 'potion' }] },
+    items_catalog: {
+      potion: { name: 'Potion', type: 'consumable' },
+    },
+    sections: {
+      '1': {
+        text: 'test',
+        is_ending: false,
+        events: [
+          { type: 'add_item', item: 'potion' },
+          { type: 'remove_item', item: 'potion' },
+        ],
+        choices: [],
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title is v1.24.0');
+});
+
+// ============================================================
 // Test 49: Schema back-compat — a v1.22-era book with no
 // Rule 38 references validates clean against the v1.23 schema.
 // ============================================================
@@ -3096,7 +3256,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.23.0', 'schema title is v1.23.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title is v1.24.0');
 });
 
 // ============================================================

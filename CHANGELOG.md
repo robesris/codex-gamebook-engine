@@ -6,6 +6,59 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.31.0 / GBF v1.24.0 / emulators v3.19.0 / package.json v3.19.0
+
+**Schema-additive ship — engine side.** New **Rule 39: Stackable Consumables** ships three composable primitives for sections that grant multiple copies of the same fungible consumable in a single beat. Canonical sites: LW1 §113 ("take two Laumspur potions"), Windhammer §9 ("three torches gathered from the pile"). Pre-v1.24 the only encodings were (a) parallel-id catalog entries (`laumspur_1`, `laumspur_2`, `laumspur_3` as three distinct items_catalog rows that duplicated mechanics) or (b) a single `add_item` event whose count was silently lost via set-semantics dedup. The Rule 39 primitives encode the count as first-class data and retire the parallel-id pattern.
+
+**Three primitives, all additive:**
+
+1. **`add_item.quantity: N`** (integer ≥ 1, default 1) on the `add_item` event and the `character_creation_step` `add_item` action — fires the add the equivalent of `N` times. Behaviour depends on the target item's `stackable` flag.
+2. **`remove_item.quantity: N`** (integer ≥ 1, default 1) on the `remove_item` event — removes up to `N` copies, splicing one at a time; if the player holds fewer than `N`, the remainder is a silent no-op.
+3. **`items_catalog[id].stackable: boolean`** (default false) on item catalog entries — when true, multiple copies of the id accumulate in `state.inventory` (multiset semantics); when false (the pre-v1.24 default), set-semantics is preserved.
+
+The two halves (event quantity, catalog stackable) compose: stackable + quantity = accumulate; non-stackable + quantity = first copy lands, subsequent are no-ops via existing set-semantics (the natural behaviour for equippable items and key items, no special handling needed). No cross-field schema constraint — equipment slot mechanics already prevent two equippable copies from being equipped at once, so the equippable + stackable combination is meaningless rather than illegal.
+
+**Schema additions:**
+- Event schema: + `quantity` (integer ≥ 1) on `add_item` and `remove_item`.
+- character_creation_step schema: + `quantity` (integer ≥ 1) on `add_item` step.
+- Item schema: + `stackable` (boolean, default false).
+- Title bumped v1.23.0 → v1.24.0.
+
+**CLI emulator (`cli-emulator/play.js`, 3.18.0 → 3.19.0):**
+- New `addItemToInventory(state, book, itemId, quantity)` helper — stackable-aware push loop with the set-semantics dedup guard preserved when `stackable !== true`. Always runs `autoEquipOnAdd` once at the end (idempotent).
+- `case 'add_item'` event handler now reads `event.quantity` (default 1) and routes through the helper. Log line carries the count suffix (`Acquired: laumspur ×2`) when quantity > 1.
+- Chargen step `step.action === 'add_item'` and the chargen choose_one potion branch route through the same helper.
+- `case 'remove_item'` event handler now reads `event.quantity` (default 1) and splices one copy at a time in a loop, breaking early when no copies remain. Log line carries the count suffix when more than one removed.
+- Rule 36 `consume_on_fire` removal path updated from "filter out all copies" to "splice one copy" — preserves pre-v1.24 behaviour (no item ever had multiple copies in inventory) AND gives the correct semantic for stackable items going forward.
+
+**HTML emulator (`index.html`, 3.18.0 → 3.19.0):**
+- New `addItemToInventoryHTML(itemId, quantity)` helper mirroring the CLI helper.
+- `handleAddItem` reads `event.quantity` (default 1) and routes through the helper; the on-screen "Acquired: …" message carries the count suffix when > 1.
+- `handleRemoveItem` reads `event.quantity` and splices one copy at a time.
+- `applyChargenEffect`'s `add_item` branch routes through the helper.
+- Phase-1 chargen items[] collector (both the direct `step.action === 'add_item'` branch and the `roll_table` effects branch) pushes `quantity` copies into the items[] array; the final processing loop uses the stackable-aware guard.
+- Deferred-conditional chargen steps (the schema v1.6+ condition-gated step path) also honour `quantity` for both direct `add_item` and roll_table effects.
+- Three Rule 36 `consume_on_fire` paths (per-round combat consume, `r36_useItem` consume, `r36_dispatchLifecycleTriggers` consume) updated from filter-all to splice-one.
+- `updateInventory` collapses duplicate ids to a single row and renders `name × N` when N > 1. First-appearance order preserved; equip/unequip and Use buttons attach to the collapsed row.
+
+**Tests (`tests/run.js`, 49 → 53):**
+- Test 50: `add_item.quantity` accumulates copies when the item is stackable.
+- Test 51: `add_item.quantity` is set-semantic (no-op for subsequent copies) when the item is not stackable.
+- Test 52: `remove_item.quantity` removes N copies one at a time and the over-remove tail is a no-op.
+- Test 53: schema-additive — a pre-v1.23 book with no Rule 39 references validates clean against the v1.24 schema.
+
+**Books-side impact (deferred to follow-up sub-agent waves):**
+- LW1: §113 "two Laumspur" can collapse to `add_item laumspur quantity: 2` + `stackable: true` on the catalog entry. Other alternate-path single-grant cases (`sword` at §15/§62/§184, `dagger` at §20/§267/§319, etc.) remain set-semantic and need no migration.
+- Windhammer: `nahla_bread` and `torch` can collapse to `stackable: true`; the `torches_bundle` parallel-id entry can be retired with the §9 grant becoming `add_item torch quantity: 3`. Multi-site grants of `nahla_extract` and `silver_coin` are set-semantic (alternate paths) and need no migration.
+- No GrailQuest involvement — that book is out of maintained scope per Chat #37.
+- Audit-only on Warlock / WWY / GyoG06 — no current production case in those books accumulates a stackable consumable.
+
+**Why this shape over `consume.charges` per item.** The original A4 design note (NEXT_SESSION Chat #36) proposed a composite (`add_item.quantity` outer + `consume.charges` inner) to handle GrailQuest's "three bottles each holding six doses of healing potion" pattern. Chat #37 dropped GrailQuest from the engine's maintained scope (it's an anomalous outlier), which removed the only production motivation for `consume.charges`. The remaining shapes (LW1 §113, Windhammer §9) are pure outer-quantity cases — single-use consumables collected in batches. Per "don't design for hypothetical future requirements," the inner-charges half is omitted from this ship. A future book that genuinely needs per-item charges (and isn't GrailQuest) can revisit the design at that point.
+
+**Schema-additive.** Pre-v1.24 books validate unchanged against the v1.24 schema. The `add_item` / `remove_item` events gain one new optional `quantity` field; the character_creation_step `add_item` action gains the same; `items_catalog[id]` gains one new optional `stackable` field. No existing field shape changes, no field is repurposed, no field is removed. A v1.23-era book that does not reference any of the new primitives produces the same validation error count against v1.24 as it did against v1.23, and the emulators' behaviour on such a book is bit-identical to v3.18.
+
+---
+
 ## v2.30.0 / GBF v1.23.0 / emulators v3.18.0 / package.json v3.18.0
 
 **Schema-additive ship — engine side.** New **Rule 38: Round-Count Combat Semantics** ships three composable primitives for combat sections whose source text branches on how many rounds the fight lasted. Canonical LW1 sites: §231 / §339 ("kill within 4 rounds → X / still fighting after 4 rounds → Y / evade after 2 rounds via the front door") and §43 ("after three rounds you position yourself to flee"). Pre-v1.23 these were either honor-system choice gates (`condition: null` on all branches) or hand-rolled `script` events reading `combat.round` — both shapes hide the round-count mechanic from the engine's enforcement layer. The Rule 38 primitives make the mechanic first-class.

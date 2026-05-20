@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.18.0';
+const CODEX_EMULATOR_VERSION = '3.19.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -1465,7 +1465,8 @@ function startCharacterCreation() {
         if (Array.isArray(match.entry.effects)) {
           for (const sub of match.entry.effects) {
             if (sub.type === 'add_item' && sub.item) {
-              items.push(sub.item);
+              const q = (typeof sub.quantity === 'number' && sub.quantity >= 1) ? Math.floor(sub.quantity) : 1;
+              for (let i = 0; i < q; i++) items.push(sub.item);
             } else {
               applyChargenEffect(sub);
             }
@@ -1504,7 +1505,8 @@ function startCharacterCreation() {
       // that disables until the allocation is valid.
       interactiveSteps.push({ type: 'distribute', step });
     } else if (step.action === 'add_item') {
-      items.push(step.item);
+      const q = (typeof step.quantity === 'number' && step.quantity >= 1) ? Math.floor(step.quantity) : 1;
+      for (let i = 0; i < q; i++) items.push(step.item);
     } else if (step.action === 'set_resource') {
       // Canonical resource slots first. If the name doesn't match any of
       // them, fall through to check whether it matches a declared stat —
@@ -1541,8 +1543,13 @@ function startCharacterCreation() {
 
   // Add starting items. Auto-equip any equippable ones so the character
   // starts wearing the Helmet, Chainmail, etc. declared in character_creation.
+  // Schema v1.24+ (Rule 39): items[] may carry the same id more than once
+  // (an add_item step with quantity > 1 pushes N times); stackable items
+  // accumulate, non-stackable items get one copy via existing set semantics.
   for (const item of items) {
-    if (!state.inventory.includes(item)) state.inventory.push(item);
+    const def = (gameData?.items_catalog || {})[item] || {};
+    const isStackable = def.stackable === true;
+    if (isStackable || !state.inventory.includes(item)) state.inventory.push(item);
     autoEquipOnAdd(item);
   }
 
@@ -1636,9 +1643,9 @@ function processCreationSteps(steps, items) {
         if (Array.isArray(match.entry.effects)) {
           for (const sub of match.entry.effects) {
             if (sub.type === 'add_item' && sub.item) {
-              if (!state.inventory.includes(sub.item)) state.inventory.push(sub.item);
-              autoEquipOnAdd(sub.item);
-              items.push(sub.item);
+              const q = (typeof sub.quantity === 'number' && sub.quantity >= 1) ? Math.floor(sub.quantity) : 1;
+              addItemToInventoryHTML(sub.item, q);
+              for (let i = 0; i < q; i++) items.push(sub.item);
             } else {
               applyChargenEffect(sub);
             }
@@ -1658,9 +1665,9 @@ function processCreationSteps(steps, items) {
       `;
       rollContainer.appendChild(div);
     } else if (step.action === 'add_item') {
-      if (!state.inventory.includes(step.item)) state.inventory.push(step.item);
-      autoEquipOnAdd(step.item);
-      items.push(step.item);
+      const q = (typeof step.quantity === 'number' && step.quantity >= 1) ? Math.floor(step.quantity) : 1;
+      addItemToInventoryHTML(step.item, q);
+      for (let i = 0; i < q; i++) items.push(step.item);
     } else if (step.action === 'set_resource') {
       if (step.resource === 'provisions') state.provisions = step.amount;
       else if (step.resource === 'gold') state.gold = step.amount;
@@ -2042,7 +2049,10 @@ function applyChargenEffect(event) {
       if (event.flag) state.flags.delete(event.flag);
       return;
     case 'add_item':
-      if (event.item && !state.inventory.includes(event.item)) state.inventory.push(event.item);
+      if (event.item) {
+        const q = (typeof event.quantity === 'number' && event.quantity >= 1) ? Math.floor(event.quantity) : 1;
+        addItemToInventoryHTML(event.item, q);
+      }
       return;
     case 'set_resource': {
       const r = event.resource;
@@ -2295,12 +2305,22 @@ function updateInventory() {
     return;
   }
   const catalog = gameData?.items_catalog || {};
+  // Rule 39 (schema v1.24+): collapse duplicate ids to a single row with
+  // a `× N` count when N > 1. Preserves first-appearance order. Equipped
+  // and Use buttons render on the row regardless of count.
+  const counts = new Map();
   for (const item of displayItems) {
+    counts.set(item, (counts.get(item) || 0) + 1);
+  }
+  const uniqueItems = Array.from(counts.keys());
+  for (const item of uniqueItems) {
     const li = document.createElement('li');
     const def = catalog[item];
     const equipped = isItemEquipped(item);
     const label = document.createElement('span');
-    label.textContent = getItemName(item) + (equipped ? ' (equipped)' : '');
+    const count = counts.get(item);
+    const countSuffix = count > 1 ? ` × ${count}` : '';
+    label.textContent = getItemName(item) + countSuffix + (equipped ? ' (equipped)' : '');
     li.appendChild(label);
     // Add equip/unequip button for equippable items.
     if (def && def.equippable) {
@@ -2720,16 +2740,31 @@ function renderContinueToEnding(endingSection, summary) {
 }
 
 // --- Add Item ---
+// Rule 39 (schema v1.24+). Stackable-aware inventory add. Adds `quantity`
+// copies of `itemId` to state.inventory. If items_catalog[itemId].stackable
+// is true, copies accumulate (multiset); otherwise set semantics dedup
+// the second-and-beyond copies (pre-v1.24 behaviour preserved). Always
+// runs autoEquipOnAdd once at the end (idempotent).
+function addItemToInventoryHTML(itemId, quantity) {
+  const n = (typeof quantity === 'number' && quantity >= 1) ? Math.floor(quantity) : 1;
+  const def = (gameData?.items_catalog || {})[itemId] || {};
+  const isStackable = def.stackable === true;
+  for (let i = 0; i < n; i++) {
+    if (isStackable || !state.inventory.includes(itemId)) {
+      state.inventory.push(itemId);
+    }
+  }
+  autoEquipOnAdd(itemId);
+}
+
 function handleAddItem(event) {
   const item = event.item;
-  if (!state.inventory.includes(item)) {
-    state.inventory.push(item);
-  }
-  autoEquipOnAdd(item);
+  const q = (typeof event.quantity === 'number' && event.quantity >= 1) ? Math.floor(event.quantity) : 1;
+  addItemToInventoryHTML(item, q);
   const content = document.getElementById('game-content');
   const msg = document.createElement('div');
   msg.className = 'event-msg gain';
-  msg.textContent = `Acquired: ${getItemName(item)}`;
+  msg.textContent = `Acquired: ${getItemName(item)}${q > 1 ? ' ×' + q : ''}`;
   content.appendChild(msg);
   updateInventory();
   renderEquipmentPanel();
@@ -2737,13 +2772,19 @@ function handleAddItem(event) {
 
 // --- Remove Item ---
 function handleRemoveItem(event) {
-  const idx = state.inventory.indexOf(event.item);
-  if (idx >= 0) state.inventory.splice(idx, 1);
+  const q = (typeof event.quantity === 'number' && event.quantity >= 1) ? Math.floor(event.quantity) : 1;
+  let removed = 0;
+  for (let i = 0; i < q; i++) {
+    const idx = state.inventory.indexOf(event.item);
+    if (idx < 0) break;
+    state.inventory.splice(idx, 1);
+    removed++;
+  }
   autoUnequipOnRemove(event.item);
   const content = document.getElementById('game-content');
   const msg = document.createElement('div');
   msg.className = 'event-msg loss';
-  msg.textContent = `Lost: ${getItemName(event.item)}`;
+  msg.textContent = `Lost: ${getItemName(event.item)}${removed > 1 ? ' ×' + removed : ''}`;
   content.appendChild(msg);
   updateInventory();
   renderEquipmentPanel();
@@ -3791,10 +3832,12 @@ function handleCombat(event) {
     for (const q of r36ctx.nonDamageQueue) {
       r36_dispatchTriggeredEvent(q.effect, r36_describeSource(q.source), c.combatLog);
     }
-    // Apply Rule 36 consume_on_fire removals.
+    // Apply Rule 36 consume_on_fire removals (Rule 39 v1.24+: splice one
+    // copy, not filter all — stackable items keep their remaining copies).
     for (const itemId of r36ctx.consume) {
-      state.inventory = state.inventory.filter(id => id !== itemId);
-      if (state.equipment) {
+      const idx = state.inventory.indexOf(itemId);
+      if (idx >= 0) state.inventory.splice(idx, 1);
+      if (state.equipment && !state.inventory.includes(itemId)) {
         for (const slot of Object.keys(state.equipment)) {
           if (state.equipment[slot] === itemId) delete state.equipment[slot];
         }
@@ -5055,8 +5098,10 @@ function r36_useItem(itemId) {
     if (te.consume_on_fire) consume = true;
   }
   if (consume) {
-    state.inventory = state.inventory.filter(id => id !== itemId);
-    if (state.equipment) {
+    // Rule 39 v1.24+: splice one copy, not filter all.
+    const idx = state.inventory.indexOf(itemId);
+    if (idx >= 0) state.inventory.splice(idx, 1);
+    if (state.equipment && !state.inventory.includes(itemId)) {
       for (const slot of Object.keys(state.equipment)) {
         if (state.equipment[slot] === itemId) delete state.equipment[slot];
       }
@@ -5121,9 +5166,11 @@ function r36_dispatchLifecycleTriggers(trigger, options) {
     }
     if (e.source === 'item' && te.consume_on_fire) consume.push(e.itemId);
   }
+  // Rule 39 v1.24+: splice one copy, not filter all.
   for (const itemId of consume) {
-    state.inventory = state.inventory.filter(id => id !== itemId);
-    if (state.equipment) {
+    const idx = state.inventory.indexOf(itemId);
+    if (idx >= 0) state.inventory.splice(idx, 1);
+    if (state.equipment && !state.inventory.includes(itemId)) {
       for (const slot of Object.keys(state.equipment)) {
         if (state.equipment[slot] === itemId) delete state.equipment[slot];
       }

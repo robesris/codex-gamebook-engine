@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.30.0
+# THE GAMEBOOK CODEX v2.31.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -2671,6 +2671,96 @@ The `flee_available_after_round: 3` blocks the flee action until the player has 
 
 **Verification.** For every section in a book whose source text mentions "rounds of combat" or "after N rounds" in a choice or as a setup phrase, the corresponding `combat` event AND the section's choices MUST use the appropriate Rule 38 primitives. Specifically: (a) "kill within N rounds → X" / "still fighting after N rounds → Y" patterns → the combat carries `end_after_rounds: N, end_to: Y` AND the choices carry `combat_round_count_lte: N` / `combat_round_count_gte: N+1` conditions; (b) "evade after M rounds → Z" patterns → the combat carries `flee_to: Z, flee_available_after_round: M` AND the narrative choice mirroring the evade option is left for documentation symmetry. A `roll_dice` or `script` event that re-implements the round-count branching is a Rule 38 violation and should be migrated to the structured primitives.
 
+### Rule 39: Stackable Consumables (`add_item.quantity`, `remove_item.quantity`, `items_catalog[id].stackable`)
+
+Some sections grant the player multiple copies of the same fungible consumable in a single beat — "you find two healing herbs" (LW1 §113), "three torches gathered from the pile" (Windhammer §9), "the merchant hands you four meal rations." Pre-v1.24 the only way to encode this was either (a) declare a per-pickup catalog id for each copy (`laumspur_1`, `laumspur_2`, `laumspur_3` — three distinct items_catalog entries) and emit three `add_item` events, or (b) emit a single `add_item` and rely on set-semantics dedup, which silently dropped the second and third copies. Both shapes lose the count from the data: (a) bloats the catalog with parallel entries that have to be ranked / sorted at every read site, and (b) loses the count entirely from the player's inventory.
+
+**Schema v1.24+ / codex v2.31.0 ships three composable additives** that together encode the multi-copy-grant pattern as first-class data:
+
+**Event-level fields (additive on `add_item` and `remove_item`):**
+
+- `add_item.quantity: N` (integer ≥ 1, default 1) — fire the add the equivalent of `N` times. The behaviour for the carry side depends on the item's `stackable` flag (below).
+- `remove_item.quantity: N` (integer ≥ 1, default 1) — remove up to `N` copies, splicing one at a time. If the player holds fewer than `N`, the remainder is a silent no-op (the event does not error).
+
+Both fields also apply to the `character_creation_step` `add_item` action (chargen-time grants — e.g. a starting-equipment roll outcome that yields two of a stackable item).
+
+**Catalog-level field (additive on `items_catalog[id]`):**
+
+- `stackable: boolean` (default false) — when true, multiple copies of this id may accumulate in `state.inventory` (multiset semantics): successive `add_item` events stack up rather than the second-and-beyond being silent no-ops via set-semantics dedup. When false (the pre-v1.24 default), set-semantics is preserved — the inventory holds at most one copy of the id, and `quantity > 1` collapses to "one copy in inventory plus N-1 no-op log entries." Inventory rendering in both emulators shows a `× N` count next to the item name when `N > 1`.
+
+**Mutual relationship.** `quantity > 1` and `stackable: true` are independent fields that compose naturally:
+
+| `stackable` on item | `quantity` on event | Result in inventory |
+|---|---|---|
+| `true` | `1` (or absent) | 1 copy of the id appended (or first copy if none yet) |
+| `true` | `N > 1` | `N` copies appended; existing copies remain (count grows) |
+| `false` (or absent) | `1` (or absent) | First copy appended; subsequent fires are no-ops via set-semantics |
+| `false` (or absent) | `N > 1` | First copy appended; remaining `N-1` are no-ops (same shape as a sequence of `add_item` for a non-stackable id) |
+
+The non-stackable + `quantity > 1` cell is harmless: it produces the same inventory shape as `quantity: 1` and a single `Acquired: …` log line. Books that aren't careful won't break — the only thing they lose is the count. This is the relevant shape for equippable items (where two copies of the same id make no sense because the equip slot is singleton) and for key items (where the second copy is meaningless).
+
+**Canonical worked examples.**
+
+*LW1 §113 — "Take two Laumspur potions":*
+
+```json
+{
+  "items_catalog": {
+    "laumspur": {
+      "name": "Laumspur",
+      "type": "consumable",
+      "stackable": true,
+      "consume": { "satisfies_eat_meal": true, "effects": [{ "type": "modify_stat", "stat": "ENDURANCE", "amount": 4 }] }
+    }
+  },
+  "sections": {
+    "113": {
+      "text": "...You find two Laumspur potions on the apothecary's shelf. Take them and turn to 220.",
+      "events": [
+        { "type": "add_item", "item": "laumspur", "quantity": 2 }
+      ],
+      "choices": [{ "text": "Turn to 220.", "target": 220, "condition": null }]
+    }
+  }
+}
+```
+
+Inventory after the player passes through §113: `state.inventory` contains two `'laumspur'` entries. The inventory panel displays `Laumspur × 2`. Each subsequent eat_meal pause where the player selects Laumspur removes one copy and runs the consume.effects against the remaining one; after two such selections the count drops to zero and Laumspur disappears from the inventory list. A later section that grants another Laumspur (no current LW1 site does, but the schema permits it) would push the count back up — the pickup is no longer a silent no-op.
+
+*Windhammer §9 — "three torches":*
+
+```json
+{
+  "items_catalog": {
+    "torch": { "name": "Torch", "type": "general", "stackable": true, "takes_inventory_slot": true }
+  },
+  "sections": {
+    "9": {
+      "events": [{ "type": "add_item", "item": "torch", "quantity": 3 }]
+    }
+  }
+}
+```
+
+The pre-v1.24 encoding for this case was `torches_bundle: { name: "Torches (bundle of 3)" }` — a single catalog entry whose name held the count in display text. With Rule 39, the bundle catalog entry is no longer necessary; the bundling is encoded at the event level via `quantity: 3` and the count is first-class in `state.inventory`.
+
+**Non-stackable + `quantity > 1` (set-semantic alternative-path grants).** LW1 grants `sword` at §15 / §62 / §184 — three alternate-path sections that ALL produce the same outcome ("you start the adventure with a sword"). These are NOT a stackable-grant pattern; each section is the player's first pickup from a different branch. Encoding each section as `add_item: sword` (no quantity, no stackable) is correct — the existing set-semantics produces the right inventory shape (one sword, not three). Rule 39 does NOT mandate `stackable: true` on `sword`; it only enables it for ids whose source text actually accumulates.
+
+**Schema-additive.** Pre-v1.24 books validate unchanged against the v1.24 schema. The `add_item` / `remove_item` events gain one new optional `quantity` field; the character_creation_step `add_item` action gains the same; `items_catalog[id]` gains one new optional `stackable` field. No existing field shape changes, no field is repurposed, no field is removed. A v1.23-era book that does not reference any of the new primitives produces the same validation error count against v1.24 as it did against v1.23, and the emulators' behaviour on such a book is bit-identical to v3.18.
+
+**Engine-side notes.**
+
+- The reference emulators' `add_item` handler resolves `event.quantity` (default 1), looks up `items_catalog[event.item].stackable`, and loops the `push`-into-inventory step `quantity` times — with the set-semantics dedup guard preserved when `stackable !== true`. Auto-equip via `autoEquipOnAdd` fires once at the end (idempotent for already-equipped or non-equippable items).
+- The `remove_item` handler loops `splice` one copy at a time up to `quantity`, breaking early when no copies remain. `autoUnequipOnRemove` fires once at the end (idempotent for non-equipped items).
+- The inventory panel groups duplicate ids and renders `name × N` when the count is greater than 1.
+- Rule 36 `consume_on_fire` removals are updated from "filter out all copies" to "splice one copy" — preserves backward compatibility (no current item has multiple copies in pre-v1.24 books) AND gives the correct semantic for stackable items going forward.
+
+**Anti-pattern this rule replaces.** Pre-v1.24, parallel-id encoding (`laumspur_1`, `laumspur_2`, `laumspur_3` as three catalog entries) was the only way to track multiple copies of a fungible consumable. Each entry duplicated the name, type, consume block, and stat_modifier; rendering required collapsing the parallel ids into a single display row (search the codebase for `healing_potion_bottle_1` / `_2` / `_3` for the previous shape). This rule retires that pattern: a single catalog entry with `stackable: true` plus quantity-bearing events expresses the same information without parallel-id bloat.
+
+**Compositional notes.** `stackable: true` is mutually meaningless with `equippable: true` — equippable items occupy a single slot, and the equip-slot mechanic already prevents two copies of the same id from being equipped at once. Declaring both flags on the same item has no defined semantics; books should not do it. The schema does not enforce this exclusion (there's no cross-field rejection); it's a soft authoring convention. Similarly, items that hold their own count as a name component ("Oil Flasks (4)", "Lunchbox") are not Rule 39 candidates — the count is part of the item's identity, not an inventory multiplier. Rule 39 applies only when the same id may legitimately accumulate across pickups.
+
+**Verification.** For every section in a book whose source text grants multiple copies of the same fungible consumable in a single beat ("take two Laumspur potions", "three torches", "four meal rations"), the corresponding `add_item` event MUST carry `quantity: N` AND the item's catalog entry MUST carry `stackable: true`. A pre-v1.24 parallel-id encoding (multiple catalog entries with sequence-numbered ids that share the same mechanics) is a Rule 39 violation and should be collapsed to one entry with `stackable: true`. For sections that grant the same id along an alternate path (where set-semantics is the right behaviour — only one copy in inventory regardless of which path the player took), Rule 39 does NOT apply; leave `stackable` unset (defaults to false) and the existing set-semantics produces the correct shape.
+
 ---
 
 1. Universal Gamebook Concepts
@@ -4657,7 +4747,7 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ## Version identifiers
 
-**Codex v2.30.0 / GBF schema v1.23.0 / CLI emulator v3.18.0 / HTML emulator v3.18.0.**
+**Codex v2.31.0 / GBF schema v1.24.0 / CLI emulator v3.19.0 / HTML emulator v3.19.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

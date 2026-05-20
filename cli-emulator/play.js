@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.18.0';
+const CODEX_EMULATOR_VERSION = '3.19.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -839,10 +839,12 @@ function dispatchLifecycleTriggers(state, book, trigger, options) {
     }
     if (e.source === 'item' && te.consume_on_fire) consume.push(e.itemId);
   }
-  // Apply consume_on_fire removals
+  // Apply consume_on_fire removals (Rule 39 v1.24+: splice one copy, not
+  // filter all — stackable items keep their remaining copies).
   for (const itemId of consume) {
-    state.inventory = state.inventory.filter(id => id !== itemId);
-    if (state.equipment) {
+    const idx = state.inventory.indexOf(itemId);
+    if (idx >= 0) state.inventory.splice(idx, 1);
+    if (state.equipment && !state.inventory.includes(itemId)) {
       for (const slot of Object.keys(state.equipment)) {
         if (state.equipment[slot] === itemId) delete state.equipment[slot];
       }
@@ -1012,6 +1014,28 @@ function autoEquipOnAdd(state, book, itemId) {
     return;
   }
   equipItem(state, book, itemId);
+}
+
+// Rule 39 (schema v1.24+). Stackable-aware inventory add. Adds `quantity`
+// copies of `itemId` to `state.inventory`. If the item's items_catalog
+// entry carries `stackable: true`, copies accumulate (true multiset). If
+// not, the second-and-beyond copies are no-ops via the existing set
+// semantics — the same behaviour as pre-v1.24 emulators. Always runs
+// `autoEquipOnAdd` once at the end (idempotent for already-equipped or
+// non-equippable items). Returns the number of copies actually added.
+function addItemToInventory(state, book, itemId, quantity) {
+  const n = (typeof quantity === 'number' && quantity >= 1) ? Math.floor(quantity) : 1;
+  const def = getItemDef(book, itemId) || {};
+  const isStackable = def.stackable === true;
+  let added = 0;
+  for (let i = 0; i < n; i++) {
+    if (isStackable || !state.inventory.includes(itemId)) {
+      state.inventory.push(itemId);
+      added++;
+    }
+  }
+  autoEquipOnAdd(state, book, itemId);
+  return added;
 }
 
 // ==================== DAMAGE INTERACTIONS (schema v1.5+) ====================
@@ -1342,8 +1366,8 @@ function processCreationSteps(state, book) {
       };
       return state;
     } else if (step.action === 'add_item') {
-      if (!state.inventory.includes(step.item)) state.inventory.push(step.item);
-      autoEquipOnAdd(state, book, step.item);
+      const q = (typeof step.quantity === 'number' && step.quantity >= 1) ? Math.floor(step.quantity) : 1;
+      addItemToInventory(state, book, step.item, q);
       state.creationStep++;
     } else if (step.action === 'set_resource') {
       // Canonical resource slots first.
@@ -1585,16 +1609,23 @@ function handleEvent(event, state, book) {
       state.log.push(`${stat} ${amount >= 0 ? '+' : ''}${amount}${event.modify_initial ? ' (permanent, initial updated)' : ''}${setNote}${event.reason ? ' (' + event.reason + ')' : ''}`);
       return 'continue';
     }
-    case 'add_item':
-      if (!state.inventory.includes(event.item)) state.inventory.push(event.item);
-      state.log.push(`Acquired: ${event.item}`);
-      autoEquipOnAdd(state, book, event.item);
+    case 'add_item': {
+      const q = (typeof event.quantity === 'number' && event.quantity >= 1) ? Math.floor(event.quantity) : 1;
+      addItemToInventory(state, book, event.item, q);
+      state.log.push(`Acquired: ${event.item}${q > 1 ? ' ×' + q : ''}`);
       return 'continue';
+    }
     case 'remove_item': {
-      const idx = state.inventory.indexOf(event.item);
-      if (idx >= 0) state.inventory.splice(idx, 1);
+      const q = (typeof event.quantity === 'number' && event.quantity >= 1) ? Math.floor(event.quantity) : 1;
+      let removed = 0;
+      for (let i = 0; i < q; i++) {
+        const idx = state.inventory.indexOf(event.item);
+        if (idx < 0) break;
+        state.inventory.splice(idx, 1);
+        removed++;
+      }
       autoUnequipOnRemove(state, event.item);
-      state.log.push(`Lost: ${event.item}`);
+      state.log.push(`Lost: ${event.item}${removed > 1 ? ' ×' + removed : ''}`);
       return 'continue';
     }
     case 'remove_inventory_category': {
@@ -2399,8 +2430,7 @@ function applyAction(state, book, action, args) {
       if (step.category === 'potion') {
         state.potion = { name: choice, doses: book.rules?.potion?.doses || 2 };
         const id = choice.toLowerCase().replace(/ /g, '_');
-        if (!state.inventory.includes(id)) state.inventory.push(id);
-        autoEquipOnAdd(state, book, id);
+        addItemToInventory(state, book, id, 1);
       } else {
         const flagName = `${step.category}_${choice.toLowerCase().replace(/ /g, '_')}`;
         if (!state.flags.includes(flagName)) state.flags.push(flagName);
