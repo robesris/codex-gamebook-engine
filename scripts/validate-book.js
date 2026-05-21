@@ -212,15 +212,12 @@ function checkDisarmamentWithoutEvent(book) {
       ev.type === 'remove_item' ||
       ev.type === 'remove_inventory_category' ||
       ev.type === 'clear_inventory' ||
-      ev.type === 'script' // script events can apply removal programmatically
-      // Note: `choose_items` is intentionally NOT in this list. The current
-      // schema's choose_items is a GRANT primitive (player picks which items
-      // to take). There's no loss-variant in the schema yet, so a choose_items
-      // event in a disarmament-narrative section is a misleading workaround,
-      // not a real fix. Excluded so disarmament-without-event stays surfaced
-      // until either (a) the schema ships a remove-variant of choose_items,
-      // or (b) the book switches to a remove_inventory_category / script
-      // encoding.
+      ev.type === 'script' || // script events can apply removal programmatically
+      // Schema v1.25+ (Rule 40): choose_items with mode:"remove" is a
+      // canonical loss-variant encoding; counts as a real disarmament event.
+      // choose_items without explicit mode (defaults to "grant") does NOT
+      // count — it's still a grant primitive.
+      (ev.type === 'choose_items' && ev.mode === 'remove')
     );
     if (!hasRemoveEvent) {
       findings.push(`§${secId}: text describes inventory loss (\"${matched}\") but no remove_item / remove_inventory_category / script event in section`);

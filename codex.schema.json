@@ -593,7 +593,6 @@
         },
         "count": { "type": "integer" },
         "from": { "type": "string" },
-        "mode": { "type": "string", "enum": ["grant", "remove"], "description": "choose_items: Schema v1.25+ (Rule 40). Discriminator for the player-choice direction. `grant` (default when absent — preserves pre-v1.25 behaviour) presents items for the player to add to inventory. `remove` presents items for the player to remove from current inventory; the eligible pool is `state.inventory` filtered by `from_category` (when set) or the entire inventory (when absent). When the eligible pool is empty, the event no-ops silently; when it's size-1 and `count: 1`, the emulator auto-removes without pausing; when larger, the player picks `count` items to lose." },
         "from_category": { "type": "string", "description": "choose_items: Schema v1.25+ (Rule 40). When `mode: 'remove'`, restricts the eligible pool to items in `state.inventory` whose `items_catalog[id].inventory_category` matches this string. Typical values mirror the inventory-category vocabulary: 'weapons', 'backpack', 'special_items', or any string declared in `rules.inventory_categories[]`. Ignored when `mode: 'grant'`." },
         "on_success_set_flag": { "type": "string", "description": "choose_items: Schema v1.25+ (Rule 40). When `mode: 'remove'`, sets the named flag if AND ONLY IF at least one item was actually removed. Use this for strict exchange-on-pickup semantics — a subsequent `add_item` event with `condition: {has_flag: <this_flag>}` will only fire when the exchange actually happened." },
         "item": { "type": "string", "description": "add_item: item id from items_catalog." },
@@ -806,8 +805,8 @@
         },
         "mode": {
           "type": "string",
-          "description": "combat: how multiple enemies are fought.",
-          "enum": ["sequential", "simultaneous", "player_choice"]
+          "description": "combat: how multiple enemies are fought (`sequential`, `simultaneous`, `player_choice`). Schema v1.25+ (Rule 40) also uses this field on `choose_items` events with values `grant` (default) and `remove` (player picks items to remove from inventory). The schema's `event` definition is a permissive monolithic shape — event-type-specific field constraints (only `combat` events may use the combat-mode values; only `choose_items` events may use the Rule 40 values) are enforced by the emulator and parser conventions, not by the schema. See Rule 40 in the codex doc for `choose_items.mode` semantics.",
+          "enum": ["sequential", "simultaneous", "player_choice", "grant", "remove"]
         },
         "win_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to on victory. Integer or string (see codex 7.6.8 for string sub-section ids)." },
         "flee_to": { "type": ["integer", "string", "null"], "description": "combat: section id to go to when fleeing. Null = cannot flee." },
