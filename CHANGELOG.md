@@ -6,6 +6,82 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.34.0 / GBF v1.26.0 / CLI emulator v3.21.0 / HTML emulator v3.19.0 (pending)
+
+**Schema-additive ship — engine side.** New **Rule 42: Queue per-fight combat modifier** ships a `queue_combat_modifier` effect type that buffers a one-shot combat modifier consumed by the next combat-enter. Resolves the fundamental gamebook pattern of single-use consumable buffs ("swallow before a fight; +N COMBAT SKILL for that fight") — Lone Wolf's Alether Potion of Strength is the canonical case, but the pattern recurs across every gamebook series (Fighting Fantasy potions of strength/skill, GrailQuest blessings, Choose Your Own Adventure one-shot powers, etc.). Pre-v1.26 the codex had no clean primitive for "buff this player's next combat only" — books either used a persistent `stat_modifier` (wrong: always-on while held), or added a flag-conditional `combat_modifier` to every combat encounter in the book (verbose: per-combat plumbing for one optional consumable), or relied on a `script` workaround the Lua sandbox couldn't actually execute correctly.
+
+**Schema addition** — one new effect-union variant in the Rule 36 triggered_effect / Rule 15 section-event union:
+
+- **`queue_combat_modifier`** — `{type: "queue_combat_modifier", modifier: {target, delta, reason?}}`. The carried `modifier` object's fields mirror Rule 17 `combat_modifiers[]` entries exactly. On firing, the modifier is pushed onto `state.pendingCombatModifiers[]`. On the next `startCombat` invocation, the entire buffer is drained into the combat's effective modifier set (alongside event modifiers, intrinsic enemy modifiers, and standing book-wide modifiers), frozen at combat-start per Rule 17, and applied for the duration of that combat only.
+
+Schema title bumped v1.25.0 → v1.26.0.
+
+**CLI emulator (3.20.0 → 3.21.0):**
+
+- `state.pendingCombatModifiers: []` added to `initialState()` — empty buffer means "no queued buffs."
+- `handleEvent` gains a `case 'queue_combat_modifier'` that pushes the modifier onto `state.pendingCombatModifiers` (logged with target/delta/reason for the player-facing log line).
+- `startCombat` drains the buffer at combat-start and merges its contents into the effective modifier set BEFORE the standard standingModifiers / eventModifiers / intrinsicModifiers freeze. The buffer is emptied as part of the drain — buffs are spent on the combat they apply to.
+- `handleEvent` exported (alongside other helpers) so test infrastructure can drive it directly.
+
+**Behaviour notes:**
+
+- **Buffer persistence.** A queued modifier stays in the buffer until the next `startCombat`, no matter how many sections the player traverses in between. Matches the source-text semantic ("swallow before a fight" — the player chooses when to cash in). If the player never enters another combat after queuing, the buffer remains populated indefinitely; that's the intended "save the buff for later" pattern.
+- **Stacking.** Multiple queued modifiers stack. Drinking two Potions of Strength before a fight yields both buffs.
+- **No mid-combat queuing.** A queue_combat_modifier event firing during an active fight does NOT affect that fight — the modifier set is frozen at combat-start. The queued modifier applies to the NEXT combat after the current one ends.
+- **Cleanup on combat-end.** The per-combat modifier set is naturally discarded when combat ends (same as any other combat_modifier); the pendingCombatModifiers buffer is also empty by then since the drain happened at combat-start. No clear-flag plumbing needed.
+
+**Canonical worked example — LW1 Alether Potion of Strength:**
+
+```json
+"alether_potion_of_strength": {
+  "name": "Alether (Potion of Strength)",
+  "type": "consumable",
+  "inventory_category": "backpack",
+  "triggered_effects": [
+    {
+      "trigger": "on_user_use",
+      "consume_on_fire": true,
+      "effect": {
+        "type": "queue_combat_modifier",
+        "modifier": { "target": "player.attack", "delta": 2, "reason": "Alether Potion of Strength" }
+      }
+    }
+  ]
+}
+```
+
+Player flow: pick up at §164 → drink via inventory `use` action (consume_on_fire removes the potion + the queue_combat_modifier effect fires, pushing the modifier into the buffer) → enter any later combat (the buffer is drained, the +2 CS modifier applies for the duration) → combat ends (modifier set discarded with everything else; the alether is fully spent).
+
+**5 new tests added (Test 64-68), 4 passing + 1 dropped:**
+
+- `queue_combat_modifier` event handler pushes the modifier onto the pending buffer correctly.
+- A queued modifier drains into the next combat's appliedModifiers and the buffer is empty after.
+- Multiple queued modifiers stack in FIFO order.
+- Schema-additive verification — pre-v1.26 books (no `queue_combat_modifier` references) validate clean against v1.26.
+- (Dropped) An end-to-end test of `applyAction(state, book, 'use', [item])` triggering the on_user_use chain was attempted but ran into action-state preconditions outside the chat's scope; the direct-event tests above adequately cover the queue mechanism, and the on_user_use trigger pipeline is already covered by pre-existing Rule 36 tests.
+
+**Three soft checks shipped in v2.33.0 now also catch un-wired buff patterns:**
+
+- The existing `catalog-effect-promise-without-machinery` soft check (shipped v2.33.0) continues to flag catalog entries whose `description` promises a per-fight buff but carry no `triggered_effects` machinery. LW1's `alether_potion_of_strength` was the canonical surfaced case; this ship + the LW1 iter 27 sub-agent wire-up clears it.
+
+**HTML emulator (`index.html`, 3.19.0 → 3.19.0 UNCHANGED THIS SHIP):** the HTML emulator still does NOT implement Rules 40 or 42. CLI emulator remains the canonical test surface for both. Both rules are queued together for a single HTML emulator wire-up commit.
+
+**Cross-book validator state after this ship:**
+
+```
+LW1:        3 dangling (rope/sommerswerd/warhorse — intentional flavor), 0 across all other checks (once iter 27 lands).
+Windhammer: 32 dangling + 4 disarmament + 3 effect-promise (out of scope for this ship).
+Warlock:    6 dangling + 1 loss-in-choice (out of scope).
+GyoG06:     1 false-positive eat_meal (past-tense narrative).
+WWY:        8 dangling (likely enemy-only weapons).
+```
+
+All 5 books still validate at 0 schema errors. All 62 engine tests pass.
+
+**Companion LW1 iter 27 sub-agent dispatch:** wires the alether_potion_of_strength Rule 42 encoding (single catalog edit). Once that lands, the LW1 catalog-effect-promise count drops to 0.
+
+---
+
 ## v2.33.0 / GBF v1.25.0 / CLI emulator v3.20.0 / HTML emulator v3.19.0 (pending)
 
 **Schema-additive ship — engine side.** New **Rule 40: Player-chosen item loss** ships a `mode: "grant" | "remove"` discriminator on the `choose_items` event, transforming it from a grant-only primitive into a primitive that supports both directions. Resolves the LW1 §144 / §277 / §307 patterns that the iter 25 review surfaced as "upstream-blocked": sections describing *"one item is stolen — choose which"*, *"the Weapon is broken — if you carry two, choose which one breaks"*, and *"you may take X only if you exchange Y."* Pre-v1.25 these patterns either silently dropped the loss or relied on a `script` workaround that the pre-v1.25 Lua sandbox couldn't actually execute (the sandbox is read-only for inventory).

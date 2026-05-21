@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.20.0';
+const CODEX_EMULATOR_VERSION = '3.21.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -319,6 +319,15 @@ function initialState(bookPath) {
     // item stays in inventory, it's just no longer equipped). Schema v1.5+.
     equipment: {},
     flags: [],
+    // Schema v1.26+ (Rule 42). Buffered one-shot combat modifiers waiting
+    // to be consumed on the next combat-enter. Pushed by the
+    // `queue_combat_modifier` effect (typically fired from a triggered_effect
+    // on a consumable). Drained into the effective combat_modifier set at
+    // startCombat time, frozen for the fight's duration per Rule 17, and
+    // implicitly cleared when combat ends (the per-combat modifier set is
+    // discarded; the pending buffer is also reset). Empty buffer means
+    // "no queued buffs."
+    pendingCombatModifiers: [],
     provisions: 0,
     gold: 0,
     meals: 0,
@@ -1668,6 +1677,26 @@ function handleEvent(event, state, book) {
       }
       return 'continue';
     }
+    case 'queue_combat_modifier': {
+      // Schema v1.26+ (Rule 42). Buffer a one-shot combat_modifier consumed
+      // on the next combat-enter. The modifier's shape matches Rule 17
+      // combat_modifier entries (target, delta, optional reason). Multiple
+      // queued modifiers stack — the buffer drains in FIFO order at
+      // startCombat time.
+      if (!event.modifier || typeof event.modifier !== 'object') {
+        state.log.push(`queue_combat_modifier: missing or invalid modifier payload; no-op`);
+        return 'continue';
+      }
+      if (!Array.isArray(state.pendingCombatModifiers)) state.pendingCombatModifiers = [];
+      const mod = {
+        target: event.modifier.target,
+        delta: event.modifier.delta,
+      };
+      if (event.modifier.reason) mod.reason = event.modifier.reason;
+      state.pendingCombatModifiers.push(mod);
+      state.log.push(`Queued combat modifier for next fight: ${mod.target} ${mod.delta >= 0 ? '+' : ''}${mod.delta}${mod.reason ? ' (' + mod.reason + ')' : ''}`);
+      return 'continue';
+    }
     case 'combat':
       return startCombat(event, state, book);
     case 'stat_test':
@@ -1876,6 +1905,17 @@ function startCombat(event, state, book) {
       intrinsicModifiers.push(...cat.intrinsic_modifiers);
     }
   }
+  // Schema v1.26+ (Rule 42). Drain any pending one-shot combat modifiers
+  // queued by `queue_combat_modifier` effects (typically fired from a
+  // consumable's on_user_use triggered_effect). They merge into the
+  // effective modifier set alongside event + intrinsic modifiers and
+  // freeze with the rest at combat-start. After this drain, the buffer
+  // is empty — the buffs are spent on this combat alone.
+  const queuedModifiers = Array.isArray(state.pendingCombatModifiers) ? state.pendingCombatModifiers.slice() : [];
+  if (queuedModifiers.length > 0) {
+    state.log.push(`Consuming ${queuedModifiers.length} queued combat modifier${queuedModifiers.length === 1 ? '' : 's'}`);
+    state.pendingCombatModifiers = [];
+  }
   // Rule 23 (schema v1.8+): book-wide standing modifiers from
   // rules.combat_system.standing_modifiers[] apply to every combat in
   // the book unless their condition evaluates false. Merged into the
@@ -1887,7 +1927,7 @@ function startCombat(event, state, book) {
     ? book.rules.combat_system.standing_modifiers
     : [];
   const appliedModifiers = [];
-  for (const mod of [...standingModifiers, ...eventModifiers, ...intrinsicModifiers]) {
+  for (const mod of [...standingModifiers, ...eventModifiers, ...intrinsicModifiers, ...queuedModifiers]) {
     if (mod.condition && !evalCondition(mod.condition, state, book)) continue;
     const target = typeof mod.target === 'string' ? mod.target : null;
     const delta = typeof mod.delta === 'number' ? mod.delta : 0;
@@ -3963,6 +4003,7 @@ module.exports = {
   navigateTo,
   rollDice,
   evalCondition,
+  handleEvent,
 };
 
 if (require.main === module) {

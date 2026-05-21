@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.33.0
+# THE GAMEBOOK CODEX v2.34.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -2861,6 +2861,80 @@ The `on_success_set_flag` field is an optional add-on to `choose_items` shipped 
 
 **Verification.** For every section whose source text describes a player-chosen loss (*"you may choose which one"*, *"one item is stolen — choose which"*, *"you may take X only if you exchange Y"*), the corresponding event MUST use `choose_items mode:"remove"` with an appropriate `from_category`. Sub-agents migrating pre-v1.25 books should look for sections where the events array is empty or only carries unrelated events while the source text describes such a loss (the validator's `disarmament-without-event` soft check surfaces these).
 
+### Rule 42: Queue per-fight combat modifier (`queue_combat_modifier`)
+
+Some consumable items, spells, and narrative beats grant the player a buff (or debuff) that lasts *for the duration of the next combat only* — not permanently while held, not for the rest of the section, not until the end of the chapter. Canonical examples: Lone Wolf's Alether Potion of Strength ("swallow before a fight; +2 COMBAT SKILL for that fight"), Fighting Fantasy's various potions and one-shot spells, a wizard's blessing in a story beat ("you may add 2 to your COMBAT SKILL in your next combat"). Pre-v1.26 the codex had no clean way to express this — books either used a persistent `stat_modifier` (wrong: always-on, not single-use), or required adding a flag-conditional `combat_modifier` to every combat encounter in the book (verbose; requires per-combat plumbing for one optional consumable).
+
+Rule 42 adds a single new effect type that buffers a one-shot combat modifier consumed by the next combat-enter:
+
+**`queue_combat_modifier`** — an effect type usable inside `triggered_effects[].effect` (Rule 36) and inside section `events[]`. Pushes the carried modifier onto `state.pendingCombatModifiers[]`. On the next `startCombat` invocation, the pending buffer is drained — its contents merge into the combat's effective modifier set (alongside `combat.combat_modifiers`, enemy `intrinsic_modifiers`, and book-wide `standing_modifiers`), frozen at combat-start per Rule 17, and applied for the duration of that combat. When combat ends, the per-combat modifier set is discarded — the buff naturally falls away with no clear-flag plumbing needed.
+
+**Schema additions:**
+
+The effect carries a single nested `modifier` object whose fields mirror Rule 17 combat_modifier entries:
+
+- `target` (string, required) — the modifier's target slot, same vocabulary as `combat_modifiers[].target`: `"player.attack"`, `"enemy.attack"`, `"player.defense"`, `"enemy.defense"`.
+- `delta` (integer, required) — signed integer to add. `+2` for a buff, `-2` for a debuff.
+- `reason` (string, optional) — display label surfaced when the modifier applies (e.g., `"Alether Potion of Strength"`).
+
+The effect itself appears as `{type: "queue_combat_modifier", modifier: {target, delta, reason?}}`.
+
+**Behaviour notes:**
+
+- **Buffer persistence.** A queued modifier stays in the buffer until the next `startCombat`, no matter how many sections the player traverses in between. This matches the source-text semantic ("swallow before a fight" — the player chooses when to cash in the buff). If the player never enters another combat after queuing, the buffer remains populated indefinitely; that's not a bug, it's the intended "save the buff for later" pattern.
+- **Stacking.** Multiple queued modifiers stack. Drinking two Potions of Strength before a fight yields two buffs (typically +4 CS total). The buffer is FIFO; modifiers apply in queuing order.
+- **No mid-combat queuing during the active fight.** Queueing during combat (e.g., from an `on_combat_round` triggered_effect) does NOT affect the current fight — the modifier set is frozen at combat-start. The queued modifier applies to the NEXT combat after the current one ends.
+- **Cleanup.** At `startCombat`, the buffer is fully drained whether or not the modifiers' conditions evaluate true (the standard `evalCondition` filter still applies during the freeze, so a buff with a condition that's false at combat-start is silently dropped from the applied set). The buffer never carries entries across combats — once consumed, gone.
+
+**Canonical worked example — LW1 Alether Potion of Strength:**
+
+The catalog entry carries a Rule 36 `triggered_effect` that fires when the player invokes `on_user_use` from the inventory menu:
+
+```json
+"alether_potion_of_strength": {
+  "name": "Alether (Potion of Strength)",
+  "type": "consumable",
+  "inventory_category": "backpack",
+  "description": "Single dose: when swallowed before a fight, increases COMBAT SKILL by 2 for the duration of that fight.",
+  "triggered_effects": [
+    {
+      "trigger": "on_user_use",
+      "consume_on_fire": true,
+      "effect": {
+        "type": "queue_combat_modifier",
+        "modifier": {
+          "target": "player.attack",
+          "delta": 2,
+          "reason": "Alether Potion of Strength"
+        }
+      }
+    }
+  ]
+}
+```
+
+Player flow:
+1. Player picks up the Potion at §164 (existing `add_item` event).
+2. Some sections later, the player decides to drink the Potion. They invoke `on_user_use` from the inventory menu. The triggered_effect fires: `consume_on_fire` removes the Potion from inventory, the `queue_combat_modifier` effect pushes a `{target: "player.attack", delta: 2}` modifier onto `state.pendingCombatModifiers`.
+3. Player enters a combat (any section). `startCombat` drains the buffer, merges the buff into that combat's frozen modifier set, applies it for the duration. Player rolls combats with +2 COMBAT SKILL.
+4. Combat ends. The per-combat modifier set is discarded with everything else; the pendingCombatModifiers buffer is empty. The buff is spent.
+
+**Schema-additive.** Pre-v1.26 books validate unchanged against the v1.26 schema. The triggered_effects effect union gains one new variant (`queue_combat_modifier`); no existing variant changes shape, no field is repurposed. A v1.25-era book that doesn't reference `queue_combat_modifier` produces the same validation error count against v1.26 as it did against v1.25, and the emulators' behaviour on such a book is bit-identical to v3.20.0.
+
+**Composition with other rules:**
+
+- **Rule 17 combat_modifiers.** Queued modifiers merge into the same evaluation pipeline as per-section, intrinsic, and standing modifiers. They obey the same condition-gating, the same conflict resolution, the same display rendering.
+- **Rule 36 consume_on_fire.** The canonical authoring shape pairs `queue_combat_modifier` with `consume_on_fire: true` so the consumable is removed from inventory the moment its buff is queued. Splitting the two (queue without consuming) is a valid shape for "trigger an item N times" patterns where the item stays carried — but for the canonical single-use potion case, both fire together.
+- **Rule 25 satisfies_eat_meal.** Independent — a Potion is not a Meal. The Alether's `consume` block is absent because the source doesn't say "this counts as a Meal." Books that DO want a named consumable to be BOTH a Meal-substitute AND a per-fight buff would carry both a `consume.satisfies_eat_meal: true` AND a Rule 36 triggered_effect with queue_combat_modifier — independent mechanics, both fire under their respective triggers.
+
+**Anti-patterns this rule replaces:**
+
+- **Persistent `stat_modifier` on the catalog entry** (wrong because it'd always apply while carried, defeating the "single dose" semantic).
+- **Per-combat flag-conditional modifier** (a `set_flag` triggered_effect on use, then a flag-gated `combat_modifier` added to every single combat encounter in the book, plus a `clear_flag` somewhere to reset). Works pre-v1.26 but requires per-combat editing of ~N entries for one optional consumable; high friction.
+- **`script` event mutating stats** (the pre-v1.26 Lua sandbox didn't support inventory mutation and combat_modifier injection cleanly anyway).
+
+**Verification.** For every consumable / spell / narrative beat whose source text grants a buff "for the duration of your next fight" or "for that fight" or "swallow before combat," the encoding MUST use `queue_combat_modifier` rather than a persistent `stat_modifier` or a per-combat flag pattern. Catalog entries whose `description` promises a per-fight buff but carry no `triggered_effects` are flagged by the validator's `catalog-effect-promise-without-machinery` soft check (shipped in v2.33.0); the Rule 42 wire-up clears that warning.
+
 ---
 
 1. Universal Gamebook Concepts
@@ -5145,7 +5219,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.33.0 / GBF schema v1.25.0 / CLI emulator v3.20.0 / HTML emulator v3.19.0** (HTML emulator pending Rule 40 wire-up; see CHANGELOG).
+**Codex v2.34.0 / GBF schema v1.26.0 / CLI emulator v3.21.0 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

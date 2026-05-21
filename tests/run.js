@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title bumped to v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title bumped to v1.26.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2740,7 +2740,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
 });
 
 // ============================================================
@@ -2885,7 +2885,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title bumped to v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title bumped to v1.26.0');
 });
 
 // ============================================================
@@ -3222,7 +3222,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
 });
 
 // ============================================================
@@ -3256,7 +3256,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
 });
 
 // ============================================================
@@ -3398,7 +3398,93 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
+});
+
+// ============================================================
+// Rule 42 v2.34.0 — queue_combat_modifier (per-fight one-shot buff)
+// ============================================================
+test('Rule 42 v2.34.0: queue_combat_modifier pushes modifier onto pending buffer', () => {
+  const state = play.initialState('synthetic');
+  state.pendingCombatModifiers = [];
+  const book = buildBook({ sections: { '1': { text: 't', events: [], choices: [], is_ending: false } } });
+  play.handleEvent({
+    type: 'queue_combat_modifier',
+    modifier: { target: 'player.attack', delta: 2, reason: 'test buff' }
+  }, state, book);
+  assertEqual(state.pendingCombatModifiers.length, 1, 'one modifier queued');
+  assertEqual(state.pendingCombatModifiers[0].target, 'player.attack', 'target preserved');
+  assertEqual(state.pendingCombatModifiers[0].delta, 2, 'delta preserved');
+});
+
+test('Rule 42 v2.34.0: queued modifier drains into next combat and applies for the fight', () => {
+  const book = buildBook({
+    rules: { stats: [{ name: 'COMBAT SKILL', initial: 15 }, { name: 'ENDURANCE', initial: 20, initial_is_max: true }], health_stat: 'ENDURANCE' },
+    enemies_catalog: { goblin: { name: 'Goblin', 'COMBAT SKILL': 10, ENDURANCE: 5 } },
+    sections: {
+      '1': {
+        text: 'fight',
+        events: [{ type: 'combat', enemy_ref: 'goblin', win_to: '2', flee_to: null }],
+        choices: [],
+        is_ending: false,
+      },
+      '2': { text: 'win', events: [], choices: [], is_ending: false },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { 'COMBAT SKILL': 15, ENDURANCE: 20 };
+  state.initialStats = { 'COMBAT SKILL': 15, ENDURANCE: 20 };
+  state.pendingCombatModifiers = [
+    { target: 'player.attack', delta: 2, reason: 'Alether' }
+  ];
+  play.navigateTo(state, book, '1');
+  // Combat should have started with the queued modifier merged in
+  assertTrue(!!state.combat, 'combat is active');
+  const applied = state.combat.appliedModifiers || [];
+  const alether = applied.find(m => m.reason === 'Alether');
+  assertTrue(!!alether, 'Alether modifier present in appliedModifiers');
+  assertEqual(alether.delta, 2, 'delta preserved');
+  assertEqual(state.pendingCombatModifiers.length, 0, 'pending buffer drained');
+});
+
+test('Rule 42 v2.34.0: multiple queued modifiers stack', () => {
+  const state = play.initialState('synthetic');
+  state.pendingCombatModifiers = [];
+  const book = buildBook({ sections: { '1': { text: 't', events: [], choices: [], is_ending: false } } });
+  play.handleEvent({ type: 'queue_combat_modifier', modifier: { target: 'player.attack', delta: 2 } }, state, book);
+  play.handleEvent({ type: 'queue_combat_modifier', modifier: { target: 'player.attack', delta: 1 } }, state, book);
+  assertEqual(state.pendingCombatModifiers.length, 2, 'two modifiers queued');
+});
+
+test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  const book = {
+    metadata: { title: 'Book', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'X', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {
+      potion: {
+        name: 'Potion',
+        type: 'consumable',
+        // pre-v1.26 — no triggered_effects, no queue_combat_modifier
+      }
+    },
+    enemies_catalog: {},
+    sections: { '1': { text: 'x', events: [], choices: [{ text: 'end', target: '1', condition: null }], is_ending: false } },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
 });
 
 // ============================================================

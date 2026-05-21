@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.25.0",
+  "title": "Gamebook Format (GBF) v1.26.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -1276,6 +1276,24 @@
             "target_section": {
               "type": ["integer", "string"],
               "description": "Section id to navigate to on flee. Integer or string (see codex 7.6.8 for string sub-section ids)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "modifier"],
+          "description": "Schema v1.26+ (Rule 42). Queue a one-shot combat modifier consumed on the next combat-enter. The single-use buff/debuff pattern: a consumable item (potion of strength, lucky charm), a cast spell, a narrative beat ('the wizard blesses you — your next fight has +2 COMBAT SKILL'), or any other source-text mechanic whose effect lasts 'for the duration of your next fight' and then clears. The emulator pushes the modifier onto `state.pendingCombatModifiers[]` at firing time; on the next `startCombat` invocation, the pending modifiers are drained into the combat's effective modifier set (frozen at combat start per Rule 17) and naturally fall away when combat ends. Canonical example: LW1's Alether (Potion of Strength) — `triggered_effects: [{trigger: on_user_use, consume_on_fire: true, effect: {type: queue_combat_modifier, modifier: {target: 'player.attack', delta: 2, reason: 'Alether Potion of Strength'}}}]`. If the player never enters another combat after queuing, the pending modifier stays buffered indefinitely (it is NOT a per-section timeout); this matches the source semantic ('swallow before a fight') where the player can choose when to cash in the buff. Multiple pending modifiers stack — drinking two potions before a combat yields both buffs.",
+          "properties": {
+            "type": { "type": "string", "enum": ["queue_combat_modifier"] },
+            "modifier": {
+              "type": "object",
+              "required": ["target", "delta"],
+              "description": "The combat_modifier shape to queue. Same fields as Rule 17 combat_modifier entries: `target` (e.g., 'player.attack', 'enemy.attack', 'player.defense'), `delta` (signed integer), optional `reason` (display string). The queued modifier is merged into the next combat's effective modifier set at combat-start time, applying for the duration of that combat only.",
+              "properties": {
+                "target": { "type": "string", "description": "What the modifier adjusts. Same vocabulary as Rule 17 combat_modifier.target — typical values 'player.attack', 'enemy.attack', 'player.defense', 'enemy.defense'." },
+                "delta": { "type": "integer", "description": "Signed integer to add to the target. +2 for a buff, -2 for a debuff." },
+                "reason": { "type": "string", "description": "Optional display string surfaced when the modifier applies (e.g., 'Alether Potion of Strength', 'Wizard's blessing')." }
+              }
             }
           }
         }
