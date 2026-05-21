@@ -318,6 +318,99 @@ Two practical patterns for additive edits:
 
 Only use full-file `JSON.stringify` round-trips when the edits are sweeping enough that bytes-in-place wouldn't be tractable (e.g., a Wave 5-style normalization touching dozens of sections with mechanical pattern transforms). In that case, document the cosmetic-noise tradeoff in the commit message and consider whether the change should land as a separate "cosmetic reformat" commit ahead of the substantive edit commit so the substance stays reviewable.
 
+## Two-pass remediation workflow
+
+After a fresh parse produces a `book.json` from raw source text — whether by a sub-agent following the codex's parse rules, by a deterministic script, or by some combination — the production line uses a **second pass** (the remediation pass) to surface and triage the extraction failures the first pass missed. This is a class of comprehensive-review sub-agent workflow, distinct from the schema-migration / Rule-N-shipping waves that the comprehensive-review template above describes.
+
+**When to invoke:** any time a fresh parse has been produced and validates schema-clean, but the soft checks in `scripts/validate-book.js` report findings (dangling catalog entries, orphan sections, loss-in-choice-text mismatches, disarmament narratives without remove events, enemy-immunity gaps). This is typically the case after a new book has been parsed and before it is committed for the first time, OR after a major codex/schema bump exposes drift in a maintained book that the migration sub-agent didn't catch.
+
+**Why this is its own workflow:** the comprehensive-review template above is shaped for *migrations* — apply Rule N to all relevant sites, ship the changes, validate. The remediation pass is shaped for *triage* — every finding requires a user judgment call (real bug or intentional flavor?), and the user's input is plain-English answers rather than technical decisions. Folding remediation into the migration template would mix two different interaction patterns and surface technical detail to the user that they shouldn't have to engage with.
+
+**Workflow shape:**
+
+1. Run `node scripts/validate-book.js <book.json>`. Confirm 0 schema errors. Note the soft-check output.
+2. Dispatch a remediation sub-agent via the Agent tool with the prompt template below. The agent reads the validator output, performs the LLM pass for condition-text-mismatch detection (per codex §12.6), presents each finding as a plain-English question, accepts y/n/flavor/show/other answers, and applies confirmed fixes.
+3. The user (or another agent in the loop) answers the agent's questions. No technical knowledge required; the agent translates to/from the book's narrative vocabulary per codex §12.2.
+4. When the loop ends, the agent reports applied fixes, flavor-markings, and remaining skipped findings. The book is now suitable for commit per the comprehensive-review-sub-agent path.
+
+**Authorization shape:** the remediation agent is a class of comprehensive-review sub-agent — it edits maintained book JSONs in scope. The HARD RULE's "Are you a sub-agent reading this rule?" carve-out applies. The remediation agent's prompt MUST explicitly invoke that carve-out (point at the updated reference files, name the target book, and name the scope as "apply remediation fixes per soft-check output, per codex §12").
+
+**Pre-conditions before invocation:**
+
+- The book has been schema-validated (0 errors).
+- The validator's soft-check output is available (run `validate-book.js` and capture stdout, or have the remediation agent run it as its first step).
+- The book is at the most current codex / schema / emulator versions (or the discrepancies have been triaged separately — remediation doesn't substitute for migration).
+
+**The user's job during the pass:** answer the agent's questions in plain English. The user does NOT need to:
+
+- Know the schema
+- Know the codex's rule numbers
+- Understand event types or condition shapes
+- Read JSON or write JSON
+
+The user DOES need to:
+
+- Know the book (well enough to answer "is X mechanically referenced?" or "should the player lose Y here?")
+- Have the source text available if the agent shows excerpts, or trust the agent's paraphrase
+
+**Wrapping up:** the remediation agent produces a final report (fixes applied, flavor-markings, skipped findings, final validator output). The user reviews the diff via `git diff books/<book>.json` and commits the result with a marker per the production-line commit-msg hook (`[sub-agent]` or iter convention — see the books repo's `hooks/commit-msg`).
+
+**Codex appendix reference:** the full vocabulary translation table, question framings per finding category, freeform-answer interpretation rules, and anti-pattern list live in `gamebook_codex_v2.md` §12 ("Two-pass remediation workflow"). The remediation agent's prompt template (below) references that appendix as required reading.
+
+### Remediation sub-agent prompt template
+
+Adapted from the comprehensive-review template above. The structure is the same (HARD RULE preamble, scope statement, hard rules, procedure, report format) but the scope is "triage soft-check findings via plain-English Q&A" rather than "migrate to Rule N."
+
+```
+## You are the authorized remediation sub-agent. Read this first.
+
+[Standard HARD RULE preamble — point at the updated reference files
+(codex doc §12, schema, emulators), name the target book, state the
+scope: "triage soft-check findings produced by scripts/validate-book.js
+and apply user-confirmed fixes per codex §12 protocol."]
+
+## Materials
+
+- Target book: /home/user/codex-engine-books/books/<book>.json
+- Codex appendix on remediation: /home/user/codex-gamebook-engine/gamebook_codex_v2.md §12
+- Schema: /home/user/codex-gamebook-engine/codex.schema.json
+- Validator: /home/user/codex-gamebook-engine/scripts/validate-book.js
+- Source text reference (if available): <path to OCR'd source or other authoritative reference>
+
+## Procedure
+
+1. Run the validator. Capture the schema-error count (must be 0 to proceed)
+   and the soft-check output.
+2. For each soft-check finding, present a plain-English question to the
+   user per the framings in codex §12.4. Use the book's own narrative
+   vocabulary, not schema field names (codex §12.1 and §12.2).
+3. Accept the user's answer (y / n / flavor / show / other). For `show`,
+   display the relevant source-text excerpt translated per codex §12.7.
+   For `other`, interpret the freeform reply per codex §12.5; re-ask in
+   plain English if ambiguous.
+4. After all validator findings are triaged, perform the LLM pass for
+   condition-text-mismatch (codex §12.6) over sections with conditional
+   choices or intrinsic_modifiers. Surface any mismatches with the
+   §12.4 framing.
+5. Apply user-confirmed fixes via Edit calls. Mark flavor decisions per
+   codex §12.8.
+6. Produce the final report per codex §12.11.
+
+## Hard rules
+
+- Never expose schema vocabulary to the user (codex §12.1).
+- Never demand technical answers (codex §12.5).
+- Stay in the book's own narrative terms (codex §12.2).
+- Don't fix anything outside the validator-surfaced findings or the
+  LLM-pass mismatches without asking the user first.
+- Don't commit or push — the main session reviews the diff and commits.
+- Don't round-trip the whole book file through JSON.stringify (see the
+  "Avoid full-file JSON.stringify" section above). Use Edit calls with
+  enough surrounding context for unique matches.
+```
+
+The template's authorization preamble follows the same shape as the comprehensive-review-sub-agent template above — point at the updated reference files (codex §12 specifically), name the target book, state the scope, list the deny list and hard rules. The differentiator is the procedure section and the explicit references to codex §12.
+
 ## Playbook regression harness
 
 Each first-party book has a set of `*.script` playbooks under `plans/playthroughs/` (gitignored — these live on disk only) that exercise different paths through the book. The naming convention is:

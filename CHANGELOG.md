@@ -6,6 +6,39 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.32.0 / GBF v1.24.0 / emulators v3.19.0 / package.json v3.19.0
+
+**Codex-doc-only ship.** Schema, emulators, and package.json unchanged. Adds a new top-level codex section (§12) documenting the **two-pass remediation workflow** and the protocol the remediation sub-agent uses when triaging soft-check findings with a non-technical user. Companion `scripts/validate-book.js` soft checks (commits `d94f2db` + `173b4d1`) detect six structural extraction-failure patterns deterministically; the codex section describes how a remediation agent translates those findings into plain-English questions and back into surgical edits.
+
+**Codex doc additions (new §12, ~3 pages):**
+
+1. **§12.1** — the cardinal rule: no schema vocabulary in user-facing text. Worked good/bad framing examples.
+2. **§12.2** — vocabulary translation table mapping schema concepts to Lone Wolf, Fighting Fantasy, and generic-fallback player-facing phrasings. Covers `add_item`, `remove_item`, `modify_stat`, `set_flag` / `has_flag`, `has_item` / `has_ability` conditions, `intrinsic_modifier`, `roll_dice`, `choose_items`, `eat_meal`, and `is_ending`.
+3. **§12.3** — the `y/n/flavor/show/other` answer protocol presented to the user for each finding.
+4. **§12.4** — question framings per finding category (dangling catalog, orphan section, loss-in-choice-text, disarmament-without-event, known-immune-enemy, condition-text-mismatch). Each carries a canonical plain-English template.
+5. **§12.5** — interpreting freeform "other" answers. Common patterns and the rule that the agent re-asks in plain English (never demanding a technical answer) when ambiguous.
+6. **§12.6** — the LLM-pass component for condition-text-mismatch, which the validator cannot detect structurally. Bounded scope (only sections with conditional choices or intrinsic_modifiers).
+7. **§12.7** — the `show` affordance: section excerpts plus translated encoded state.
+8. **§12.8** — marking findings as flavor via per-finding-type boolean flags (`flavor_only`, `loss_is_flavor`, `disarmament_is_flavor`, `immunity_known_absent`). All schema-additive optional fields when subsequently shipped.
+9. **§12.9** — full worked example of the LW1 §82 (warhorse) flow, showing how a known false-positive dangling-catalog entry gets triaged in ~15 seconds with no technical detail surfaced.
+10. **§12.10** — bad question framings (anti-patterns the agent must not produce).
+11. **§12.11** — final-report shape at the end of a pass.
+12. **§12.12** — when NOT to use the remediation workflow (migration, refactoring, author-intent disputes, performance/shape improvements). Routes those to the comprehensive-review template in `DEV_PROCESS.md`.
+
+**DEV_PROCESS.md addition (~1 page):**
+
+- New "Two-pass remediation workflow" section between the comprehensive-review-sub-agent template and the playbook regression harness section. Describes when to invoke, why this is a separate workflow from migrations, the workflow shape, authorization, pre-conditions, the user's responsibilities, and wrap-up.
+- Provides a remediation-sub-agent prompt template adapted from the comprehensive-review template. Scope is "triage soft-check findings" rather than "migrate to Rule N."
+- Cross-references codex §12 throughout.
+
+**Why this ship is codex-only:**
+
+The flavor-marker boolean fields documented in §12.8 are described as schema-additive but are NOT shipped in this version. They're future schema work; the codex section documents the intended shape so the remediation agent and a future schema bump can land together. Until the schema adds them, the remediation agent can either skip flavor-marking (the warning re-surfaces each run) or use a sidecar file like `<book>.remediation.json` to track decisions without touching the book schema. Either is fine for v2.32.0; the proper marker fields will land in a future schema-additive bump.
+
+**No schema, emulator, or test changes.** Bit-for-bit compatible with v2.31.0 books and emulators.
+
+---
+
 ## v2.31.0 / GBF v1.24.0 / emulators v3.19.0 / package.json v3.19.0
 
 **Schema-additive ship — engine side.** New **Rule 39: Stackable Consumables** ships three composable primitives for sections that grant multiple copies of the same fungible consumable in a single beat. Canonical sites: LW1 §113 ("take two Laumspur potions"), Windhammer §9 ("three torches gathered from the pile"). Pre-v1.24 the only encodings were (a) parallel-id catalog entries (`laumspur_1`, `laumspur_2`, `laumspur_3` as three distinct items_catalog rows that duplicated mechanics) or (b) a single `add_item` event whose count was silently lost via set-semantics dedup. The Rule 39 primitives encode the count as first-class data and retire the parallel-id pattern.

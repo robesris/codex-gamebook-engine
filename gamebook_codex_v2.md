@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.31.0
+# THE GAMEBOOK CODEX v2.32.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -4745,9 +4745,307 @@ e.g., `ff_01_warlock_of_firetop_mountain.json`, `lw_01_flight_from_the_dark.json
 
 ---
 
+## 12. TWO-PASS REMEDIATION WORKFLOW
+
+After a fresh parse produces a `book.json` from raw source text, a single pass rarely captures everything the source describes. Even with this codex's rule set in scope, parser sub-agents systematically miss a handful of patterns:
+
+- Implicit mechanical effects embedded in narrative or dialogue (e.g., *"Take my horse and ride for the capital"* granting a Special Item without an explicit Action Chart instruction)
+- Stat losses encoded only in choice text rather than the section body (*"Lose 1 ENDURANCE point and turn to 213"*)
+- Inventory disarmament that the source narrates rather than commands (*"they take your Backpack and Weapons"*)
+- Per-enemy intrinsic immunities described as narrative flavor
+- Conditions that capture only one item when the source requires multiple in conjunction
+
+These are extraction failures, not language gaps — every one of them has a valid encoding under this codex's existing primitives. The parser simply didn't apply it.
+
+The remedy is a **second pass** by a different sub-agent — the **remediation agent** — whose job is to:
+
+1. Run `scripts/validate-book.js` on the freshly-parsed book and read the soft-check output
+2. Translate each structural finding into a plain-English question for the user
+3. Read source-text passages against encoded conditions to surface mismatches the validator can't catch structurally
+4. Apply user-confirmed fixes via surgical `Edit` calls to the book file
+
+This section documents the remediation agent's protocol: how it talks to the user, what vocabulary it uses, what answer formats it accepts, and how it handles ambiguity.
+
+### 12.1 The cardinal rule: no schema vocabulary in user-facing text
+
+The remediation agent NEVER surfaces schema field names, event type identifiers, codex rule references, or any implementation vocabulary to the user. The user is presumed familiar with the book's narrative and rules — not with JSON Schema, this codex's event taxonomy, or the emulator's internals.
+
+**Bad — exposes schema vocabulary:**
+
+> "§82 missing `add_item: warhorse` event. The `items_catalog.warhorse` entry exists but no section grants it. Should I insert `{type:'add_item', item:'warhorse'}` into the events array?"
+
+**Good — uses the book's own terms:**
+
+> "Section 82 narrates the dying Prince giving the player his horse ('Take my horse and ride for the capital'). Currently the horse isn't recorded as an item the player has. Should it be added to the Action Chart at section 82?"
+
+The agent must translate from schema concepts to player-facing language. The translation table in §12.2 covers common cases for the Lone Wolf and Fighting Fantasy families; other families use analogous mappings.
+
+### 12.2 Vocabulary translation
+
+| Schema concept | Lone Wolf phrasing | Fighting Fantasy phrasing | Generic fallback |
+|---|---|---|---|
+| `add_item` event | "add X to the Action Chart" | "add X to inventory" | "give the player X" |
+| `remove_item` event | "remove X from the Action Chart" | "remove X from inventory" | "take X from the player" |
+| `remove_inventory_category` | "erase all <category> from the Action Chart" | "lose all <category>" | "remove all <category>" |
+| `modify_stat ENDURANCE -N` | "lose N ENDURANCE points" | n/a | "reduce <stat> by N" |
+| `modify_stat STAMINA -N` | n/a | "lose N STAMINA points" | "reduce <stat> by N" |
+| `modify_stat <stat> +N` | "gain N <stat> points" | "gain N <stat>" | "increase <stat> by N" |
+| `set_flag X` / `has_flag X` | "remember X for later" | "remember X for later" | "mark X as having happened" |
+| `has_item: X` condition | "if the player has X" | "if the player has X" | "if the player has X" |
+| `has_ability: X` condition | "if the player has the X Discipline" | "if the player has the X skill" | "if the player has X" |
+| `intrinsic_modifier` cancelling discipline | "make the enemy immune to <discipline>" | n/a | "the enemy negates X" |
+| `roll_dice` event | "roll on the Random Number Table and branch" | "roll dice and branch" | "make a random roll" |
+| `choose_items` event | "let the player pick from these items" | (same) | (same) |
+| `eat_meal` event | "the player eats a Meal here" | n/a | "the player consumes a meal" |
+| Section `is_ending` flag | "this is an ending (death / victory / continuation)" | (same) | (same) |
+
+For unknown book families, the agent uses generic English and inspects the book's own narrative for the stat names, item-category terminology, and discipline/skill names it actually uses. The translation table is a starting point; the agent's broader job is to talk in whatever vocabulary the book itself uses.
+
+### 12.3 The y/n/flavor/show/other answer protocol
+
+Each user-facing question carries a standard five-option answer menu:
+
+```
+[ y       = apply the proposed fix
+| n       = decline the fix; don't change anything
+| flavor  = this is story detail, not a mechanical effect; mark to skip on future runs
+| show    = show me the relevant section text first
+| other   = answer in your own words ]
+```
+
+The five options handle the common cases:
+
+- **y / n** — straightforward accept or decline
+- **flavor** — the user has decided this is intentional narrative dressing (the canonical example: a catalog entry like `warhorse` whose source descriptions never gate any downstream section). The agent records this decision so the same finding doesn't re-surface on every future validator run. See §12.8 below.
+- **show** — the agent displays the section's text (and adjacent context if useful) before re-presenting the question
+- **other** — freeform English; the agent interprets and re-asks if ambiguous
+
+### 12.4 Question framings per finding category
+
+For each soft-check category produced by `scripts/validate-book.js`, the agent produces a question framed in the book's own vocabulary. The recipes below cover the categories the validator structurally detects, plus one LLM-inspected category for the remaining condition-logic class.
+
+**Dangling catalog entry** (catalog entry exists but no section grants it via `add_item` / `choose_items` / chargen):
+
+```
+The book mentions <X> in section text but it's not currently recorded
+as an item the player can have. Possible grant sites: §A, §B (based
+on text search). Should we add <X> to the player's possessions in
+those sections?
+[ y | n | flavor | show | other ]
+```
+
+**Orphan section** (no events, no choices, not flagged as ending):
+
+```
+Section <N> has no way to proceed — no choices, no random rolls,
+no ending marker. The source text says: <one-sentence paraphrase>.
+How should the section advance?
+[ show | other ]
+```
+
+(No `y/n` shortcut — the answer always requires source-text reading.)
+
+**Loss in choice text without matching event:**
+
+```
+Section <N>'s choice "<choice text>" says the player loses N <stat>
+points, but currently no loss is applied when this choice is taken.
+Should we apply the loss?
+[ y | n | show | other ]
+```
+
+**Disarmament narrative without remove event:**
+
+```
+Section <N> narrates the player losing their <category>
+("<matched phrase from source>"), but currently the player keeps
+everything. Should we remove their <category> at this section?
+[ y | n | flavor | show | other ]
+```
+
+**Known-immune enemy missing intrinsic modifier:**
+
+```
+The <enemy name> in section <N> — should it be immune to <ability>?
+The source describes <enemy name> creatures as immune to <ability>,
+but only some immunities are currently encoded.
+[ y | n | flavor | show | other ]
+```
+
+**Condition-text-mismatch** (LLM-inspected by the remediation agent, not validator-driven — see §12.6):
+
+```
+Section <N> says <one-sentence summary of source requirement>.
+Currently the game checks <plain-English summary of encoded condition>.
+Should we update the check to match the source?
+[ y | n | show | other ]
+```
+
+### 12.5 Interpreting freeform "other" answers
+
+When the user picks `other`, the agent reads the freeform reply and translates it to a structured edit. Common patterns:
+
+| User says | Agent interprets as | Resulting edit |
+|---|---|---|
+| "treat as flavor" / "it's just story" / "narrative only" | Mark as intentional flavor | Add the appropriate flavor flag (see §12.8); suppress this warning on future runs |
+| "yes but clamp to zero" / "their X should go to zero if less than N" | Apply with floor-clamp | `modify_stat` with `clamp_floor: 0` |
+| "yes but only if they have it" / "skip if they don't have it" | Conditional application | Wrap event in a `has_item` condition |
+| "skip for now" / "I'll come back to it" | No change, no marker | Leave finding to re-surface next run |
+| "let me edit manually" / "I'll fix this myself" | Hand off | Pause the loop; report the finding's location and exit |
+| "show me the previous section too" / "what does §Y do?" | Expanded context | Display the additional referenced section text, then re-ask |
+
+If the agent cannot unambiguously map the reply to a known pattern, it MUST re-ask with a more specific plain-English question — never demand a technical answer.
+
+**Bad — demands technical answer:**
+
+> "I couldn't parse your response. Please specify whether the modify_stat should use clamp_floor, set_to_zero, or unconditional decrement semantics."
+
+**Good — re-asks in plain English with a concrete example:**
+
+> "Could you give me a specific example? If the player has 2 Gold and the thief tries to take 3, should the thief get 2 (whatever they have), 3 (with the player going to -1), or 0 (and not attempt the take)?"
+
+The agent keeps re-asking until it can confidently apply a fix or the user opts out via `skip` or `manual`.
+
+### 12.6 The LLM-pass component (condition-text-mismatch)
+
+Some bugs the validator cannot detect structurally — the canonical example is a `condition: has_item: torch` where the source actually requires both a torch AND a tinderbox. No deterministic check can recognize "this is wrong"; reading the source text against the condition is required.
+
+The remediation agent performs an LLM pass over conditional choices and combat modifiers AS PART of the remediation workflow. For each section with conditional choices:
+
+1. Read the section's `text` field (and any footnotes)
+2. Read each conditional choice's `text` and its `condition`
+3. Decide whether the condition correctly captures what the source's prose specifies
+4. If not, surface as a condition-text-mismatch finding using the §12.4 framing
+
+This pass is bounded — only sections WITH at least one conditional choice or with `intrinsic_modifiers` are inspected. For a 350-section book, that's typically ~50-100 sections, not all 350. The cost is bounded and the user experience is the same as the structural findings: plain-English questions, simple answers.
+
+### 12.7 The "show" affordance
+
+When the user replies `show`, the agent displays:
+
+1. The section's full text (or the relevant excerpt if very long — typically the paragraph containing the disputed phrasing plus adjacent context)
+2. Any author footnotes attached to that section
+3. The section's currently-encoded events, choices, and conditions — but **translated** into the same plain-English vocabulary as the question
+
+After showing, the agent re-presents the original question.
+
+The encoded-events translation back to English uses the same vocabulary table from §12.2:
+
+```
+Section 82 currently encodes:
+  - Navigate to section 235 (always available)
+  (no item changes, no stat changes, no flags set)
+```
+
+NOT:
+
+```
+Section 82 currently encodes:
+  events: []
+  choices: [{text: "Turn to 235.", target: 235, condition: null}]
+```
+
+### 12.8 Marking findings as flavor
+
+When the user answers `flavor`, the agent records the decision so the validator doesn't re-fire on the same finding on future runs. The mechanism depends on finding type:
+
+| Finding type | Flavor marker |
+|---|---|
+| Dangling catalog entry | Add `flavor_only: true` to the `items_catalog[id]` entry |
+| Orphan section | Not applicable — orphans always need a real navigation fix |
+| Loss-in-choice-text false positive | Add `loss_is_flavor: true` to the specific choice object |
+| Disarmament false positive | Add `disarmament_is_flavor: true` to the section |
+| Enemy-immunity false positive | Add `immunity_known_absent: [<ability>, ...]` to the `enemies_catalog[id]` entry |
+
+The validator reads these markers and skips findings on entries carrying them. (Schema additions for these markers are optional boolean fields — back-compat-additive; books that don't carry them validate unchanged.)
+
+### 12.9 Worked example — LW1 §82 (warhorse)
+
+User runs the remediation agent after a fresh LW1 parse. Validator surfaces `warhorse` as dangling. Agent presents:
+
+```
+> The book mentions a horse — Prince Pelathar gives it to the player
+> in section 82 ("Take my horse and ride for the capital"), and the
+> player abandons it in section 329 ("you must leave your horse").
+> Should we record the horse as an item the player carries between
+> sections 82 and 329?
+> [ y | n | flavor | show | other ]
+
+User: show
+
+> Section 82 (excerpt):
+>   "The dying Prince looks up into your eyes and says, 'Kai Lord,
+>    you must take a message to my father. ... Take my horse and
+>    ride for the capital.'  You bid a sad farewell to the Prince,
+>    mount his white steed, and head south along the forest path."
+>
+> Section 329 (excerpt):
+>   "Your horse becomes startled and ... you must leave your horse
+>    and press on by foot."
+>
+> No other section currently checks for the horse — every horse-mention
+> elsewhere is narrative (riding scenes, the horse acting up, etc.).
+>
+> Same question: should the horse be tracked as an item?
+> [ y | n | flavor | show | other ]
+
+User: flavor
+
+> Marked the horse as story-only. The validator won't flag this again.
+> Moving on to the next finding…
+```
+
+The user spent ~15 seconds on this question and never saw a schema field name. The agent recorded the decision so the warning doesn't recur.
+
+### 12.10 Bad question framings (anti-patterns)
+
+The agent must NOT produce any of the following:
+
+- **Schema field names**: "the `add_item` event", "the `intrinsic_modifiers` array", "the `condition` block"
+- **Codex rule references in user text**: "per Rule 36, this should use a triggered_effect". The internal reasoning is fine; the user-facing translation is "should this take effect during combat?"
+- **Implementation details**: "the emulator processes events on section entry, so..." The user doesn't need to know.
+- **Demands for technical answers**: "specify whether to use modify_stat or set_resource". Always re-ask in plain English with a concrete example.
+- **Long preambles**: "Based on my analysis of the codex's Rule 39 / GBF v1.24 stackable consumable shape, considering the parser's likely heuristic..." Just ask the question directly.
+
+The user is a reader of the book. The agent is the technical layer. The conversation stays in the book's terms.
+
+### 12.11 Wrapping up the pass
+
+After all findings have been triaged, the agent reports:
+
+```
+Remediation pass complete.
+  - <N1> fixes applied
+  - <N2> findings marked as flavor (won't re-surface)
+  - <N3> findings skipped for later review
+  - <N4> findings handed off for manual editing
+
+Final validator output:
+  - 0 schema errors
+  - <N3 + N4> soft findings remaining (skipped this pass)
+
+Book file written: <path>
+Recommended next step: `git diff books/<book>.json` to review changes.
+```
+
+The user can re-run the validator independently to confirm. The remediation pass is idempotent — re-running it shows zero new questions if nothing has changed.
+
+### 12.12 When NOT to use the remediation workflow
+
+The remediation pass is for **post-fresh-parse triage** — surfacing what the first parse missed. It is not a substitute for:
+
+- **Schema migrations** when the schema itself changes. Use a scoped comprehensive-review sub-agent (see `DEV_PROCESS.md`).
+- **Refactoring** existing well-encoded sections. The remediation agent only acts on validator findings; it doesn't touch sections the validator hasn't surfaced.
+- **Author-intent disputes** when the source text is ambiguous. The remediation agent surfaces these but the resolution requires a human judgment call, often documented in `known_issues.md`.
+- **Performance / shape improvements** to playable encoding (e.g., migrating a `script` event to nested `roll_dice`). Those are codex-rule migrations, handled by the comprehensive-review workflow.
+
+If the user runs the remediation agent on a maintained, well-reviewed book and the validator surfaces 0 soft findings, the agent should respond with a single "no findings to triage" message and exit — not invent work.
+
+---
+
 ## Version identifiers
 
-**Codex v2.31.0 / GBF schema v1.24.0 / CLI emulator v3.19.0 / HTML emulator v3.19.0.**
+**Codex v2.32.0 / GBF schema v1.24.0 / CLI emulator v3.19.0 / HTML emulator v3.19.0.**
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
