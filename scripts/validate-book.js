@@ -72,6 +72,57 @@ function summarise(errors, label) {
   return { total, buckets };
 }
 
+// Soft structural checks. These do NOT affect exit code — schema validity is the
+// only blocking signal. The soft checks surface drift that the schema can't catch:
+// catalog entries that are defined but never granted (missed pickups), and orphan
+// sections that have no way to advance (parser dead-ends).
+function collectGrantedItemIds(book) {
+  const granted = new Set();
+  const scan = (events) => {
+    if (!Array.isArray(events)) return;
+    for (const ev of events) {
+      if (!ev || typeof ev !== 'object') continue;
+      if (ev.type === 'add_item' && ev.item) granted.add(ev.item);
+      if (ev.type === 'choose_items' && Array.isArray(ev.options)) {
+        for (const o of ev.options) if (typeof o === 'string') granted.add(o);
+      }
+      if (ev.type === 'roll_dice' && ev.results) {
+        for (const r of Object.values(ev.results)) scan(r && r.effects);
+      }
+    }
+  };
+  for (const s of Object.values(book.sections || {})) scan(s && s.events);
+  for (const step of (book.character_creation && book.character_creation.steps) || []) {
+    scan(step && step.events);
+    if (step && step.action === 'add_item' && step.item) granted.add(step.item);
+    if (step && step.roll_table && Array.isArray(step.roll_table.results)) {
+      for (const r of step.roll_table.results) scan(r && r.effects);
+    }
+  }
+  return granted;
+}
+
+function softChecks(book) {
+  const catalogIds = Object.keys(book.items_catalog || {});
+  const granted = collectGrantedItemIds(book);
+  const dangling = catalogIds.filter(id => !granted.has(id)).sort();
+
+  const orphans = [];
+  for (const [id, s] of Object.entries(book.sections || {})) {
+    if (!s || s.is_ending) continue;
+    const noEvents = !Array.isArray(s.events) || s.events.length === 0;
+    const noChoices = !Array.isArray(s.choices) || s.choices.length === 0;
+    if (noEvents && noChoices) orphans.push(id);
+  }
+
+  if (dangling.length > 0) {
+    console.log(`  Soft: ${dangling.length} catalog entr${dangling.length === 1 ? 'y' : 'ies'} defined but never granted (possible missed pickup): ${dangling.join(', ')}`);
+  }
+  if (orphans.length > 0) {
+    console.log(`  Soft: ${orphans.length} orphan section${orphans.length === 1 ? '' : 's'} (no events, no choices, not flagged as ending): ${orphans.map(s => '§' + s).join(', ')}`);
+  }
+}
+
 const bookText = fs.readFileSync(bookPath, 'utf8');
 const book = loadBook(bookText, 'book');
 validate(book);
@@ -81,6 +132,7 @@ if (!baselineSpec) {
   for (const [sec, n] of Object.entries(post.buckets).sort((a, b) => b[1] - a[1]).slice(0, 30)) {
     console.log(`  ${sec}\t${n}`);
   }
+  softChecks(book);
   process.exit(post.total === 0 ? 0 : 1);
 }
 
