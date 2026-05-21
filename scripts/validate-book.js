@@ -74,8 +74,11 @@ function summarise(errors, label) {
 
 // Soft structural checks. These do NOT affect exit code — schema validity is the
 // only blocking signal. The soft checks surface drift that the schema can't catch:
-// catalog entries that are defined but never granted (missed pickups), and orphan
-// sections that have no way to advance (parser dead-ends).
+// catalog entries that are defined but never granted (missed pickups), orphan
+// sections (parser dead-ends), stat losses mentioned in choice text without a
+// matching modify_stat event, disarmament narratives without a corresponding
+// remove event, and combats against known-immune enemies whose catalog entry
+// is missing the expected intrinsic_modifiers.
 function collectGrantedItemIds(book) {
   const granted = new Set();
   const scan = (events) => {
@@ -102,6 +105,161 @@ function collectGrantedItemIds(book) {
   return granted;
 }
 
+// Flatten all events in a section, recursing into roll_dice.results.effects.
+function flattenSectionEvents(section) {
+  const out = [];
+  const walk = (events) => {
+    if (!Array.isArray(events)) return;
+    for (const ev of events) {
+      if (!ev || typeof ev !== 'object') continue;
+      out.push(ev);
+      if (ev.type === 'roll_dice' && ev.results) {
+        for (const r of Object.values(ev.results)) walk(r && r.effects);
+      }
+    }
+  };
+  walk(section && section.events);
+  return out;
+}
+
+// Check A: choice.text mentions "lose/deduct N <stat>" but the section has no
+// matching modify_stat event applying the loss. Catches the §276/§343 pattern
+// where the loss is narrated in the choice text but never wired as an event.
+function checkLossInChoiceText(book) {
+  const findings = [];
+  const lossRe = /(?:lose|deduct|subtract)\s+(\d+)\s+(ENDURANCE|COMBAT SKILL|STAMINA|SKILL|LUCK)/gi;
+  for (const [secId, s] of Object.entries(book.sections || {})) {
+    if (!s) continue;
+    for (const choice of (s.choices || [])) {
+      const text = (choice && choice.text) || '';
+      let m;
+      while ((m = lossRe.exec(text)) !== null) {
+        const amount = parseInt(m[1], 10);
+        const stat = m[2].toUpperCase();
+        const flat = flattenSectionEvents(s);
+        const hasScript = flat.some(ev => ev.type === 'script');
+        const hasMatchingModify = flat.some(ev =>
+          ev.type === 'modify_stat' &&
+          typeof ev.stat === 'string' &&
+          ev.stat.toUpperCase() === stat &&
+          typeof ev.amount === 'number' &&
+          ev.amount === -amount
+        );
+        if (!hasMatchingModify && !hasScript) {
+          findings.push(`§${secId}: choice text mentions "lose ${amount} ${stat}" but no matching modify_stat (or script) event in section`);
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+// Check B: section text describes inventory disarmament ("they take your Backpack",
+// "you lose your Weapon", "erase all Backpack Items", "Weapon is broken in two",
+// "cross off your Action Chart") but no remove_item / remove_inventory_category /
+// script event applies the loss. Catches the §83→§205 / §144 / §162 / §174 /
+// §258 / §274 / §277 / §294 pattern.
+function checkDisarmamentWithoutEvent(book) {
+  const findings = [];
+  // Trigger phrases that indicate the player loses inventory in this section.
+  const triggers = [
+    // "they take your X" / "the guards seize your X" — second-person theft
+    /(?:they|the\s+\w+|guards?|soldiers?|men|enemy)\s+(?:take|seize|confiscate|strip(?:\s+you\s+of)?)\s+(?:all\s+)?(?:your\s+)?(?:backpack|weapons?|equipment|gear)/i,
+    // "you lose your X" / "you (have) (unfortunately) lost your X" — allow 0-3 adverbs between subject and verb
+    /\byou\s+(?:\w+\s+){0,3}(?:lost|lose)\s+(?:your\s+|all\s+(?:your\s+)?)?(?:backpack|weapons?|equipment)/i,
+    // "X is stolen from your Backpack/pouch" — theft pattern (§144 fallback)
+    /(?:is|are)\s+stolen\s+from\s+(?:your\s+)?(?:backpack|pouch)/i,
+    // "erase ... from your Action Chart" / "take this off your Action Chart" / "cross off" — explicit cross-off instruction (allows intermediate text up to 100 chars)
+    /(?:erase|cross\s+off|remove|take(?:\s+this|\s+that|\s+it)?\s+off)[^.]{0,100}action\s+chart/i,
+    // "Weapon is broken in two" / "Backpack is destroyed" — gear damage
+    /(?:your\s+)?(?:weapons?|backpack)\s+(?:is|are)\s+(?:broken|destroyed|shattered|smashed)/i,
+    // "you no longer have your Backpack"
+    /(?:no\s+longer\s+have|no\s+longer\s+carry)\s+(?:your\s+|any\s+)?(?:backpack|weapons?|equipment)/i,
+  ];
+  // Negation guard: skip if any matched phrase is within 30 chars after
+  // "do not"/"don't"/"will not"/"won't"/"cannot"/"never" — those are negated.
+  const negationRe = /(?:do\s+not|don['']t|will\s+not|won['']t|cannot|never)\s+(?:[^.!?]{0,60})/gi;
+  for (const [secId, s] of Object.entries(book.sections || {})) {
+    if (!s) continue;
+    const text = (s.text || '');
+    let matched = null;
+    for (const re of triggers) {
+      const m = text.match(re);
+      if (m) {
+        // Negation check: was this match inside a negated clause?
+        let negated = false;
+        let n;
+        const idx = text.toLowerCase().indexOf(m[0].toLowerCase());
+        const negRe = new RegExp(negationRe.source, 'gi');
+        while ((n = negRe.exec(text)) !== null) {
+          if (idx >= n.index && idx <= n.index + n[0].length) { negated = true; break; }
+        }
+        if (!negated) { matched = m[0].trim(); break; }
+      }
+    }
+    if (!matched) continue;
+    const flat = flattenSectionEvents(s);
+    const hasRemoveEvent = flat.some(ev =>
+      ev.type === 'remove_item' ||
+      ev.type === 'remove_inventory_category' ||
+      ev.type === 'clear_inventory' ||
+      ev.type === 'choose_items' || // choose-then-remove pattern
+      ev.type === 'script'
+    );
+    if (!hasRemoveEvent) {
+      findings.push(`§${secId}: text describes inventory loss (\"${matched}\") but no remove_item / remove_inventory_category / script event in section`);
+    }
+  }
+  return findings;
+}
+
+// Check C: combats against enemies known to be immune to specific disciplines
+// must have intrinsic_modifiers cancelling those bonuses. LW-family registry —
+// other book series add their own entries here as needed. Each registry entry
+// maps a substring (case-insensitive, matched against enemies_catalog[id].name)
+// to the list of ability names whose +CS bonus the enemy is immune to.
+const enemyImmunityRegistry = {
+  vordak: ['Mindblast'],
+  helghast: ['Mindblast'],
+  gourgaz: ['Mindblast'],
+  darklord: ['Mindblast'],
+  burrowcrawler: ['Mindblast', 'Animal Kinship'],
+};
+
+function checkEnemyImmunities(book) {
+  const findings = [];
+  const enemies = book.enemies_catalog || {};
+  for (const [enemyId, e] of Object.entries(enemies)) {
+    if (!e) continue;
+    const name = (e.name || '').toLowerCase();
+    const expectedImmunities = [];
+    for (const [key, abilities] of Object.entries(enemyImmunityRegistry)) {
+      if (name.includes(key)) {
+        for (const a of abilities) if (!expectedImmunities.includes(a)) expectedImmunities.push(a);
+      }
+    }
+    if (expectedImmunities.length === 0) continue;
+    const mods = Array.isArray(e.intrinsic_modifiers) ? e.intrinsic_modifiers : [];
+    const present = new Set();
+    for (const m of mods) {
+      // Walk the condition tree (handles {has_ability:"X"} and nested and/or/not)
+      const walk = (cond) => {
+        if (!cond || typeof cond !== 'object') return;
+        if (cond.has_ability) present.add(cond.has_ability);
+        if (cond.type === 'has_ability' && cond.ability) present.add(cond.ability);
+        if (Array.isArray(cond.conditions)) for (const c of cond.conditions) walk(c);
+        if (cond.condition) walk(cond.condition);
+      };
+      walk(m && m.condition);
+    }
+    const missing = expectedImmunities.filter(a => !present.has(a));
+    if (missing.length > 0) {
+      findings.push(`${enemyId} ("${e.name}"): name matches known-immune type but intrinsic_modifiers missing immunity for ${missing.join(', ')}`);
+    }
+  }
+  return findings;
+}
+
 function softChecks(book) {
   const catalogIds = Object.keys(book.items_catalog || {});
   const granted = collectGrantedItemIds(book);
@@ -115,12 +273,25 @@ function softChecks(book) {
     if (noEvents && noChoices) orphans.push(id);
   }
 
+  const lossFindings = checkLossInChoiceText(book);
+  const disarmFindings = checkDisarmamentWithoutEvent(book);
+  const immunityFindings = checkEnemyImmunities(book);
+
   if (dangling.length > 0) {
     console.log(`  Soft: ${dangling.length} catalog entr${dangling.length === 1 ? 'y' : 'ies'} defined but never granted (possible missed pickup): ${dangling.join(', ')}`);
   }
   if (orphans.length > 0) {
     console.log(`  Soft: ${orphans.length} orphan section${orphans.length === 1 ? '' : 's'} (no events, no choices, not flagged as ending): ${orphans.map(s => '§' + s).join(', ')}`);
   }
+  const enumerate = (label, findings, cap = 20) => {
+    if (findings.length === 0) return;
+    console.log(`  Soft: ${findings.length} ${label}:`);
+    for (const f of findings.slice(0, cap)) console.log(`    - ${f}`);
+    if (findings.length > cap) console.log(`    - (+${findings.length - cap} more)`);
+  };
+  enumerate('loss-in-choice-text findings', lossFindings);
+  enumerate('disarmament-without-event findings', disarmFindings);
+  enumerate('enemy-immunity findings', immunityFindings);
 }
 
 const bookText = fs.readFileSync(bookPath, 'utf8');
