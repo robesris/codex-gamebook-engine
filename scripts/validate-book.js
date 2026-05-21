@@ -98,8 +98,17 @@ function collectGrantedItemIds(book) {
   for (const step of (book.character_creation && book.character_creation.steps) || []) {
     scan(step && step.events);
     if (step && step.action === 'add_item' && step.item) granted.add(step.item);
-    if (step && step.roll_table && Array.isArray(step.roll_table.results)) {
-      for (const r of step.roll_table.results) scan(r && r.effects);
+    // Chargen roll_table results: schema uses an OBJECT keyed by range strings
+    // ("0", "1", ..., "9") with `effects` arrays under each. Some books may
+    // alternatively use an array. Handle both shapes.
+    const rollResults = (step && step.roll_table && step.roll_table.results) || (step && step.action === 'roll_table' && step.results);
+    if (rollResults) {
+      const iter = Array.isArray(rollResults) ? rollResults : Object.values(rollResults);
+      for (const r of iter) scan(r && r.effects);
+    }
+    // Chargen choose_one action with options carrying effects
+    if (step && step.action === 'choose_one' && Array.isArray(step.options)) {
+      for (const o of step.options) scan(o && o.effects);
     }
   }
   return granted;
