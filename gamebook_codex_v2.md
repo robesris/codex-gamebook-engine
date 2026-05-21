@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.32.0
+# THE GAMEBOOK CODEX v2.33.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -2761,6 +2761,106 @@ The pre-v1.24 encoding for this case was `torches_bundle: { name: "Torches (bund
 
 **Verification.** For every section in a book whose source text grants multiple copies of the same fungible consumable in a single beat ("take two Laumspur potions", "three torches", "four meal rations"), the corresponding `add_item` event MUST carry `quantity: N` AND the item's catalog entry MUST carry `stackable: true`. A pre-v1.24 parallel-id encoding (multiple catalog entries with sequence-numbered ids that share the same mechanics) is a Rule 39 violation and should be collapsed to one entry with `stackable: true`. For sections that grant the same id along an alternate path (where set-semantics is the right behaviour — only one copy in inventory regardless of which path the player took), Rule 39 does NOT apply; leave `stackable` unset (defaults to false) and the existing set-semantics produces the correct shape.
 
+### Rule 40: Player-chosen item loss (`choose_items.mode: "remove"`)
+
+Some sections describe a player-chosen LOSS rather than a player-chosen grant: *"one item is stolen from your Backpack — choose which"* (LW1 §144), *"the Weapon is broken in two — if you carry two Weapons, choose which one breaks"* (LW1 §277), *"you may take this Weapon only if you exchange it for another Weapon already in your possession"* (LW1 §307). Pre-v1.25 the schema's `choose_items` event covered only the grant direction (player picks which items to take); the loss direction had no clean expression, and books either silently dropped the loss (no event fired) or relied on `script` events (which could not mutate inventory under the pre-v1.25 sandbox).
+
+Rule 40 adds a discriminator to `choose_items` that lets it serve both directions:
+
+- **`mode: "grant"`** (default for back-compat, equivalent to pre-v1.25 behaviour) — the player picks one or more items to ADD to inventory. The available options come from the event's `options` array or are book-narrative.
+- **`mode: "remove"`** — the player picks one or more items to REMOVE from their current inventory. The selection pool is automatically filtered to items the player currently holds; the optional `from_category` field narrows the pool to a specific inventory category.
+
+**Schema additions on `choose_items` event:**
+
+- `mode: "grant" | "remove"` (default `"grant"` when absent — preserves pre-v1.25 behaviour).
+- `from_category: "weapons" | "backpack" | "special_items" | <any rules.inventory_categories[] id>` — when `mode: "remove"`, the selection pool is `state.inventory` filtered to items whose `items_catalog[id].inventory_category` matches. When `mode: "grant"`, this field is ignored (grant selection comes from `options`).
+
+**Emulator semantics for `mode: "remove"`:**
+
+1. At event dispatch, the emulator computes the eligible pool: items in `state.inventory` whose catalog entry's `inventory_category` matches `from_category` (or the entire inventory if `from_category` is absent).
+2. If the eligible pool is empty: the event no-ops silently (no pause, no log error). This is the natural shape for *"you lose your Backpack if you have one"* — the loss applies if the player has anything to lose.
+3. If the eligible pool has exactly one item AND `count: 1`: the emulator auto-removes the single eligible item without pausing — there's no choice to surface. (Equivalent to a `remove_item` event with the eligible id.)
+4. If the eligible pool has more than one item: the emulator pauses with the eligible pool as the selection menu. The player picks `count` items; on selection, those items are removed from `state.inventory`. The pause shape mirrors the `mode: "grant"` shape (same `pause.type: "choose_items"`), so existing emulator UI scaffolding works without a new pause type.
+
+**Composition with other events.** A `choose_items mode:"remove"` event can be followed by other events in the same section's `events` array — typical pattern: a removal followed by an `add_item` (the §307 exchange shape). The removal pauses if the pool is multi-item; the subsequent events run after the player's pick is applied. For the §144 "stolen from Backpack OR fallback to Weapons" shape, encode TWO `choose_items mode:"remove"` events back-to-back, each gated on a condition referencing the source category — the codex's `condition` infrastructure on events (Rule 15) handles the OR-fallback shape cleanly without new primitives.
+
+**Canonical worked examples:**
+
+*LW1 §277 — "the Weapon is broken; choose which":*
+
+```json
+"events": [
+  {
+    "type": "choose_items",
+    "mode": "remove",
+    "from_category": "weapons",
+    "count": 1,
+    "description": "The Weapon is broken in two. If you carry more than one, choose which one breaks."
+  }
+]
+```
+
+If the player carries zero Weapons, the event no-ops (nothing to break). If exactly one, it's auto-removed (no pause). If two, the player picks which to lose.
+
+*LW1 §144 — "one item stolen from Backpack; fallback to Weapon if empty":*
+
+```json
+"events": [
+  { "type": "modify_stat", "stat": "ENDURANCE", "amount": -2, "reason": "Stunned by the runaway cart" },
+  {
+    "type": "choose_items",
+    "mode": "remove",
+    "from_category": "backpack",
+    "count": 1,
+    "description": "A pickpocket steals one item from your Backpack — choose which.",
+    "condition": { "type": "stat_gte", "stat": "<dummy_for_non_empty_check>", "value": 0 }
+  },
+  {
+    "type": "choose_items",
+    "mode": "remove",
+    "from_category": "weapons",
+    "count": 1,
+    "description": "If you had no Backpack Items to steal, the thief takes one of your Weapons instead.",
+    "condition": "<source-says-fallback-only-when-backpack-empty>"
+  }
+]
+```
+
+The fallback semantic (Backpack-then-Weapons) is conveyed via the natural "if no backpack items to take, the player loses a weapon instead" interpretation — when the first `choose_items mode:"remove"` finds an empty Backpack pool, it no-ops, and the second one fires. Sub-agents implementing this for a specific section should pick the cleanest available condition shape to express the fallback gate.
+
+*LW1 §307 — "take the Warhammer only if you exchange another Weapon":*
+
+```json
+"events": [
+  {
+    "type": "choose_items",
+    "mode": "remove",
+    "from_category": "weapons",
+    "count": 1,
+    "description": "The hermit's Warhammer is his only defence. You may take it only if you give him one of your Weapons in exchange. Choose which Weapon to leave with him."
+  },
+  { "type": "add_item", "item": "warhammer" }
+]
+```
+
+If the player carries no Weapons, the `choose_items` no-ops (nothing to exchange) AND the subsequent `add_item: warhammer` runs unconditionally — that's a small semantic looseness (the source says the exchange is required), but the validator's existing condition gating could constrain the add_item to fire only when at least one weapon was actually removed. For books where the exchange MUST be enforced strictly, add a `condition` on the `add_item` referencing a flag the `choose_items` sets on successful removal (see "Strict exchange semantics" below).
+
+**Strict exchange semantics (optional add-on).** For books where an exchange-on-pickup must strictly require the trade (no free Warhammer if you have no weapon), the cleanest encoding is to set a flag on successful loss and gate the subsequent add_item:
+
+```json
+"events": [
+  { "type": "choose_items", "mode": "remove", "from_category": "weapons", "count": 1, "on_success_set_flag": "warhammer_exchange_traded" },
+  { "type": "add_item", "item": "warhammer", "condition": { "type": "has_flag", "flag": "warhammer_exchange_traded" } },
+  { "type": "clear_flag", "flag": "warhammer_exchange_traded" }
+]
+```
+
+The `on_success_set_flag` field is an optional add-on to `choose_items` shipped alongside `mode: "remove"` — it sets the named flag ONLY when at least one item was actually removed. The flag is then consumed by the next event's condition and cleared. Books that don't need strict semantics omit the flag plumbing.
+
+**Schema-additive.** Pre-v1.25 books validate unchanged against the v1.25 schema. The `choose_items` event gains three new optional fields (`mode`, `from_category`, `on_success_set_flag`); no existing field changes shape, no field is repurposed, no field is removed. A v1.24-era book that does not reference any of these new primitives produces the same validation error count against v1.25 as it did against v1.24, and the emulators' behaviour on such a book is bit-identical to v3.19.0.
+
+**Verification.** For every section whose source text describes a player-chosen loss (*"you may choose which one"*, *"one item is stolen — choose which"*, *"you may take X only if you exchange Y"*), the corresponding event MUST use `choose_items mode:"remove"` with an appropriate `from_category`. Sub-agents migrating pre-v1.25 books should look for sections where the events array is empty or only carries unrelated events while the source text describes such a loss (the validator's `disarmament-without-event` soft check surfaces these).
+
 ---
 
 1. Universal Gamebook Concepts
@@ -5045,7 +5145,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.32.0 / GBF schema v1.24.0 / CLI emulator v3.19.0 / HTML emulator v3.19.0.**
+**Codex v2.33.0 / GBF schema v1.25.0 / CLI emulator v3.20.0 / HTML emulator v3.19.0** (HTML emulator pending Rule 40 wire-up; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.19.0';
+const CODEX_EMULATOR_VERSION = '3.20.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1719,9 +1719,43 @@ function handleEvent(event, state, book) {
     case 'input_text':
       state.pause = { type: 'input_text', event };
       return 'pause';
-    case 'choose_items':
+    case 'choose_items': {
+      // Schema v1.25+ (Rule 40): when event.mode === 'remove', the event
+      // is a loss-variant — eligible pool is filtered from state.inventory
+      // by event.from_category; pause only if multi-choice required.
+      if (event.mode === 'remove') {
+        const catalog = book.items_catalog || {};
+        const cat = event.from_category;
+        const eligible = state.inventory.filter(id => {
+          if (cat == null) return true;
+          const item = catalog[id];
+          return item && item.inventory_category === cat;
+        });
+        const want = event.count || 1;
+        if (eligible.length === 0) {
+          state.log.push(`choose_items mode:remove — no eligible items${cat ? ` in category ${cat}` : ''}; no-op`);
+          return 'continue';
+        }
+        if (eligible.length <= want) {
+          // Auto-resolve: remove all eligible items, no pause needed.
+          for (const id of eligible) {
+            const idx = state.inventory.indexOf(id);
+            if (idx >= 0) state.inventory.splice(idx, 1);
+            autoUnequipOnRemove(state, id);
+          }
+          if (event.on_success_set_flag) {
+            if (!state.flags.includes(event.on_success_set_flag)) state.flags.push(event.on_success_set_flag);
+          }
+          state.log.push(`Removed (forced, only eligible): ${eligible.join(', ')}`);
+          return 'continue';
+        }
+        // Multi-choice case — pause for player selection.
+        state.pause = { type: 'choose_items', event, eligible };
+        return 'pause';
+      }
       state.pause = { type: 'choose_items', event };
       return 'pause';
+    }
     case 'script':
       return runScriptEvent(event, state, book);
     case 'return_to_caller': {
@@ -2904,6 +2938,24 @@ function applyAction(state, book, action, args) {
       const event = state.pause.event;
       const selected = args;
       const catalog = book.items_catalog || {};
+      // Schema v1.25+ (Rule 40): mode:"remove" — selected items are removed
+      // from inventory rather than added. Auto-resolved cases (empty pool /
+      // single-eligible) are handled at dispatch time and don't reach here.
+      if (event.mode === 'remove') {
+        const eligible = state.pause.eligible || [];
+        for (const id of selected) {
+          if (!eligible.includes(id)) continue; // ignore picks outside the pool
+          const idx = state.inventory.indexOf(id);
+          if (idx >= 0) state.inventory.splice(idx, 1);
+          autoUnequipOnRemove(state, id);
+        }
+        if (selected.length > 0 && event.on_success_set_flag) {
+          if (!state.flags.includes(event.on_success_set_flag)) state.flags.push(event.on_success_set_flag);
+        }
+        state.log.push(`Removed (player-chosen): ${selected.join(', ')}`);
+        state.pause = null;
+        return processNextEvent(state, book);
+      }
       // Auto items
       for (const id of (event.add_automatic || [])) {
         if (!state.inventory.includes(id)) state.inventory.push(id);

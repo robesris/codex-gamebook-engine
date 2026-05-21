@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.24.0",
+  "title": "Gamebook Format (GBF) v1.25.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -593,6 +593,9 @@
         },
         "count": { "type": "integer" },
         "from": { "type": "string" },
+        "mode": { "type": "string", "enum": ["grant", "remove"], "description": "choose_items: Schema v1.25+ (Rule 40). Discriminator for the player-choice direction. `grant` (default when absent — preserves pre-v1.25 behaviour) presents items for the player to add to inventory. `remove` presents items for the player to remove from current inventory; the eligible pool is `state.inventory` filtered by `from_category` (when set) or the entire inventory (when absent). When the eligible pool is empty, the event no-ops silently; when it's size-1 and `count: 1`, the emulator auto-removes without pausing; when larger, the player picks `count` items to lose." },
+        "from_category": { "type": "string", "description": "choose_items: Schema v1.25+ (Rule 40). When `mode: 'remove'`, restricts the eligible pool to items in `state.inventory` whose `items_catalog[id].inventory_category` matches this string. Typical values mirror the inventory-category vocabulary: 'weapons', 'backpack', 'special_items', or any string declared in `rules.inventory_categories[]`. Ignored when `mode: 'grant'`." },
+        "on_success_set_flag": { "type": "string", "description": "choose_items: Schema v1.25+ (Rule 40). When `mode: 'remove'`, sets the named flag if AND ONLY IF at least one item was actually removed. Use this for strict exchange-on-pickup semantics — a subsequent `add_item` event with `condition: {has_flag: <this_flag>}` will only fire when the exchange actually happened." },
         "item": { "type": "string", "description": "add_item: item id from items_catalog." },
         "quantity": { "type": "integer", "minimum": 1, "description": "add_item: Schema v1.24+ (Rule 39). Number of copies of the item to grant at character creation. Default 1 when absent. Behaviour mirrors the section-event `quantity` field — for stackable items (`items_catalog[id].stackable: true`) the count accumulates; for non-stackable items the second-and-beyond copies are no-ops via existing set-semantics. Use for chargen tables that grant multiple of a single id (e.g. a starting-equipment roll outcome that yields two Healing Salves)." },
         "resource": { "type": "string", "description": "set_resource: resource name. Canonical lowercase names are `gold`, `provisions`, and `meals`. Book-specific stat names (uppercased like 'GOLD', 'EXPERIENCE', or whatever the book declares) are also accepted; if the name matches a `rules.stats[].name`, the value is written to `state.stats[name]` instead of to the canonical resource slot, so books that treat their currency as a first-class stat get consistent display and condition behavior." },

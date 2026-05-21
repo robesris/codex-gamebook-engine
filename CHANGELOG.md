@@ -6,6 +6,62 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.33.0 / GBF v1.25.0 / CLI emulator v3.20.0 / HTML emulator v3.19.0 (pending)
+
+**Schema-additive ship — engine side.** New **Rule 40: Player-chosen item loss** ships a `mode: "grant" | "remove"` discriminator on the `choose_items` event, transforming it from a grant-only primitive into a primitive that supports both directions. Resolves the LW1 §144 / §277 / §307 patterns that the iter 25 review surfaced as "upstream-blocked": sections describing *"one item is stolen — choose which"*, *"the Weapon is broken — if you carry two, choose which one breaks"*, and *"you may take X only if you exchange Y."* Pre-v1.25 these patterns either silently dropped the loss or relied on a `script` workaround that the pre-v1.25 Lua sandbox couldn't actually execute (the sandbox is read-only for inventory).
+
+**Three schema additions on `choose_items` event (all optional, all back-compat-additive):**
+
+1. **`mode: "grant" | "remove"`** (default `"grant"` when absent — preserves pre-v1.25 behaviour). Discriminates the direction. When `mode: "remove"`, the eligible-selection pool is computed from `state.inventory` rather than from the event's `options` array.
+2. **`from_category`** (string) — when `mode: "remove"`, narrows the eligible pool to items whose `items_catalog[id].inventory_category` matches this value (typical values: `"weapons"`, `"backpack"`, `"special_items"`). Absent + `mode: "remove"` means the eligible pool is the full inventory (rare; usually a category is desired).
+3. **`on_success_set_flag`** (string) — when `mode: "remove"` and AT LEAST ONE item was actually removed, sets the named flag. Use for strict exchange-on-pickup semantics: pair with a subsequent `add_item` event whose `condition` references the flag, plus a final `clear_flag` to keep the flag transient. The flag is NOT set when the eligible pool was empty (no removal occurred).
+
+**CLI emulator implementation (`cli-emulator/play.js`, 3.19.0 → 3.20.0):**
+
+- `choose_items` event dispatch checks `event.mode`. When `mode: "remove"`:
+  - Computes the eligible pool by filtering `state.inventory` against `event.from_category` (matched on `items_catalog[id].inventory_category`).
+  - If the eligible pool is empty, the event no-ops silently and the next event runs.
+  - If the eligible pool size is ≤ the event's `count` (typically 1 for a single-item loss), the emulator auto-removes the eligible items without pausing — no choice to surface when there's nothing to choose between. The `on_success_set_flag` fires on this path if set.
+  - If the eligible pool is larger than `count`, the emulator pauses with `state.pause = { type: 'choose_items', event, eligible }` and waits for the player to pick `count` items via the standard `choose_items` action.
+- `choose_items` action resolution checks `state.pause.event.mode`. When `mode: "remove"`:
+  - Selected items are removed from `state.inventory` (with `autoUnequipOnRemove` running for each).
+  - Picks outside the eligible pool are silently ignored (defensive — UI should restrict picks to the pool but a malformed action shouldn't corrupt state).
+  - The `on_success_set_flag` fires once if at least one item was actually removed.
+- Pre-v1.25 `mode: "grant"` behaviour is bit-identical (the new branch only triggers on explicit `mode: "remove"`).
+
+**HTML emulator (`index.html`, 3.19.0 → 3.19.0 — UNCHANGED THIS SHIP):** the HTML emulator does NOT yet implement Rule 40. Books that use `choose_items mode:"remove"` will pause in the HTML emulator with the existing grant-shaped UI, which won't render the loss-pool correctly. The CLI emulator is the canonical test surface for now; an HTML emulator update is queued as a follow-up. Books authored against v1.25 that use the new primitive should currently be tested in the CLI emulator only, OR avoid `mode: "remove"` until the HTML emulator catches up.
+
+**Schema additions:** `event.mode` (string enum: `"grant"` | `"remove"`), `event.from_category` (string), `event.on_success_set_flag` (string). Title bumped v1.24.0 → v1.25.0.
+
+**Three new soft checks in `scripts/validate-book.js`** (all additive — do not affect exit code):
+
+1. **Missing eat_meal events** — catches the LW1 §168-style pattern where section text says *"must now take a Meal"* / *"you are very hungry"* but no `eat_meal` event fires. Triggered by an explicit-instruction regex; narrative meal mentions (*"food enough for two Meals"*) are correctly NOT flagged.
+2. **Catalog category vs encoded text language** — catches mis-categorized catalog entries where the encoded section text uses *"Special Item"* / *"Backpack Item"* language near a grant but the catalog's `inventory_category` doesn't match. (Limited to cases where the encoded text correctly captures the source's category language — text-drift cases where the encoded text already mis-paraphrases the source require a source-text comparator and remain invisible to this check.)
+3. **Catalog effect-promise without machinery** — catches Rule 25 + Rule 36 lag on consumables whose `description` field promises an effect (*"Restores 4 ENDURANCE"*, *"increases COMBAT SKILL by 2"*) but the catalog entry has no `consume.effects`, no `triggered_effects`, and no `stat_modifier`. Surfaces LW1's `healing_potion` (Rule 25 lag) and `alether_potion_of_strength` (Rule 36 lag, currently upstream-soft per the codex v2.33.0 deferral discussion).
+
+**Cross-book impact (Soft check signal after this ship):**
+
+```
+LW1:        3 dangling + 1 disarmament-without-event (out of scope, deferred) + 1 eat_meal + 2 effect-promise
+Windhammer: 32 dangling + 4 disarmament + 3 effect-promise
+Warlock:    6 dangling + 1 loss-in-choice
+GyoG06:     1 eat_meal (1 likely false positive on past-tense narrative)
+WWY:        8 dangling
+```
+
+All 5 books still validate at 0 schema errors.
+
+**Out of scope for v2.33.0 (deferred):**
+
+- **HTML emulator Rule 40 wire-up.** Same as CLI but ported to the browser code path. Queued for a follow-up ship.
+- **Source-text comparator for inventory_category drift.** The category soft check catches encoded-text-vs-catalog mismatches but not source-text-vs-encoded drift (where the parse already paraphrased the source's category language). A separate comparator that reads source text alongside the book JSON could close this; out of scope for this ship.
+- **Rule 41 (combat_endurance_loss condition primitive).** Triaged as not actually upstream-blocked — the existing `section_had_no_endurance_loss` condition (schema v1.21+) covers the LW1 §227 pattern when the section has no non-combat ENDURANCE-modifying events (which §227 doesn't). The wider "damage taken specifically by the combat, not the section" semantic remains a codex/engine candidate for a future ship; the LW1 §227 case can be wired with existing primitives in the v2.33.0 book iter.
+- **Rule 42 (per-fight combat_modifier queue).** Triaged as not actually upstream-blocked — the existing Rule 36 `set_flag` + Rule 17 conditional `combat_modifier` pattern covers the alether_potion case (verbosely; every combat in the book gets a flag-conditional modifier). A cleaner "queue a one-shot modifier" primitive remains a codex/engine candidate for a future ship; for v2.33.0 the alether wire-up is deferred to either the verbose pattern or to a future cleaner primitive — book-side decision.
+
+**No book-side migration shipped in this engine commit.** The companion LW1 iter 26 sub-agent dispatch (separate books-repo commit) applies Rule 40 to LW1 §144 / §277 / §307, plus fixes §168 (eat_meal), `vordak_gem` / `tomb_guardian_gems` (inventory_category corrections), `healing_potion` (Rule 25 wire-up), and §227 (`section_had_no_endurance_loss` wire-up using existing primitives).
+
+---
+
 ## v2.32.0 / GBF v1.24.0 / emulators v3.19.0 / package.json v3.19.0
 
 **Codex-doc-only ship.** Schema, emulators, and package.json unchanged. Adds a new top-level codex section (§12) documenting the **two-pass remediation workflow** and the protocol the remediation sub-agent uses when triaging soft-check findings with a non-technical user. Companion `scripts/validate-book.js` soft checks (commits `d94f2db` + `173b4d1`) detect six structural extraction-failure patterns deterministically; the codex section describes how a remediation agent translates those findings into plain-English questions and back into surgical edits.

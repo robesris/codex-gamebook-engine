@@ -276,6 +276,93 @@ function checkEnemyImmunities(book) {
   return findings;
 }
 
+// Check D: section text describes a Meal instruction ("must now take a Meal",
+// "you must eat", "stop to eat", "very hungry") but the section has no
+// eat_meal event. Catches the LW1 §168-style pattern.
+function checkMissingEatMeal(book) {
+  const findings = [];
+  // Explicit-instruction language. Excludes narrative meal mentions like
+  // "you find food enough for two Meals" or "the merchant offers you food."
+  const mealInstructionRe = /\b(?:must now (?:take|eat)|now (?:take|eat)|stop to eat|now eat) a Meal\b|\bvery hungry\b/i;
+  for (const [secId, s] of Object.entries(book.sections || {})) {
+    if (!s) continue;
+    const text = s.text || '';
+    if (!mealInstructionRe.test(text)) continue;
+    const flat = flattenSectionEvents(s);
+    if (flat.some(ev => ev.type === 'eat_meal')) continue;
+    if (flat.some(ev => ev.type === 'script')) continue; // script could handle it
+    const sent = text.match(/[^.!?]*(?:must now (?:take|eat)|now (?:take|eat)|stop to eat|now eat) a Meal[^.!?]*/i) || text.match(/[^.!?]*very hungry[^.!?]*/i);
+    findings.push(`§${secId}: text describes a Meal instruction (\"${(sent || ['']).toString().trim().slice(0, 80)}\") but no eat_meal event in section`);
+  }
+  return findings;
+}
+
+// Check E: catalog category vs encoded section-text language. When a section's
+// text uses "Special Item" near an item-grant, the granted item's catalog
+// `inventory_category` should be `special_items`; when text uses "Backpack
+// Item", the category should be `backpack`. Catches mis-categorized catalog
+// entries where the encoded text confirms the source's intended category.
+// (Does NOT catch text-drift cases where the encoded text already mis-paraphrases
+// the source — that requires a source-text comparator, out of scope here.)
+function checkCategoryVsTextLanguage(book) {
+  const findings = [];
+  const catalog = book.items_catalog || {};
+  for (const [secId, s] of Object.entries(book.sections || {})) {
+    if (!s) continue;
+    const text = s.text || '';
+    const flat = flattenSectionEvents(s);
+    const adds = flat.filter(ev => ev.type === 'add_item' && ev.item).map(ev => ev.item);
+    if (adds.length === 0) continue;
+    for (const itemId of adds) {
+      const entry = catalog[itemId];
+      if (!entry) continue;
+      const cat = entry.inventory_category;
+      // Look for category-language proximity to the item's name (or to the grant verb)
+      const name = (entry.name || itemId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const nameRe = new RegExp(name, 'i');
+      // Sentences within the section text
+      const sentences = text.split(/(?<=[.!?])\s+/);
+      for (const sent of sentences) {
+        const sentL = sent.toLowerCase();
+        const hasSpecialLang = /\bspecial item\b/i.test(sent);
+        const hasBackpackLang = /\bbackpack item\b/i.test(sent);
+        if (!hasSpecialLang && !hasBackpackLang) continue;
+        if (!nameRe.test(sent) && sent.length < 500) continue; // proximity check
+        // Find the conflict
+        if (hasSpecialLang && cat !== 'special_items') {
+          findings.push(`§${secId} grants ${itemId}: text mentions \"Special Item\" but catalog inventory_category is \"${cat}\"`);
+          break;
+        }
+        if (hasBackpackLang && cat !== 'backpack') {
+          findings.push(`§${secId} grants ${itemId}: text mentions \"Backpack Item\" but catalog inventory_category is \"${cat}\"`);
+          break;
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+// Check F: catalog entry's description promises a mechanical effect (Restores
+// N ENDURANCE, adds N to COMBAT SKILL, "single dose", "when swallowed") but
+// the entry has no consume.effects, no triggered_effects, and no stat_modifier.
+// Catches Rule 25 lag + Rule 36 lag on consumables. The healing_potion case.
+function checkCatalogEffectPromise(book) {
+  const findings = [];
+  const promiseRe = /(?:restores?|heals?|adds?|increases?|reduces?|grants?)\s+\d+|(?:when |if )(?:swallow|drink|consume|eat|used|equipped|in combat|before|after)|single dose/i;
+  for (const [id, item] of Object.entries(book.items_catalog || {})) {
+    if (!item) continue;
+    const desc = item.description || '';
+    if (!promiseRe.test(desc)) continue;
+    const hasConsume = item.consume && Array.isArray(item.consume.effects) && item.consume.effects.length > 0;
+    const hasTrig = Array.isArray(item.triggered_effects) && item.triggered_effects.length > 0;
+    const hasStatMod = item.stat_modifier;
+    if (hasConsume || hasTrig || hasStatMod) continue;
+    findings.push(`${id} (\"${item.name || id}\"): description promises an effect (\"${desc.slice(0, 80)}...\") but no consume.effects / triggered_effects / stat_modifier on the catalog entry`);
+  }
+  return findings;
+}
+
 function softChecks(book) {
   const catalogIds = Object.keys(book.items_catalog || {});
   const granted = collectGrantedItemIds(book);
@@ -292,6 +379,9 @@ function softChecks(book) {
   const lossFindings = checkLossInChoiceText(book);
   const disarmFindings = checkDisarmamentWithoutEvent(book);
   const immunityFindings = checkEnemyImmunities(book);
+  const mealFindings = checkMissingEatMeal(book);
+  const categoryFindings = checkCategoryVsTextLanguage(book);
+  const promiseFindings = checkCatalogEffectPromise(book);
 
   if (dangling.length > 0) {
     console.log(`  Soft: ${dangling.length} catalog entr${dangling.length === 1 ? 'y' : 'ies'} defined but never granted (possible missed pickup): ${dangling.join(', ')}`);
@@ -308,6 +398,9 @@ function softChecks(book) {
   enumerate('loss-in-choice-text findings', lossFindings);
   enumerate('disarmament-without-event findings', disarmFindings);
   enumerate('enemy-immunity findings', immunityFindings);
+  enumerate('missing eat_meal findings', mealFindings);
+  enumerate('catalog-category-vs-text-language findings', categoryFindings);
+  enumerate('catalog-effect-promise-without-machinery findings', promiseFindings);
 }
 
 const bookText = fs.readFileSync(bookPath, 'utf8');

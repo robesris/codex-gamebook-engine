@@ -985,7 +985,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1112,7 +1112,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1385,7 +1385,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title bumped to v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title bumped to v1.25.0');
 });
 
 // ============================================================
@@ -1567,7 +1567,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -1978,7 +1978,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title at v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title at v1.25.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2740,7 +2740,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title is v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
 });
 
 // ============================================================
@@ -2885,7 +2885,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title bumped to v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title bumped to v1.25.0');
 });
 
 // ============================================================
@@ -3222,7 +3222,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title is v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
 });
 
 // ============================================================
@@ -3256,7 +3256,149 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.24.0', 'schema title is v1.24.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
+});
+
+// ============================================================
+// Rule 40 v2.33.0 — choose_items mode:"remove" (player-chosen item loss)
+// ============================================================
+test('Rule 40 v2.33.0: choose_items mode:remove with empty eligible pool no-ops', () => {
+  const book = buildBook({
+    items_catalog: {
+      sword: { name: 'Sword', type: 'weapon', inventory_category: 'weapons' },
+    },
+    sections: {
+      '1': {
+        text: 'try to take a weapon you have none of',
+        events: [{ type: 'choose_items', mode: 'remove', from_category: 'weapons', count: 1, description: 'lose a weapon' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.inventory = []; // no weapons
+  play.navigateTo(state, book, '1');
+  assertTrue(state.pause?.type !== 'choose_items', 'no choose_items pause when eligible pool empty');
+  assertEqual(state.inventory.length, 0, 'inventory unchanged');
+});
+
+test('Rule 40 v2.33.0: choose_items mode:remove auto-removes when single eligible', () => {
+  const book = buildBook({
+    items_catalog: {
+      sword: { name: 'Sword', type: 'weapon', inventory_category: 'weapons' },
+      dagger: { name: 'Dagger', type: 'weapon', inventory_category: 'weapons' },
+    },
+    sections: {
+      '1': {
+        text: 'weapon breaks',
+        events: [{ type: 'choose_items', mode: 'remove', from_category: 'weapons', count: 1, description: 'one weapon breaks' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.inventory = ['sword']; // exactly one weapon
+  play.navigateTo(state, book, '1');
+  assertTrue(state.pause?.type !== 'choose_items', 'no choose_items pause when eligible pool is single item');
+  assertEqual(state.inventory.length, 0, 'sword auto-removed');
+});
+
+test('Rule 40 v2.33.0: choose_items mode:remove pauses when multi-eligible and resolves on selection', () => {
+  const book = buildBook({
+    items_catalog: {
+      sword: { name: 'Sword', type: 'weapon', inventory_category: 'weapons' },
+      dagger: { name: 'Dagger', type: 'weapon', inventory_category: 'weapons' },
+      mace: { name: 'Mace', type: 'weapon', inventory_category: 'weapons' },
+    },
+    sections: {
+      '1': {
+        text: 'pick which weapon to lose',
+        events: [{ type: 'choose_items', mode: 'remove', from_category: 'weapons', count: 1, description: 'lose one weapon' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.inventory = ['sword', 'dagger', 'mace']; // multi-eligible
+  play.navigateTo(state, book, '1');
+  assertEqual(state.pause?.type, 'choose_items', 'pauses on multi-eligible');
+  assertEqual((state.pause.eligible || []).length, 3, 'eligible pool exposed');
+
+  // Simulate player picking the dagger
+  play.applyAction(state, book, 'choose_items', ['dagger']);
+  assertEqual(state.inventory.includes('dagger'), false, 'dagger removed by selection');
+  assertEqual(state.inventory.length, 2, 'sword and mace remain');
+});
+
+test('Rule 40 v2.33.0: on_success_set_flag fires only when removal happened', () => {
+  const book = buildBook({
+    items_catalog: {
+      sword: { name: 'Sword', type: 'weapon', inventory_category: 'weapons' },
+    },
+    sections: {
+      '1': {
+        text: 'exchange',
+        events: [{ type: 'choose_items', mode: 'remove', from_category: 'weapons', count: 1, on_success_set_flag: 'weapon_traded' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+
+  state.inventory = []; // no weapons, no removal expected
+  play.navigateTo(state, book, '1');
+  assertEqual(state.flags.includes('weapon_traded'), false, 'flag NOT set when pool was empty');
+
+  state.inventory = ['sword'];
+  state.flags = [];
+  play.navigateTo(state, book, '1');
+  assertEqual(state.flags.includes('weapon_traded'), true, 'flag set on auto-resolve removal');
+});
+
+test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A v1.24-era book that uses the existing grant-shape choose_items.
+  const book = {
+    metadata: { title: 'Book', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'X', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: { gem: { name: 'Gem', type: 'general' } },
+    enemies_catalog: {},
+    sections: {
+      '1': {
+        text: 'pick',
+        events: [{ type: 'choose_items', count: 1, options: ['gem'] }], // pre-v1.25 grant shape, no mode
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.25.0', 'schema title is v1.25.0');
 });
 
 // ============================================================
