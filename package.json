@@ -8,13 +8,14 @@
     "play": "node cli-emulator/play.js",
     "replay": "node cli-emulator/replay.js",
     "test": "node tests/run.js",
-    "validate-book": "node scripts/validate-book.js"
+    "validate-book": "node scripts/validate-book.js",
+    "build-verifier": "node scripts/build-browser-verifier.js"
   },
   "dependencies": {
     "fengari": "0.1.5"
   },
   "comments": {
-    "fengari_pin_rationale": "Lua 5.3 runtime (fengari). Pinned to a specific version rather than a floating ^0.1.5 because upstream Fengari does not actively cut releases — the npm 0.1.5 build has been stable for years and we've validated all our combat round scripts and section script events against it. If upstream ever ships a newer release that we want to adopt, bump this pin deliberately and re-run the full regression harness (lw_probe, warlock_probe, lw_run1..4, warlock_run1..3, wwy_run1..2) to verify nothing regressed. See gamebook_codex_v2.md section 'Codex Version and Compatibility' for the browser-side pin (fengari-web.js is committed as a static file rather than installed via npm, so its version is tracked by the file's FENGARI_VERSION constant 'Fengari 0.1.4').",
+    "fengari_pin_rationale": "Lua 5.3 runtime (fengari). Pinned to a specific version rather than a floating ^0.1.5 because upstream Fengari does not actively cut releases — the npm 0.1.5 build has been stable for years and we've validated all our combat round scripts and section script events against it. If upstream ever ships a newer release that we want to adopt, bump this pin deliberately and re-run the full regression harness (lw_probe, warlock_probe, lw_run1..4, warlock_run1..3, wwy_run1..2) to verify nothing regressed. The browser side uses the same Lua runtime: fengari-web.js is committed as a static webpack build and reports Fengari 0.1.5 (FENGARI_VERSION_MAJOR/MINOR/RELEASE = 0/1/5) — the same version as this npm pin, so the Node and browser sandboxes are identical. cli-emulator/script-runtime.js is the single shared sandbox consumed by play.js (Node), validate-book.js (Node), and dist/verify-book.bundle.js (browser, via fengari-web.js).",
     "why_not_wasmoon": "wasmoon (Lua 5.4 via WASM) is a stronger maintained alternative. We evaluated it and decided the port cost is not justified right now — all existing Lua scripts are simple enough that Fengari 0.1.5 runs them correctly and no maintenance bugs have surfaced in practice. Tracked as a back-burner option."
   },
   "devDependencies": {

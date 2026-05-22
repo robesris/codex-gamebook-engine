@@ -151,6 +151,19 @@ Emulator bugs (kind 4 above) are the one case where it's appropriate to fix the 
 
 Both emulators (CLI and HTML) implement the same GBF spec independently. When fixing a bug in one, audit the other for the same bug. They're not allowed to drift.
 
+## ⚠️ IMPORTANT: the browser verifier must stay in lockstep with the Claude Code tooling
+
+The verification gate exists in two delivery forms — `scripts/validate-book.js` (Node, used by Claude Code) and `dist/verify-book.bundle.js` (browser, used by plain Claude Chat in its Analysis tool). **These two MUST behave identically for the blocking gate (schema validity + script-execution crash check) and the structural soft checks.** A Claude Chat user who gets `ok: true` from the bundle must be getting the same verdict Claude Code would give. If the two ever disagree, the bundle is worthless — worse than worthless, because it gives false assurance.
+
+Lockstep is enforced *structurally*, not by discipline, and it must stay that way:
+
+- There is **one** Lua sandbox: `cli-emulator/script-runtime.js`. `play.js`, `validate-book.js`, and the bundle all import it. Never reimplement `runScript` / `rollDice` / the sandbox anywhere else.
+- There is **one** set of soft checks + the script-execution gate: `scripts/book-checks.js`. Both `validate-book.js` and the bundle import it.
+- The bundle's schema validator is **generated from `codex.schema.json`** by `scripts/build-browser-verifier.js` — the same schema file `validate-book.js` reads.
+- `dist/verify-book.bundle.js` is a **GENERATED ARTIFACT. Never hand-edit it.** It is assembled verbatim from `fengari-web.js`, `script-runtime.js`, `book-checks.js`, `scripts/verifier-driver.js`, and the generated validator.
+
+**The rule:** whenever you change `codex.schema.json`, `cli-emulator/script-runtime.js`, `scripts/book-checks.js`, or `scripts/verifier-driver.js`, you MUST rebuild the bundle (`npm run build-verifier`) and commit the regenerated `dist/verify-book.bundle.js` in the same commit. A commit that changes one of those sources without a matching bundle rebuild has silently broken lockstep. Do not add a second, hand-written copy of the sandbox or the checks for the browser — if a new consumer needs them, it imports the shared module. Forking a shared module to "make it work in environment X" is the exact drift this rule forbids.
+
 ## Tier ordering for fixes
 
 When working through a backlog of bugs, prioritize in this order:

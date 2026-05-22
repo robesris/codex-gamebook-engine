@@ -28,6 +28,39 @@ You'll need an AI chat that supports file uploads. The included `gamebook_codex_
 - A paid account is recommended — parsing a full gamebook is a large task that will hit free-tier limits
 - Other models (GPT, Gemini, etc.) may work but haven't been tested — YMMV
 
+### Which Claude should I use?
+
+Either regular **Claude Chat** (claude.ai) or **Claude Code** (the CLI/IDE tool)
+can parse a gamebook — but they verify the result differently:
+
+- **Claude Code** gives the most thorough results. It runs the real engine,
+  validates the book against the schema, and self-tests every scripted event
+  by actually executing it. If a book has lots of scripted mechanics, Claude
+  Code is strongly recommended.
+- **Claude Chat** also works well, especially for simpler gamebooks (mostly
+  choices and prose, few or no scripted events). Chat has no Node.js or
+  filesystem, so it can't run the engine directly — but it *can* run the
+  bundled verifier (see below) in its Analysis tool to schema-check the book
+  and crash-test every script.
+
+For script-heavy books, prefer Claude Code. For simpler books, Claude Chat is
+fine.
+
+### Verifying your parsed book
+
+Before playing, verify the parsed JSON:
+
+- **In Claude Code (or any Node.js environment):**
+  `node scripts/validate-book.js path/to/your-book.json`
+  Reports schema errors, structural soft-warnings, and runs every `script`
+  event through the real Lua sandbox, failing on any crash.
+- **In Claude Chat:** upload `dist/verify-book.bundle.js` alongside your book.
+  It is a single self-contained file that runs in Chat's Analysis tool:
+  `verifyBook(yourBookJson)` returns `{ ok, report, ... }` — `ok` is `true`
+  only when the book is schema-valid and no script crashed. The bundle uses
+  the *same* schema and the *same* Lua sandbox as the Claude Code validator,
+  so the two agree.
+
 ### Tips
 
 - A full book parse typically takes multiple conversation turns. The AI may pause at its output limit — just type "continue" to keep going
