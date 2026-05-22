@@ -6,6 +6,22 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.37.0 / GBF v1.26.0 / CLI emulator v3.21.2 / HTML emulator v3.19.0
+
+**Rule 43 — typographic marking as a game-term signal.** Doc-only parsing heuristic. No GBF schema change, no emulator change.
+
+**Motivation.** Gamebooks typographically distinguish game-mechanical terms from ordinary prose — Lone Wolf capitalises *Backpack*, *Weapon*, *Meal*, *Kai Discipline* mid-sentence; Fighting Fantasy sets *SKILL*, *STAMINA*, *LUCK* and creature names in ALL-CAPS. This casing is a deliberate authorial signal and one of the most reliable low-cost heuristics for telling a mechanic apart from flavour text — but the codex never told the parser to use it. Equally, it has a sharp failure mode: not every capital is mechanical. Proper nouns and creature/race type-names are capitalised for grammar. In *Flight from the Dark*, the mechanical noun *Backpack* and the mere monster name *Giak* are each capitalised about forty times — casing alone cannot separate them.
+
+**Doc changes:**
+
+- New **Rule 43** in the rules section — the general, series-agnostic heuristic: treat every typographically-marked term (mid-sentence capital, ALL-CAPS, small-caps) as a *candidate* game-mechanical term and cross-check it against the rules section and catalogs. Includes the explicit guardrail (exclude sentence-initial capitals, proper nouns, and creature/race type-names; absence of marking does not exonerate a noun) and a Section 10 verification entry.
+- New decision-table row pointing at Rule 43.
+- **Fighting Fantasy series profile** — new "Typographic Conventions" subsection: ALL-CAPS stats and creature names, initial-cap named resources/special items, the Test-your-Luck vs LUCK distinction. Grounded in a token scan of *The Warlock of Firetop Mountain* (STAMINA/SKILL/LUCK are the three most frequent ALL-CAPS tokens, 100+ each).
+- **Lone Wolf series profile** — new "Typographic Conventions" subsection: ALL-CAPS stats, initial-capped mechanical nouns (Backpack, Weapon, Meal, Kai Discipline, specific weapon types), and the creature-name guardrail (Giak/Helghast). Grounded in a token scan of *Flight from the Dark*.
+- Section 10 — new pre-output verification checklist entry for Rule 43.
+
+Codex version 2.36.0 → 2.37.0.
+
 ## v2.36.0 / GBF v1.26.0 / CLI emulator v3.21.2 / HTML emulator v3.19.0
 
 **Browser verifier — the verification gate now reaches Claude Chat.** The schema + script-execution verification gate is now runnable in a plain Claude.ai chat, not only in Claude Code. Schema-additive: no GBF schema change.
