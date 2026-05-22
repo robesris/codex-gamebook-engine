@@ -5291,7 +5291,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.37.0 / GBF schema v1.26.0 / CLI emulator v3.21.2 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up; CLI emulator v3.21.2 moves the Lua sandbox into the shared `cli-emulator/script-runtime.js` consumed by the browser verifier; codex v2.37.0 adds Rule 43 — typographic marking as a game-term signal — a doc-only parsing heuristic with no schema or emulator change; see CHANGELOG).
+**Codex v2.37.0 / GBF schema v1.26.0 / CLI emulator v3.21.3 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up AND the same chargen `roll_table` action fix; CLI emulator v3.21.3 fixes `getAvailableActions` not advertising a roll action for `roll_table` character-creation steps; codex v2.37.0 adds Rule 43 — typographic marking as a game-term signal — a doc-only parsing heuristic with no schema change; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

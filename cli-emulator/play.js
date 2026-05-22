@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.21.2';
+const CODEX_EMULATOR_VERSION = '3.21.3';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1870,6 +1870,11 @@ function getAvailableActions(state, book) {
 
     case 'character_creation_roll_resource':
       actions.push({ name: 'roll', description: `Roll ${state.pause.formula} for ${state.pause.resource} (or provide_roll <values>)` });
+      actions.push({ name: 'provide_roll', description: 'Manually provide roll values: provide_roll <n1> <n2> ...' });
+      break;
+
+    case 'character_creation_roll_table':
+      actions.push({ name: 'roll', description: `Roll ${state.pause.formula} on the character-creation table (or provide_roll <values>)` });
       actions.push({ name: 'provide_roll', description: 'Manually provide roll values: provide_roll <n1> <n2> ...' });
       break;
 

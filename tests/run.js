@@ -329,6 +329,45 @@ test('roll_resource routes to declared-stat-currency slot', () => {
 });
 
 // ============================================================
+// Test 6a: a roll_table character-creation step advertises a
+// roll action via getAvailableActions.
+// ============================================================
+// MOTIVATED_BY: CLI emulator v3.21.3. getAvailableActions had
+// cases for every chargen pause type EXCEPT
+// character_creation_roll_table, so a roll_table chargen step
+// advertised no actionable command — an interactive player (or
+// any getAvailableActions-driven client) was stuck mid-creation
+// even though applyAction handled the step fine. Surfaced by the
+// LW1 fresh-parse DFS playthrough: LW1 character creation has two
+// roll_table steps (Weaponskill weapon-type table; starting-
+// equipment table) and the unconditioned one stalled creation.
+// END_TO_END_VERIFY: drive the CLI emulator through LW1 character
+// creation; at the starting-equipment roll_table step, confirm
+// `roll` / `provide_roll` appear in available_actions and that
+// providing a roll advances to creationDone.
+test('roll_table chargen step advertises a roll action', () => {
+  const results = {};
+  for (let i = 0; i <= 9; i++) results[String(i)] = { text: 'opt' + i, effects: [] };
+  const book = buildBook({
+    character_creation: {
+      steps: [{ action: 'roll_table', formula: 'R10', results }],
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+
+  play.startCharacterCreation(state, book);
+  assertEqual(state.pause && state.pause.type, 'character_creation_roll_table', 'paused on roll_table');
+
+  const actionNames = play.getAvailableActions(state, book).map(a => a.name);
+  assertTrue(actionNames.includes('roll'), 'roll action advertised for roll_table step');
+  assertTrue(actionNames.includes('provide_roll'), 'provide_roll action advertised for roll_table step');
+
+  play.applyAction(state, book, 'provide_roll', ['7']);
+  assertTrue(state.creationDone, 'creation completed via the advertised action');
+});
+
+// ============================================================
 // Test 7: character_creation_step.condition skips the step when
 // the condition evaluates false.
 // ============================================================

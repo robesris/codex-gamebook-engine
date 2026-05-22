@@ -6,6 +6,18 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## CLI emulator v3.21.3 — chargen `roll_table` action fix (codex v2.37.0, GBF v1.26.0)
+
+**Bug fix — `getAvailableActions` did not advertise an action for `roll_table` character-creation steps.** `getAvailableActions` carried cases for every chargen pause type (`character_creation_roll`, `..._roll_resource`, `..._choose_one`, `..._choose_abilities`, `..._choose_talents`, `..._distribute`) except `character_creation_roll_table`. A `roll_table` chargen step therefore advertised no actionable command — an interactive player, or any client driven by `available_actions`, stalled mid-character-creation and the game never started. `applyAction` handled `character_creation_roll_table` correctly all along (`provide_roll` / `roll` worked), so playbook replay scripts that issue `provide_roll` blind were unaffected — which is why the gap went unnoticed.
+
+Surfaced by the LW1 fresh-parse DFS playthrough (codex v2.37.0 work): LW1 character creation has two `roll_table` steps — the Weaponskill weapon-type table (conditioned on the Weaponskill discipline) and the unconditioned starting-equipment table — and the unconditioned one stalled creation for any character. The maintained LW1 book has the same step and was equally affected through the interactive interface.
+
+- **CLI emulator v3.21.2 → v3.21.3:** `getAvailableActions` gains a `character_creation_roll_table` case advertising `roll` + `provide_roll`, mirroring `character_creation_roll_resource`.
+- **Regression test** added to `tests/run.js` ("roll_table chargen step advertises a roll action").
+- **HTML emulator:** `index.html` has the same gap (no `character_creation_roll_table` handling) — NOT fixed here; tracked alongside the pending Rules 40 + 42 wire-up. The CLI emulator is the canonical playthrough surface.
+
+No codex doc, schema, or book change.
+
 ## v2.37.0 / GBF v1.26.0 / CLI emulator v3.21.2 / HTML emulator v3.19.0
 
 **Rule 43 — typographic marking as a game-term signal.** Doc-only parsing heuristic. No GBF schema change, no emulator change.
