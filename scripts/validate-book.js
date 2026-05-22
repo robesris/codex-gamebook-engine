@@ -24,6 +24,17 @@ const { execSync } = require('child_process');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 
+// The canonical emulator's Lua sandbox. Used by the script-execution gate
+// below to run every section's `script_code` against the REAL runtime API
+// (a reimplementation would silently drift from the emulator's actual
+// roll()/player.* contract — defeating the purpose of the check).
+let emulatorRunScript = null;
+try {
+  emulatorRunScript = require('../cli-emulator/play.js').runScript;
+} catch (e) {
+  emulatorRunScript = null;
+}
+
 function usage(msg) {
   if (msg) console.error(msg);
   console.error('Usage: node scripts/validate-book.js [--baseline <rev>:<path>] <path-to-book.json>');
@@ -360,6 +371,74 @@ function checkCatalogEffectPromise(book) {
   return findings;
 }
 
+// Script-execution gate (BLOCKING — affects exit code, unlike the soft checks).
+//
+// `script_code` is an opaque string to the JSON Schema: a sandbox-API misuse
+// (treating roll()'s return table as a number, a bare `navigate_to` global
+// instead of `player.navigate_to`, writing `game_state.X` instead of
+// `player.stats_changed`) is fully schema-valid and crashes only at runtime.
+// This check executes every section-level `script` event in the emulator's
+// real Lua sandbox and fails the build on any crash.
+//
+// The forced-roll sweep (each die face 0-9, plus one random run) exercises a
+// script's branches well enough to catch crashes on the common paths. It is
+// NOT a substitute for the deliberate per-branch testing the codex mandates
+// (Section 7.6) — it is a safety net for the §21-class "crashes on any input"
+// bug that ships when the parser never ran the code it generated.
+function buildScriptContext(book) {
+  const stats = {};
+  for (const s of (book.rules && book.rules.stats) || []) {
+    if (s && s.name) stats[s.name] = 20;
+  }
+  return {
+    player: { health: 20, name: 'You' },
+    enemy: { attack: 0, health: 0, name: '' },
+    combat: { round: 0 },
+    game_state: { ...stats, provisions: 5, gold: 20, meals: 5 },
+    initial_stats: { ...stats },
+    inventory: [],
+    flags: [],
+    items_catalog: book.items_catalog || {},
+  };
+}
+
+function checkScriptExecution(book) {
+  if (!emulatorRunScript) {
+    return { failures: [], skipped: 'cli-emulator/play.js could not be required' };
+  }
+  const failures = [];
+  for (const [id, section] of Object.entries(book.sections || {})) {
+    for (const ev of flattenSectionEvents(section)) {
+      if (!ev || ev.type !== 'script') continue;
+      const code = typeof ev.script_code === 'string' ? ev.script_code : '';
+      if (!code.trim()) {
+        failures.push(`§${id}: script event has empty or missing script_code`);
+        continue;
+      }
+      const sweep = [];
+      for (let v = 0; v <= 9; v++) sweep.push(v);
+      sweep.push(null); // one run with un-forced (random) rolls
+      let firstError = null;
+      for (const v of sweep) {
+        const forced = v === null ? [] : Array.from({ length: 12 }, () => [v, v, v]);
+        let result;
+        try {
+          result = emulatorRunScript(code, buildScriptContext(book), forced, null);
+        } catch (e) {
+          firstError = `threw ${(e && e.message) || e}`;
+          break;
+        }
+        if (result && result.error) {
+          firstError = `${result.error}${v === null ? '' : ` (rolls forced to ${v})`}`;
+          break;
+        }
+      }
+      if (firstError) failures.push(`§${id}: script_code crashed in the Lua sandbox — ${firstError}`);
+    }
+  }
+  return { failures, skipped: null };
+}
+
 function softChecks(book) {
   const catalogIds = Object.keys(book.items_catalog || {});
   const granted = collectGrantedItemIds(book);
@@ -410,7 +489,17 @@ if (!baselineSpec) {
     console.log(`  ${sec}\t${n}`);
   }
   softChecks(book);
-  process.exit(post.total === 0 ? 0 : 1);
+  const scriptCheck = checkScriptExecution(book);
+  if (scriptCheck.skipped) {
+    console.log(`  Script execution: SKIPPED — ${scriptCheck.skipped}`);
+  } else if (scriptCheck.failures.length > 0) {
+    console.log(`  Script execution: ${scriptCheck.failures.length} BLOCKING failure(s) — script_code crashed when executed in the Lua sandbox:`);
+    for (const f of scriptCheck.failures) console.log(`    - ${f}`);
+  } else {
+    console.log('  Script execution: all script events executed without error.');
+  }
+  const scriptBlocked = !scriptCheck.skipped && scriptCheck.failures.length > 0;
+  process.exit((post.total === 0 && !scriptBlocked) ? 0 : 1);
 }
 
 const colon = baselineSpec.indexOf(':');

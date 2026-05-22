@@ -6,6 +6,24 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.35.0 / GBF v1.26.0 / CLI emulator v3.21.1 / HTML emulator v3.19.0
+
+**Script-execution verification — codex mandate + a blocking validator gate.** `script` events are now verified by actually executing their `script_code`, both as a codex requirement and as a hard `validate-book.js` gate. Schema-additive: no GBF schema change.
+
+**Motivation.** A first-run quality probe of a fresh Lone Wolf 1 parse found a `script` event (§21, the horse-in-the-mire roll ladder) whose generated Lua violated the sandbox API — `roll('R10')` used as a number instead of `roll('R10').total`, a bare `navigate_to` global instead of `player.navigate_to`, and a stat write to the wrong channel. The script was fully schema-valid (`script_code` is an opaque string) and crashed with `attempt to compare number with table` the instant the section was entered. Static checks (schema validation, the soft-check linter) cannot see into `script_code`; only executing it surfaces the defect.
+
+**Doc changes:**
+
+- New Section 7.6 subsection — "Mandatory: every generated `script_code` must be executed before the book ships." Names the recurring sandbox-API misuses, mandates an emulator entry test for every `script`-bearing section, and requires per-branch coverage — forcing dice so every `if`/`elseif`/`else` path runs at least once. The obligation re-applies on every remediation pass that touches a `script_code`.
+- Section 9.6 — `validate-book.js` is now documented as the required pre-ship validation gate that must exit 0 (it now runs the script-execution check); the `<book>_probe.script` bullet notes that the probe also surfaces `script` runtime crashes.
+- Section 10 — new pre-output verification checklist item for script execution.
+
+**`validate-book.js` — new blocking script-execution gate.** The validator now executes every section-level `script` event's `script_code` in the emulator's real Lua sandbox (sweeping forced die rolls 0–9 plus one random run). Any crash is a **blocking** failure — non-zero exit, same tier as a schema error — not a non-blocking soft check. To execute scripts against the *real* runtime API rather than a drift-prone reimplementation, `cli-emulator/play.js` now exports `runScript` (export-only addition, no behavior change); CLI emulator v3.21.0 → v3.21.1.
+
+**Known issue surfaced by the new gate — section-script sandbox API contradiction.** Running the gate across the maintained books found 7 crashing `script` events in `coa_01_windhammer.json` (§209, §242, §377, §407, §408, §499, §585). These are not parser hallucinations: they follow codex **Pattern 7.6.1** and **Pattern 7.6.12** (and decision-table rows 300/334/335), which tell the parser to write `player_stats` and read `game_state.initial_stats` / `state.deferred_roll_for_section_N`. But the section-script sandbox (`runScriptEvent`) provides `player` (output via `player.stats_changed`) and a *top-level* `initial_stats`, with no `player_stats` and no `state` — the `player_stats`/`state` shape belongs to the *combat round-script* context only. The codex's own Section 7.6 globals table contradicts Pattern 7.6.1/7.6.12. Resolution direction (decided): the codex Pattern API is canonical — `cli-emulator/play.js` is to be extended so section scripts receive `player_stats`, a persistent `state` scratch namespace, `has_item()`, and `game_state.initial_stats`; the Section 7.6 globals table is then reconciled to match. Tracked as follow-up engine work; until it lands, `validate-book.js` correctly reports Windhammer as failing.
+
+Codex version 2.34.0 → 2.35.0.
+
 ## v2.34.0 / GBF v1.26.0 / CLI emulator v3.21.0 / HTML emulator v3.19.0 (pending)
 
 **Schema-additive ship — engine side.** New **Rule 42: Queue per-fight combat modifier** ships a `queue_combat_modifier` effect type that buffers a one-shot combat modifier consumed by the next combat-enter. Resolves the fundamental gamebook pattern of single-use consumable buffs ("swallow before a fight; +N COMBAT SKILL for that fight") — Lone Wolf's Alether Potion of Strength is the canonical case, but the pattern recurs across every gamebook series (Fighting Fantasy potions of strength/skill, GrailQuest blessings, Choose Your Own Adventure one-shot powers, etc.). Pre-v1.26 the codex had no clean primitive for "buff this player's next combat only" — books either used a persistent `stat_modifier` (wrong: always-on while held), or added a flag-conditional `combat_modifier` to every combat encounter in the book (verbose: per-combat plumbing for one optional consumable), or relied on a `script` workaround the Lua sandbox couldn't actually execute correctly.

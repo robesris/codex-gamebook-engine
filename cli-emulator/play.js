@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.21.0';
+const CODEX_EMULATOR_VERSION = '3.21.1';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -4004,6 +4004,7 @@ module.exports = {
   rollDice,
   evalCondition,
   handleEvent,
+  runScript,
 };
 
 if (require.main === module) {
