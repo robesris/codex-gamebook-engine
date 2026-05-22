@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.34.0
+# THE GAMEBOOK CODEX v2.36.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -15,6 +15,9 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 | `cli-emulator/play.js` | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
 | `cli-emulator/replay.js` | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
 | `index.html` (browser emulator) | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
+| `dist/verify-book.bundle.js` (browser verifier) | rebuilt per release | `github.com/robesris/codex-gamebook-engine/dist/verify-book.bundle.js` |
+
+`dist/verify-book.bundle.js` is the no-Node.js verification gate used in Claude Chat's Analysis tool (see Section 9.6, "Running the gate without Node.js"). It is a generated artifact rebuilt from `codex.schema.json` + the shared tooling on every release, so it has no independent version constant — fetch it from the same commit as the codex doc.
 
 The GBF format version (tracked in the schema's `title` field) is distinct from the emulator tool versions. The format version is bumped only for breaking schema changes; the emulator tools are bumped for feature additions and bug fixes. The codex doc pins both independently.
 
@@ -5240,7 +5243,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.35.0 / GBF schema v1.26.0 / CLI emulator v3.21.1 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up; CLI emulator v3.21.1 exports `runScript` for the validator's script-execution gate; see CHANGELOG).
+**Codex v2.36.0 / GBF schema v1.26.0 / CLI emulator v3.21.2 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up; CLI emulator v3.21.2 moves the Lua sandbox into the shared `cli-emulator/script-runtime.js` consumed by the browser verifier; codex v2.36.0 adds the no-Node.js browser verification gate; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

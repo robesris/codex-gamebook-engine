@@ -6,6 +6,34 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.36.0 / GBF v1.26.0 / CLI emulator v3.21.2 / HTML emulator v3.19.0
+
+**Browser verifier — the verification gate now reaches Claude Chat.** The schema + script-execution verification gate is now runnable in a plain Claude.ai chat, not only in Claude Code. Schema-additive: no GBF schema change.
+
+**Motivation.** `validate-book.js` needs Node.js, a filesystem, and the engine repo — i.e. Claude Code or a developer box. But the average user parses a book in regular Claude Chat, which has none of those. That meant the blocking script-execution gate (the §21-class "crashes on any input" net added in v2.35.0) never reached the parses most users actually run; a Node-less parse was simply downgraded to Tier 1 with no script verification at all.
+
+**New artifact — `dist/verify-book.bundle.js`.** A single self-contained browser bundle that runs in Claude Chat's Analysis (code-execution) tool — in a browser, a Web Worker, or Node, with no `window`/`document`/`module` dependency. It exposes `verifyBook(book)` returning `{ ok, report, schemaErrors, scriptFailures, softFindings, ... }`; `ok` is `true` only when the book is schema-valid AND every `script_code` ran without crashing. It runs the same schema validation, structural soft checks, and Lua script-execution gate as `validate-book.js`.
+
+**Lockstep is structural, not doc-enforced.** Rather than maintain a hand-synced browser copy, the shared logic was extracted into single-source modules consumed by both the Node tooling and the bundle:
+
+- `cli-emulator/script-runtime.js` — the canonical Lua sandbox (`runScript`, `rollDice`, the `roll()/log()/lookup()/get_clock()` bridge). Now imported by `play.js`, `validate-book.js`, and the bundle. `play.js` no longer defines the sandbox inline (behavior-identical extraction; all 62 engine tests pass). CLI emulator v3.21.1 → v3.21.2.
+- `scripts/book-checks.js` — the structural soft checks and the script-execution gate, shared by `validate-book.js` and the bundle.
+- `scripts/verifier-driver.js` — the `verifyBook` composition layer.
+- `scripts/build-browser-verifier.js` — builds `dist/verify-book.bundle.js` from the above plus a standalone schema validator compiled from `codex.schema.json` and the committed `fengari-web.js`. The bundle is a generated artifact — never hand-edited. `npm run build-verifier`.
+
+**Doc changes:**
+
+- Section 9.6 — new "Running the gate without Node.js (Claude Chat)" subsection documenting `verifyBook()`; the "Required tools" note reworded so the blocking gate is no longer described as Node-only (only the *playbook* self-test loop is).
+- Tier 1 description + Phase F — the verification gate is now explicitly mandatory at every tier, via `validate-book.js` or the browser bundle.
+- Section 10 — the pre-output script-execution checklist item now accepts a green `verifyBook()` as the Node-less equivalent of a zero-exit `validate-book.js`.
+- "Codex Version and Compatibility" — `dist/verify-book.bundle.js` added to the expected-artifacts table.
+
+**`DEV_PROCESS.md`** — new IMPORTANT lockstep rule: the Node and browser gates must behave identically; the bundle is regenerated (`npm run build-verifier`) and committed whenever `codex.schema.json`, `script-runtime.js`, `book-checks.js`, or `verifier-driver.js` changes.
+
+**`README.md`** — new "Which Claude should I use?" and "Verifying your parsed book" sections: Claude Code for the most thorough results (full self-test loop), Claude Chat fine for simpler books with the browser verifier.
+
+Codex version 2.35.0 → 2.36.0.
+
 ## v2.35.0 / GBF v1.26.0 / CLI emulator v3.21.1 / HTML emulator v3.19.0
 
 **Script-execution verification — codex mandate + a blocking validator gate.** `script` events are now verified by actually executing their `script_code`, both as a codex requirement and as a hard `validate-book.js` gate. Schema-additive: no GBF schema change.
