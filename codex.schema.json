@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.28.0",
+  "title": "Gamebook Format (GBF) v1.29.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -658,7 +658,7 @@
         },
         "choices": {
           "type": "array",
-          "description": "Navigation choices available to the player.",
+          "description": "Navigation choices available to the player.\n\n**Reachability mirror choices (transitional workaround).** Some sections legitimately reach other sections via fields that are NOT in the canonical nav-field set followed by `scripts/check-reachability.js` — `stat_test.success_to` / `failure_to`, `set_flag` → `has_flag` round-trips that drive downstream routing, and `input_number` events with `target: \"computed\"` whose destination is the player-typed number rather than a static target. Those edges are real in play but invisible to the static reachability check, which reports the downstream sections as STRANDED. The current workaround is to add explicit `choices[]` entries on the section that *mirror* the implicit edge — a `choice` per stat_test branch, a `choice` per flag-driven destination, or a fallback choice per plausible computed target — so the static graph matches the in-play graph. These mirror choices are typically never presented to the player at runtime because the implicit-edge mechanism (the stat_test pause, the flag-driven event, the input_number prompt) fires first and navigates away before the section's choices render. Mark them by convention with a `text` prefix that makes the intent obvious, e.g. `\"(reachability: lucky outcome)\"`, `\"(reachability: wandering monster = 43)\"`, `\"(reachability: key-sum 321)\"`, so a future maintainer can identify and remove them without re-deriving the source semantics. **Transitional status:** the reachability tool extension that would make these workarounds unnecessary (covering `stat_test.success_to`/`failure_to`, `set_flag` → `has_flag` chains, and general computed-target navigation) is tracked in `DEV_PROCESS.md` → \"Reachability tool: cover stat_test / set_flag / input_number paths\". Once that ships, a comprehensive-review sub-agent removes the mirror choices and the books read clean — the engine never needed them; only the static tool did.",
           "items": {
             "$ref": "#/definitions/choice"
           }
@@ -834,8 +834,8 @@
         "interrupt_on_first_player_hit": { "type": "boolean", "description": "combat: if true, redirect after player's first successful wound." },
 
         "method": { "type": "string", "description": "stat_test: test method (e.g., '2d6_under')." },
-        "success_to": { "type": ["integer", "string", "null"], "description": "stat_test, custom: section id on success. Integer or string." },
-        "failure_to": { "type": ["integer", "string", "null"], "description": "stat_test, custom: section id on failure. Integer or string." },
+        "success_to": { "type": ["integer", "string", "null"], "description": "stat_test, custom: section id on success. Integer or string. Note: this field is a real navigation edge in play but is NOT in the static reachability tool's canonical nav-field set, so the destination may read as STRANDED in a `scripts/check-reachability.js` report. See the `section.choices` description for the mirror-choice workaround currently used to bridge this gap; the tool extension that would remove the workaround is tracked in DEV_PROCESS.md." },
+        "failure_to": { "type": ["integer", "string", "null"], "description": "stat_test, custom: section id on failure. Integer or string. Note: like `success_to`, this is a real in-play edge that the static reachability tool does NOT currently follow — see the `section.choices` description for the mirror-choice workaround." },
         "deduct_after": { "type": "boolean", "description": "stat_test: deduct from stat after testing." },
         "deduct_stat": { "type": "string", "description": "stat_test: which stat to deduct from." },
         "deduct_amount": { "type": "integer", "description": "stat_test: how much to deduct." },
@@ -891,7 +891,7 @@
 
         "prompt": { "type": "string", "description": "input_number, input_text, return_to_caller: prompt text shown to the player. For return_to_caller this text is displayed by 'purist' emulators asking the player to type the reference they noted, and by 'reference' emulators as a graceful-degradation surface when the return stack is empty (e.g. the player arrived via a debug jump with no caller recorded). Always write a real, readable prompt — never a placeholder." },
         "target": {
-          "description": "input_number: 'computed' means navigate to the entered number.",
+          "description": "input_number: 'computed' means navigate to the entered number. The static reachability tool has partial heuristic coverage for this shape (it enumerates plausible sums when `from_inventory_category` is set to a known category like 'keys') but does not generally trace computed-target navigation. When a computed-target destination is genuinely reachable in play but reads as STRANDED, see the `section.choices` description for the mirror-choice workaround — typically a single fallback choice per plausible destination, marked with a `text` prefix like `\"(reachability: key-sum 321)\"`.",
           "type": "string",
           "enum": ["computed"]
         },

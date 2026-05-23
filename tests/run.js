@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title at v1.29.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title at v1.29.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title bumped to v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title bumped to v1.29.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title at v1.29.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title at v1.29.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title bumped to v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title bumped to v1.29.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,7 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================
@@ -3677,7 +3677,7 @@ test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================
@@ -3851,7 +3851,7 @@ test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.28 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.29.0', 'schema title is v1.29.0');
 });
 
 // ============================================================

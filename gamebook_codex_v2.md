@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.40.0
+# THE GAMEBOOK CODEX v2.41.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -268,6 +268,18 @@ Run `node scripts/check-reachability.js <path/to/book.json>`. It walks the book 
 A clean parse has zero STRANDED and zero STRANDED-BEHIND. Sections in the PLAYER-TYPED-ONLY category are normal for books with input puzzles and don't block delivery.
 
 The check-reachability script exits with code 0 only when the first two categories are empty. Use that exit code in any larger verification pipeline.
+
+**Reachability mirror choices (when STRANDED is a false alarm).** Sometimes a section reads as STRANDED but is actually reachable in play through a field the static tool doesn't follow. Three patterns surfaced in the Warlock orphan-recovery pass:
+
+- **`stat_test.success_to` / `failure_to`** — when §82 has a `stat_test` whose `success_to` is §147 and `failure_to` is §33, both destinations are reached every time the player passes through §82, but the static tool's canonical nav-field set (`target`, `win_to`, `flee_to`, `lose_to`, `end_to`, `goto`, `navigate_to`, `to_section`, `return_to`, `script_code`'s `navigate_to = N`) does not include `success_to` / `failure_to`, so §147 and §33 read as STRANDED.
+- **`set_flag` → `has_flag` round-trips that drive routing** — e.g. §234 sets `next_after_wandering=43`, then §161's wandering-monster subroutine reads that flag to choose where to route. The static tool sees §234 → §161 (the explicit target) but not §161 → §43 (the flag-driven branch).
+- **`input_number` with `target: "computed"`** — the destination is the player-typed number. The static tool has partial heuristic coverage (it enumerates plausible sums when `from_inventory_category: 'keys'` is set), but does not generally trace computed-target navigation.
+
+When a destination is a false-stranded — *real* in play, *invisible* to the static tool — add an explicit choice on the source section that **mirrors** the implicit edge. One mirror choice per stat_test branch, one per flag-driven destination, one per plausible computed target. Mark them by convention with a `text` prefix that makes the intent obvious — `"(reachability: lucky outcome)"`, `"(reachability: wandering monster = 43)"`, `"(reachability: key-sum 321)"` — so a future maintainer can identify them at a glance.
+
+These mirror choices are typically never presented to the player at runtime, because the implicit-edge mechanism (the stat_test pause, the flag-driven event, the input_number prompt) fires first and navigates away before the section's `choices[]` array renders. They exist purely to teach the static reachability tool about edges the engine already follows.
+
+**Transitional status.** The reachability tool extension that would cover all three of these patterns natively — making mirror choices unnecessary — is tracked in `DEV_PROCESS.md` → "Reachability tool: cover stat_test / set_flag / input_number paths". Until it ships, mirror choices are the canonical workaround. After it ships, a comprehensive-review sub-agent removes them from the books that carry them; the engine never needed them, only the static tool did. The same documentation lives in the schema under `section.choices` and on the affected fields' descriptions, so a parse sub-agent reading the schema directly will encounter the pattern there.
 
 **Deliver.** Once both verifications pass, deliver the JSON file with a short summary: section count, validator status (errors / script failures), reachability status (reachable / not, victory reachable), and any `parser_notes` entries that needed a judgment call.
 
@@ -5485,7 +5497,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.40.0 / GBF schema v1.28.0 / CLI emulator v3.23.0 / HTML emulator v3.21.0** (HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.40.0 adds Rule 45 — the `restore_to_initial` event for the SET phrasing "STAMINA is restored to its Initial total" (Holy Water, Strength/Skill/Fortune potions, healing draughts), schema-additive; see CHANGELOG).
+**Codex v2.41.0 / GBF schema v1.29.0 / CLI emulator v3.23.0 / HTML emulator v3.21.0** (HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.41.0 + schema v1.29.0 are doc-only changes documenting the reachability mirror-choice workaround pattern in the schema (`section.choices`, `stat_test.success_to`/`failure_to`, `input_number.target = "computed"`) and in the Step 7 verification walkthrough, with no shape change and no emulator change; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
