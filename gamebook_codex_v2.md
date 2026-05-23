@@ -252,7 +252,24 @@ Read the complete rules/instructions section. Extract all game mechanics and com
 Process all numbered sections in the book, working in batches. Write output to a file if your platform supports it, or output in chunks for the user to assemble.
 
 ### Step 7: Verify and Deliver
-Run verification checks on the complete output. Deliver the JSON file to the user with a summary of what was parsed and any flagged issues.
+
+After the parse completes, run **two** verifications before handing the file off. The first one is structural; the second is the one most parses get wrong, so don't skip it.
+
+**Verification 1 — Schema and Lua.** Run the validator: `node scripts/validate-book.js <path/to/book.json>`. It checks the JSON shape against the schema AND executes every section's `script_code` against the engine's Lua sandbox. Iterate until it reports zero schema errors and zero script failures.
+
+**Verification 2 — "Can the player actually reach every section?"** Even when the validator is happy, the parse may have a quieter problem: some numbered sections may be sitting in the book without any other section pointing to them. A player would never visit those sections during real play. These are almost always parser misses — a "turn to N" instruction that was missed during the conversion. The victory ending getting stranded is the worst-case form of this, but any section a player can't reach is a real defect worth checking.
+
+Run `node scripts/check-reachability.js <path/to/book.json>`. It walks the book starting at section 1, follows every "turn to" instruction it can find, and reports the sections it couldn't get to. It splits them into three categories:
+
+- **STRANDED.** Nothing in the book points to this section. These are the smoking guns. For each one, go back to the source text (the OCR'd or extracted body text you parsed from) and search for any place that says "turn to *<stranded section number>*". Whichever section's body text contains that line is the one the parse missed a choice from. Open that section in the book JSON, add the missing choice (with the right text, target, and condition if any), and re-run the check. Repeat until the STRANDED list is empty.
+- **STRANDED-BEHIND.** Something points to this section, but only from another stranded section. These usually fix themselves as you recover the STRANDED list — every time you reconnect an upstream section, a chain of downstream sections becomes reachable for free. Re-run the script after each fix and watch the count drop.
+- **PLAYER-TYPED-ONLY.** This section is only reached when the player types a number — a key-sum puzzle, a lock combination, that kind of thing. These are NOT defects on their own; the script can't tell from looking at the book whether the player's typed number will actually land here. Confirm against the source: if the section is a plausible "right answer" or a specific "wrong answer" destination, leave it; if the source says the section should ALSO be reached some other way (a normal "turn to" from somewhere), the parse missed that other way and you should treat it like a STRANDED finding instead. Any sections you decide to leave in this category should be noted briefly in `metadata.parser_notes`.
+
+A clean parse has zero STRANDED and zero STRANDED-BEHIND. Sections in the PLAYER-TYPED-ONLY category are normal for books with input puzzles and don't block delivery.
+
+The check-reachability script exits with code 0 only when the first two categories are empty. Use that exit code in any larger verification pipeline.
+
+**Deliver.** Once both verifications pass, deliver the JSON file with a short summary: section count, validator status (errors / script failures), reachability status (reachable / not, victory reachable), and any `parser_notes` entries that needed a judgment call.
 
 ---
 
@@ -5291,7 +5308,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.37.0 / GBF schema v1.26.0 / CLI emulator v3.21.3 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up AND the same chargen `roll_table` action fix; CLI emulator v3.21.3 fixes `getAvailableActions` not advertising a roll action for `roll_table` character-creation steps; codex v2.37.0 adds Rule 43 — typographic marking as a game-term signal — a doc-only parsing heuristic with no schema change; see CHANGELOG).
+**Codex v2.38.0 / GBF schema v1.26.0 / CLI emulator v3.21.3 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.38.0 adds the post-parse coverage check to Step 7 — a layman-friendly walkthrough of recovering stranded sections, paired with the new `scripts/check-reachability.js` tool — no schema or emulator change; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

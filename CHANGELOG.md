@@ -6,6 +6,14 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.38.0 / GBF v1.26.0 / CLI emulator v3.21.3 / HTML emulator v3.19.0
+
+**Step 7 — post-parse coverage check (layman-friendly).** The codex `INTERACTIVE FLOW` Step 7 previously said only "Run verification checks on the complete output. Deliver the JSON file." That single line covered the schema validator and not much else, and silently allowed parses where some sections were *structurally* in the book but unreachable from §1 — including, in the worst case, an unreachable victory ending. Surfaced by the Warlock fresh-parse run, where 23 sections in the parsed output had no other section pointing to them and the §400 victory was disconnected.
+
+- **Step 7 rewritten** into two verifications: (1) the existing schema + Lua check; (2) a new "Can the player actually reach every section?" check. The walkthrough is in plain language — *stranded* (nothing points to this section), *stranded-behind* (only reached via another stranded section), *player-typed-only* (reached only when the player types a number, e.g. a key-sum puzzle) — so a non-developer running the parse can work through the result without needing graph-theory vocabulary.
+- **New tool `scripts/check-reachability.js`.** Runs the post-parse coverage check, prints the three-category report, exits non-zero when any STRANDED or STRANDED-BEHIND section remains. Handles the player-typed-only case by enumerating plausible sums of items in the relevant inventory category (e.g. keys) and treating those as conditional destinations rather than flagging them as broken.
+- **No schema, emulator, or rules-section change.** This is a workflow / tooling addition, not a parse-output change.
+
 ## CLI emulator v3.21.3 — chargen `roll_table` action fix (codex v2.37.0, GBF v1.26.0)
 
 **Bug fix — `getAvailableActions` did not advertise an action for `roll_table` character-creation steps.** `getAvailableActions` carried cases for every chargen pause type (`character_creation_roll`, `..._roll_resource`, `..._choose_one`, `..._choose_abilities`, `..._choose_talents`, `..._distribute`) except `character_creation_roll_table`. A `roll_table` chargen step therefore advertised no actionable command — an interactive player, or any client driven by `available_actions`, stalled mid-character-creation and the game never started. `applyAction` handled `character_creation_roll_table` correctly all along (`provide_roll` / `roll` worked), so playbook replay scripts that issue `provide_roll` blind were unaffected — which is why the gap went unnoticed.
