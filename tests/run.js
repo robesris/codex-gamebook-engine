@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title bumped to v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title bumped to v1.28.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title at v1.28.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title bumped to v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title bumped to v1.28.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,7 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
 });
 
 // ============================================================
@@ -3677,7 +3677,181 @@ test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
+});
+
+// ============================================================
+// Test: Rule 45 v2.40.0 — restore_to_initial event sets the
+// named stat to Initial via max(current, initial), never lowering
+// when a transient buff is active.
+//
+// MOTIVATED_BY: FF Warlock's Holy Water and Strength/Skill/Fortune
+// potions read "STAMINA is restored to its Initial total" — a SET,
+// not an ADD. Earlier parses encoded this as modify_stat: +999 with
+// a manual-clamp parser_note that failed when initial_is_max was
+// missing from the stat declaration (stats panel could read
+// STAMINA 1007/20).
+// ============================================================
+
+test('Rule 45 v2.40.0: restore_to_initial raises current to initial', () => {
+  const book = buildBook({
+    rules: { stats: [{ name: 'STAMINA', initial: 20, initial_is_max: true }], abilities: { available: [] } },
+    sections: {
+      '1': {
+        text: 'drink',
+        events: [{ type: 'restore_to_initial', stat: 'STAMINA', reason: 'Holy Water' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { STAMINA: 8 };
+  state.initialStats = { STAMINA: 20 };
+  play.navigateTo(state, book, '1');
+  assertEqual(state.stats.STAMINA, 20, 'STAMINA raised from 8 to Initial (20)');
+});
+
+test('Rule 45 v2.40.0: restore_to_initial is a no-op when current already at initial', () => {
+  const book = buildBook({
+    rules: { stats: [{ name: 'STAMINA', initial: 20, initial_is_max: true }], abilities: { available: [] } },
+    sections: {
+      '1': {
+        text: 'drink',
+        events: [{ type: 'restore_to_initial', stat: 'STAMINA' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { STAMINA: 20 };
+  state.initialStats = { STAMINA: 20 };
+  play.navigateTo(state, book, '1');
+  assertEqual(state.stats.STAMINA, 20, 'STAMINA stays at 20');
+});
+
+test('Rule 45 v2.40.0: restore_to_initial does NOT lower current when buff above initial', () => {
+  // Defensive: a transient buff has pushed STAMINA above Initial.
+  // "Restore" means regain, not lose — heal must never reduce.
+  const book = buildBook({
+    rules: { stats: [{ name: 'STAMINA', initial: 20, initial_is_max: false }], abilities: { available: [] } },
+    sections: {
+      '1': {
+        text: 'drink',
+        events: [{ type: 'restore_to_initial', stat: 'STAMINA' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { STAMINA: 25 };
+  state.initialStats = { STAMINA: 20 };
+  play.navigateTo(state, book, '1');
+  assertEqual(state.stats.STAMINA, 25, 'transient buff above Initial preserved (heal does not lower)');
+});
+
+test('Rule 45 v2.40.0: restore_to_initial composes with modify_initial for Fortune-style raise+restore', () => {
+  // FF Warlock Potion of Fortune: raise Initial LUCK by 1, then
+  // restore LUCK to the new (raised) Initial. Two events in order.
+  const book = buildBook({
+    rules: { stats: [{ name: 'LUCK', initial: 9, initial_is_max: true }], abilities: { available: [] } },
+    sections: {
+      '1': {
+        text: 'drink',
+        events: [
+          { type: 'modify_stat', stat: 'LUCK', amount: 1, modify_initial: true, reason: 'Fortune raises Initial LUCK' },
+          { type: 'restore_to_initial', stat: 'LUCK', reason: 'Fortune restores LUCK' },
+        ],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { LUCK: 5 };
+  state.initialStats = { LUCK: 9 };
+  play.navigateTo(state, book, '1');
+  assertEqual(state.initialStats.LUCK, 10, 'Initial LUCK raised from 9 to 10');
+  assertEqual(state.stats.LUCK, 10, 'LUCK restored to new Initial (10)');
+});
+
+test('Rule 45 v2.40.0: modify_stat + initial_is_max clamps at Initial (Laumspur shape)', () => {
+  // The clamped-ADD half of Rule 45's decision. LW1 Laumspur reads
+  // "restores 4 ENDURANCE per dose, up to Initial" — a numeric heal,
+  // NOT restore_to_initial. This test asserts the existing engine
+  // mechanism (initial_is_max clamp on modify_stat) still does its
+  // job, since Rule 45's doc directs parsers to use it for this shape.
+  const book = buildBook({
+    rules: { stats: [{ name: 'ENDURANCE', initial: 25, initial_is_max: true }], abilities: { available: [] } },
+    sections: {
+      '1': {
+        text: 'heal',
+        events: [{ type: 'modify_stat', stat: 'ENDURANCE', amount: 4, reason: 'Laumspur dose' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { ENDURANCE: 23 };
+  state.initialStats = { ENDURANCE: 25 };
+  play.navigateTo(state, book, '1');
+  assertEqual(state.stats.ENDURANCE, 25, '+4 clamped at Initial (25), not 27');
+});
+
+test('Rule 45 v2.40.0: restore_to_initial is in the schema event-type enum', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const eventEnum = schema.definitions.event.properties.type.enum;
+  assertTrue(eventEnum.includes('restore_to_initial'), 'restore_to_initial present in event-type enum');
+});
+
+test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  const book = {
+    metadata: { title: 'Book', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'X', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      '1': {
+        text: 'x',
+        // pre-v1.28 — no restore_to_initial; healing encoded as modify_stat
+        events: [{ type: 'modify_stat', stat: 'X', amount: 99 }],
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.28 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.28.0', 'schema title is v1.28.0');
 });
 
 // ============================================================

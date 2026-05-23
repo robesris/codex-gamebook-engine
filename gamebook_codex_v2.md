@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.39.0
+# THE GAMEBOOK CODEX v2.40.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -325,6 +325,8 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Subroutine section that returns to where you came from" | Section 7.6 → Pattern 7.6.8 | `script` event using `state.return_to_section` set by the caller before navigating |
 | Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects — "if 4 or lower, lose 2 ENDURANCE and turn to 140; if 5 or higher, turn to 323" | Rule 22 (Pattern 7.6.9) | `roll_dice` event with per-range `effects` (array of event objects) plus `target`. Schema v1.8+. Effects run AFTER the range match and BEFORE navigation, so a single event mutates state and moves the player. Falls back to `script` only when the effects array cannot express the branching (cumulative loops, conditional re-rolls, complex multi-stage logic). |
 | Choice or event gated on the outcome of an earlier dice roll *in the same section* — "If you successfully tested your Luck …", "If you passed the test, you may also …", "If your Skill roll failed, lose 1 STAMINA", "If you were Lucky (above), …" | Rule 44 (schema v1.27+) | `condition.type: "test_succeeded"` or `"test_failed"` on the choice or event. The predicate reads `state.lastTestResult`, set by the section's `stat_test` (always) or `roll_dice` (when the matched `results[range]` carries `outcome: "success" \| "failure"`). Scope is the current section only — `lastTestResult` clears on navigation. For cross-section gating, set an explicit `set_flag` and use `has_flag` instead. |
+| "Restored *to* your Initial total" / "STAMINA is fully restored" / "you are healed to full" — SET phrasing, no numeric amount stated; outcome is "you are at Initial" regardless of how far below you were | Rule 45 (schema v1.28+) | `restore_to_initial` event with `stat` matching a declared `rules.stats[].name`. Semantics: `stat = max(current, initial)` — raises current to Initial, never lowers. Distinguished from the clamped-ADD shape ("regain N, up to Initial") which uses `modify_stat` + `initial_is_max: true` on the stat. NEVER `modify_stat: +999` with a parser_note about manual clamping — that's an earlier workaround that fails visibly when `initial_is_max` is missing from the stat declaration. |
+| "Regain N, up to your Initial" / "restores 4 ENDURANCE points per dose" / numeric heal capped at Initial | Rule 45 (no schema change; uses existing `initial_is_max`) | Ordinary `modify_stat` with `amount: N` AND ensure the relevant stat declaration in `rules.stats[]` carries `initial_is_max: true`. The `modify_stat` handler clamps `newVal = min(current + amount, initial)` automatically when the flag is set. Distinguished from SET phrasing (which uses `restore_to_initial`) — the difference is whether the source text states a numeric amount. |
 | "If you kill him within N rounds of combat, turn to X / If you are still fighting after N rounds of combat, turn to Y / You may evade after M rounds by turning to Z" / "After M rounds of combat you position yourself to flee" | Rule 38 (schema v1.23+ round-count combat semantics) | Combat event carries `end_after_rounds: N, end_to: Y` for the broken-off auto-end AND/OR `flee_available_after_round: M` for the round-gated evade. Post-combat choices carry `combat_round_count_lte: N` (the kill-within-N branch) and `combat_round_count_gte: N+1` (the still-fighting branch). NEVER a `script` event that reads `combat.round` and calls `navigate_to` — that hides the round-cap from structured enforcement |
 | Book-wide combat rule stated in the *rules section* (not in any specific encounter) — "if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while wearing the Ring of Hostility all enemies attack at +1", any universal combat rule keyed on player state | Rule 23 | `rules.combat_system.standing_modifiers[]` (schema v1.8+). One `combat_modifier` entry per rule, with `target` dot-path, signed `delta`, optional `condition` for "applies when…" rules, optional `reason`. Emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start. Never re-encode the same rule per-section — that's lossy (misses fights the parser forgets) and redundant. |
 | Section describes losing an entire inventory category — "you lose the Pack and all the Equipment that was inside it" (LW1 §188 Kraan Backpack loss), "your weapons are confiscated", "all your Special Items are stripped from you" | Rule 24 | `remove_inventory_category` event (schema v1.8+) with `category` matching the book's own `inventory_category` string (e.g. `"backpack"`, `"special"`, `"weapons"`). Single event replaces per-id `remove_item` sequences; auto-unequips any equipped items whose id falls in the removed category. |
@@ -3055,6 +3057,108 @@ The first choice expresses the lucky-only retrieval, the second the lucky-only s
 
 **Verification.** For every section that contains a `stat_test` or a `roll_dice` event, scan the rest of the section's text for follow-up phrases that gate on the roll's outcome ("if you passed / failed", "if you were Lucky / Unlucky", "if your roll succeeded"). Each such phrase should map to either (a) a section-level choice or event with a `test_succeeded` / `test_failed` condition, (b) the `roll_dice` resolution's `success_to` / `failure_to` directly, or (c) an explicit `set_flag` in an `effects` array if the gate is consumed across a section transition. A follow-up phrase with no corresponding mechanic is a likely miss — the player will not see the gated branch when they reach it.
 
+### Rule 45: Clamped Restoration (`restore_to_initial` for SET, `modify_stat` + `initial_is_max` for clamped ADD)
+
+When a section, an item, or a spell restores a player stat *up to* its Initial value — the player can never exceed Initial via this kind of effect — the encoding depends on which of two source-text shapes is being described. Both shapes are common; they need different primitives.
+
+**Shape A — SET ("restored to its Initial total"):** Fighting Fantasy Holy Water reads *"Drinking it will restore your STAMINA to its Initial total."* The current value is set to Initial regardless of how far below it currently is. This is a SET, not an ADD-with-clamp — the heal amount is not stated as a number because the result is "you are at Initial." Encode as a `restore_to_initial` event (schema v1.28+) with a `stat` field:
+
+```json
+{ "type": "restore_to_initial", "stat": "STAMINA", "reason": "Holy Water" }
+```
+
+The emulator sets `state.stats[stat] = max(state.stats[stat], state.initialStats[stat])` — defensive: if a transient buff has pushed current above Initial, the SET *does not lower* current; "restore" implies regain, not loss. In normal play the cap prevents current from rising above Initial, so the `max(…)` and a plain assignment are equivalent; the defensive form just makes the edge case explicit. No `amount` field on this event — the SET semantic does not parameterise.
+
+**Shape B — clamped ADD ("regain N, up to your Initial"):** Lone Wolf's Laumspur reads *"each dose restores 4 ENDURANCE points, up to your Initial value"*; many FF potions read the same way with different numbers. The player regains a numeric amount; the cap is enforced as a clamp. Encode as an ordinary `modify_stat` with `amount: N`, **and declare the stat with `initial_is_max: true`** in `rules.stats[]`:
+
+```json
+{ "type": "modify_stat", "stat": "ENDURANCE", "amount": 4, "reason": "Laumspur dose" }
+```
+
+```json
+{ "name": "ENDURANCE", "initial": 25, "initial_is_max": true }
+```
+
+The `modify_stat` handler already clamps `newVal = min(current + amount, initial)` when the stat declaration carries `initial_is_max: true`. This is the canonical mechanism for the "capped at Initial" property of a stat — it applies to *every* `modify_stat` on that stat, not just heals, and it composes with `modify_initial` / `modify_initial_only` / `set_initial_to` (Rule 30) when the ceiling itself is moved.
+
+**Decision summary.**
+
+| Source phrasing | Primitive | Shape |
+|---|---|---|
+| "restored *to* its Initial total" / "fully healed" / "you are at full STAMINA" | `restore_to_initial` | SET — no number stated |
+| "regain N, up to your Initial" / "restores 4 ENDURANCE points" / numeric heal capped at Initial | `modify_stat` + `initial_is_max: true` on the stat | ADD with engine-side clamp |
+| Heal that legitimately exceeds Initial (rare; usually a permanent ceiling raise) | `modify_stat` with `modify_initial: true` (Rule 30) | ADD that moves both current and ceiling |
+
+**Why `restore_to_initial` is not `modify_stat: +999`.** Earlier parses encoded SET shapes as `modify_stat` with a deliberately oversized positive `amount` plus a parser_note about "manual clamping." This worked accidentally when `initial_is_max` was set on the stat (the oversized add saturated at Initial), but failed visibly when `initial_is_max` was missing — the stats panel could display values like STAMINA 1007/20 until ordinary damage knocked them back. It also misrepresented the semantic: the source text says "restored to Initial," not "add 999." The Holy Water encoding in Warlock's v2.37.0 fresh-parse pass surfaced this; Rule 45 ships the dedicated event so the SET semantic is encoded directly and the visible-bug failure mode goes away.
+
+**Worked example — FF Warlock Holy Water (items_catalog with Rule 25 consume effects).** Holy Water is a named consumable (Rule 25 / `items_catalog.consume`). Its `consume.effects` array now uses `restore_to_initial`:
+
+```json
+"holy_water": {
+  "name": "Holy Water",
+  "type": "consumable",
+  "consume": {
+    "effects": [
+      { "type": "restore_to_initial", "stat": "STAMINA", "reason": "Holy Water" }
+    ]
+  }
+}
+```
+
+The named-consumable framework (Rule 25) handles inventory removal and event dispatch; the player drinks Holy Water from any section that lets them, and STAMINA rises to Initial. No accompanying `set_flag` is required.
+
+**Worked example — Strength / Skill Potions (FF Warlock starting Potions).** Each named potion has two doses that restore the named stat to its Initial total. Encoded the same way, one event per potion:
+
+```json
+"potion_of_strength": {
+  "consume": {
+    "uses": 2,
+    "effects": [
+      { "type": "restore_to_initial", "stat": "STAMINA", "reason": "Potion of Strength" }
+    ]
+  }
+}
+```
+
+The `uses` field is the dose count; `restore_to_initial` is the per-dose effect. The Fortune Potion adds a second event (raising Initial LUCK by 1, then restoring LUCK to the new Initial):
+
+```json
+"potion_of_fortune": {
+  "consume": {
+    "uses": 2,
+    "effects": [
+      { "type": "modify_stat", "stat": "LUCK", "amount": 1, "modify_initial": true, "reason": "Potion of Fortune raises Initial LUCK" },
+      { "type": "restore_to_initial", "stat": "LUCK", "reason": "Potion of Fortune restores LUCK" }
+    ]
+  }
+}
+```
+
+The `modify_initial: true` event (Rule 30) raises both the current value and the ceiling by 1; the `restore_to_initial` event then brings current up to the new Initial. Two events compose cleanly.
+
+**Worked example — LW1 Laumspur (clamped ADD, NOT `restore_to_initial`).** LW1's Laumspur restores "4 ENDURANCE points per dose, up to your Initial ENDURANCE." This is Shape B — a numeric heal with a cap, not a SET. The right encoding is `modify_stat` with `amount: 4`:
+
+```json
+"laumspur": {
+  "consume": {
+    "effects": [
+      { "type": "modify_stat", "stat": "ENDURANCE", "amount": 4, "reason": "Laumspur dose" }
+    ]
+  }
+}
+```
+
+ENDURANCE is declared `initial_is_max: true` in LW1's `rules.stats[]`, so the +4 clamps at Initial automatically. `restore_to_initial` would be *wrong* here — the source says "4 points," not "to Initial."
+
+**Verification.** When parsing a healing item, spell, or section event:
+
+1. Identify which shape the source phrasing matches (SET vs clamped ADD).
+2. For SET phrasings (no numeric amount; outcome is "you are at Initial"), use `restore_to_initial`.
+3. For clamped-ADD phrasings (numeric amount; outcome is "you regain N capped at Initial"), use `modify_stat` + ensure the relevant stat declaration carries `initial_is_max: true`.
+4. If you find a `modify_stat: +N` event where `N` is suspiciously large (≥ initial value, often 99 or 999), it's a Rule 45 candidate — likely a workaround from an earlier parse that should migrate to `restore_to_initial` (if the source is SET) or be left in place once `initial_is_max: true` is confirmed on the stat declaration (if the source is clamped ADD).
+
+This rule does not introduce new ceiling-management primitives; `modify_initial` (Rule 30) still moves the ceiling. Rule 45 specifies which primitive expresses "heal up to ceiling" cleanly for each of the two source shapes.
+
 ---
 
 1. Universal Gamebook Concepts
@@ -5381,7 +5485,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.39.0 / GBF schema v1.27.0 / CLI emulator v3.22.0 / HTML emulator v3.20.0** (HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.39.0 adds Rule 44 — the `test_succeeded` / `test_failed` post-roll outcome predicate, available on both `stat_test` and `roll_dice` resolutions via the new `results[range].outcome` tag, schema-additive; see CHANGELOG).
+**Codex v2.40.0 / GBF schema v1.28.0 / CLI emulator v3.23.0 / HTML emulator v3.21.0** (HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.40.0 adds Rule 45 — the `restore_to_initial` event for the SET phrasing "STAMINA is restored to its Initial total" (Holy Water, Strength/Skill/Fortune potions, healing draughts), schema-additive; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

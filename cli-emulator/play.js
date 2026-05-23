@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.22.0';
+const CODEX_EMULATOR_VERSION = '3.23.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1390,6 +1390,29 @@ function handleEvent(event, state, book) {
       }
       const setNote = event.set_initial_to !== undefined ? ` (initial set to ${event.set_initial_to})` : '';
       state.log.push(`${stat} ${amount >= 0 ? '+' : ''}${amount}${event.modify_initial ? ' (permanent, initial updated)' : ''}${setNote}${event.reason ? ' (' + event.reason + ')' : ''}`);
+      return 'continue';
+    }
+    case 'restore_to_initial': {
+      // Rule 45 (schema v1.28+). SET semantic for the source phrasing
+      // "STAMINA is restored to its Initial total" — raise current to
+      // initial, never lower. Distinguished from modify_stat with
+      // initial_is_max on the stat declaration (which is the clamped-
+      // ADD encoding for "regain N, up to your Initial").
+      const stat = event.stat;
+      if (!stat) {
+        state.log.push(`restore_to_initial: missing stat field, skipping`);
+        return 'continue';
+      }
+      const initial = state.initialStats[stat];
+      if (initial === undefined) {
+        state.log.push(`restore_to_initial: ${stat} has no initial value, skipping`);
+        return 'continue';
+      }
+      const old = state.stats[stat] || 0;
+      const newVal = Math.max(old, initial);
+      state.stats[stat] = newVal;
+      const delta = newVal - old;
+      state.log.push(`${stat} restored to Initial (${old} → ${newVal}${delta > 0 ? ', +' + delta : ', no change'})${event.reason ? ' (' + event.reason + ')' : ''}`);
       return 'continue';
     }
     case 'add_item': {

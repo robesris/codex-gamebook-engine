@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.20.0';
+const CODEX_EMULATOR_VERSION = '3.21.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2567,6 +2567,10 @@ function processNextEvent() {
       handleModifyStat(event);
       processNextEvent();
       break;
+    case 'restore_to_initial':
+      handleRestoreToInitial(event);
+      processNextEvent();
+      break;
     case 'add_item':
       handleAddItem(event);
       processNextEvent();
@@ -2755,6 +2759,26 @@ function addItemToInventoryHTML(itemId, quantity) {
     }
   }
   autoEquipOnAdd(itemId);
+}
+
+// --- Restore To Initial ---
+// Rule 45 (schema v1.28+). SET semantic for source phrasing "STAMINA is
+// restored to its Initial total" — raise current to initial, never lower.
+// Distinguished from modify_stat with initial_is_max (clamped ADD).
+function handleRestoreToInitial(event) {
+  const stat = event.stat;
+  const content = document.getElementById('game-content');
+  if (!stat || state.initialStats[stat] === undefined) return;
+  const initial = state.initialStats[stat];
+  const old = state.stats[stat] || 0;
+  const newVal = Math.max(old, initial);
+  state.stats[stat] = newVal;
+  const delta = newVal - old;
+  const msg = document.createElement('div');
+  msg.className = 'event-msg gain';
+  msg.textContent = `${stat.toUpperCase()} restored to Initial (${old} → ${newVal}${delta > 0 ? ', +' + delta : ', no change'})${event.reason ? ' (' + event.reason + ')' : ''}`;
+  content.appendChild(msg);
+  updateStatBar();
 }
 
 function handleAddItem(event) {
@@ -4321,6 +4345,9 @@ function handleRollDice(event) {
         switch (subEvent.type) {
           case 'modify_stat':
             handleModifyStat(subEvent);
+            break;
+          case 'restore_to_initial':
+            handleRestoreToInitial(subEvent);
             break;
           case 'add_item':
             handleAddItem(subEvent);
