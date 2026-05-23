@@ -577,4 +577,79 @@ This is a general RPG mechanic, not LW-specific: AD&D weapon proficiencies, Figh
 
 **Source artifact:** `claude_session/lw1_fresh_parse_chat39_v237.json` (books repo) — the v2.37.0 fresh LW1 parse carrying the documented partial encoding. The `weaponskill_weapon_equipped` standing_modifier is the thing to replace once the mechanism ships.
 
+### Post-roll condition predicate `test_succeeded` (discovered codex v2.37.0, Warlock fresh-parse remediation)
+
+**Context.** Many Fighting Fantasy sections present a follow-up choice or event whose availability depends on the outcome of the dice roll the player just made — typical phrasing is "If you successfully tested your Luck, turn to A; if not, turn to B" *after* a separate Test Your Luck happened earlier in the same section, or "If you passed the roll, you may also …". The schema has `roll_dice.results[]` per-range targets and `stat_test.success_to / failure_to` direct branches, but no `condition` primitive that says "this choice / event is available iff the last dice resolution succeeded." The Warlock v2.37.0 remediation pass had to **drop 12 conditional choices and events** across the book because there was no valid encoding — the choices are flagged in `metadata.parser_notes` of `claude_session/warlock_fresh_parse_chat39_v237.json`. This is the single highest-impact gap from the Warlock work: 12 narrative branches inaccessible to the player.
+
+The pattern recurs across FF, LW (Kai Discipline pass/fail follow-ups), GrailQuest, and most stat-test-heavy series, so the primitive is broadly reusable.
+
+- **Schema:** add `last_roll_succeeded` (boolean) and `last_roll_failed` (boolean) to the existing `condition` union (same union used by `choices[].condition` and event-level `condition`). Semantics: true iff the most recent `stat_test` or `roll_dice` event resolved within the current section dispatched a success/failure outcome. State carries a per-section `lastRollOutcome: 'success' | 'failure' | null`, cleared at section entry, set by stat_test / roll_dice resolution.
+- **Codex:** new Rule under the existing condition-primitive rules. Trigger phrasing: "If you successfully tested your Luck", "If your Skill roll failed", "If you passed the test", "If you rolled equal to or under". Worked example showing the choice-level encoding and the event-level encoding. Add a row to the Topical Decision Table.
+- **CLI + HTML emulators:** track `state.lastRollOutcome` across stat_test and roll_dice resolution paths. Evaluate the new condition keys in the existing condition evaluator. Clear at section transition.
+- **Regression:** the 12 dropped Warlock choices are listed in `claude_session/warlock_fresh_parse_chat39_v237.json` parser_notes. After the primitive ships, a remediation sub-agent re-encodes those choices and the count drops to zero.
+
+### Clamped restore action `restore_to_initial` (discovered codex v2.37.0, Warlock fresh-parse remediation)
+
+**Context.** Warlock's Holy Water (and several minor potions / spells across the FF series) restore the player's STAMINA *up to their Initial total* — i.e. add N, clamping at initial. The schema has `modify_stat` (unbounded additive delta) and `set_initial_to` (sets the initial cap itself), but no action that adds-with-clamp-to-initial. The Warlock parse encoded these as `modify_stat: +999` with a comment, relying on a manual clamp the engine doesn't actually apply. Result: drinking Holy Water briefly pushes STAMINA above its Initial cap in the stats panel until the player takes ordinary damage.
+
+The pattern is universal across stat-restoration mechanics: every healing potion / herb / spell that "restores up to your Initial" is the same shape.
+
+- **Schema:** add `restore_to_initial` event with fields `stat` (string, must match a `rules.stats[].name`) and `amount` (number, defaults to "full"). Semantics: `state.stats[stat] = min(state.stats[stat] + amount, state.initialStats[stat])`. Additive.
+- **Codex:** new Rule documenting the trigger phrasing ("restore your STAMINA to its Initial total", "regain N STAMINA, up to your Initial", "heal fully"). Worked example with Holy Water. Decision-table row.
+- **CLI + HTML emulators:** new event handler, ~10 lines each. Logs the restored amount and the cap.
+- **Regression:** Holy Water uses across Warlock + the LW1 healing potions parse currently using +N modify_stat with parser_notes about clamping.
+
+### Wager primitive `gamble` (discovered codex v2.37.0, Warlock fresh-parse remediation)
+
+**Context.** Warlock §346 presents a wagering encounter — the player chooses an amount of gold to wager, a die is rolled, and on win they receive 2× their wager / on loss they forfeit it. The schema's `roll_dice` and `modify_stat` would compose to express this, but only after the player has been prompted to input an amount AND that amount has been multiplied through both branches — there is no primitive for "player chooses a number bounded by a resource, then a die roll decides gain/loss against that number." The Warlock parse wrapped it as a generic `custom` event the emulator no-ops past, so the wager never actually happens.
+
+The pattern is a Fighting Fantasy / D&D-Solo staple — Warlock has 1 instance, the wider FF catalog has many.
+
+- **Schema:** add `gamble` event with fields `stake_resource` (string, e.g. "gold"), `stake_min` and `stake_max` (number or "all"), `outcome` (object with `success_roll` predicate over the rolled die and `win_multiplier` / `loss_multiplier`). Reuses the existing `input_number` pause primitive for the stake choice and `roll_dice` for the outcome roll, but at the schema level it's a single event so the player-facing flow is one composite interaction.
+- **Codex:** new Rule covering wagering encounters. Triggers: "wager", "bet", "stake", "gamble". Worked example with §346 shape. Decision-table row.
+- **CLI + HTML emulators:** new pause type `gamble_stake` (prompts for stake amount, validated against `state.resources[stake_resource]`), then runs the embedded roll, then applies the outcome.
+
+### Combat gate by equipped-weapon property (discovered codex v2.37.0, Warlock fresh-parse remediation)
+
+**Context.** Warlock's Vampire and Wight combats both require a *silver* weapon to inflict damage — fighting them with a normal sword does nothing and the player must flee or die. The schema can tag the silver weapons in `items_catalog` (a `properties: ["silver"]` field would be additive), but there is no combat-level gate that says "this combat requires the equipped weapon to have property P; if not, damage taken/dealt is zero / forced flee / specific death section." The Warlock parse dropped the gate entirely — the player can win the Vampire fight with any weapon, which trivialises the encounter.
+
+The pattern is broadly reusable: silver-weapons-vs-undead, magic-weapons-vs-spirits, blessed-weapons-vs-demons, holy-water-as-weapon, and similar item-type-gated combats across FF, LW (the Tomb of the Majhan permanent-death corridor), GrailQuest, and Way of the Tiger.
+
+- **Schema:** add optional `properties: string[]` to `items_catalog` weapon entries (free-form: "silver", "magic", "blessed", "fire"). Add a combat-level field `combat.required_weapon_properties: string[]` and a behavior selector `combat.required_weapon_failure: "no_damage" | "flee_to:<sid>" | "death_to:<sid>"` for what happens when the equipped weapon lacks a required property. Add a `condition` predicate `equipped_weapon_has_property` for use in choices that gate on weapon properties (e.g. "if you have a silver weapon equipped, you may attack: turn to N").
+- **Codex:** new Rule covering weapon-property-gated combats. Triggers: "only X weapon can harm", "silver weapon required", "only enchanted/magic/blessed weapons". Worked example with Vampire / Wight. Decision-table row.
+- **CLI + HTML emulators:** at combat start, evaluate `required_weapon_properties` against the equipped weapon's `properties`; if mismatched, apply the configured failure behavior.
+
+### Combat interrupt on Nth player wound (discovered codex v2.37.0, Warlock orphan-edge recovery)
+
+**Context.** Warlock §173's Wight fight has a mechanic: every successful enemy hit on the player is a "wound," and after the **third** wound the fight ends and the player is dragged off to §24 regardless of remaining stamina. The schema's `combat` event has `end_after_rounds` (Rule 38) and `damage_caps` (Rule 32) but no field for "interrupt and navigate to <sid> after the Nth player-side wound." The Warlock orphan-recovery pass encoded this as a conditional choice on §173 reading "If during the fight you were wounded a third time, turn to §24" — relying on the player to honestly self-count wounds. The Wight fight runs as an ordinary combat in the engine.
+
+The pattern recurs across paralysing / draining / curse-on-hit enemies in FF and LW.
+
+- **Schema:** add `combat.lose_to_after_wounds: { count: number, target: section_id }` (a "soft loss" outcome — the player is alive but the combat ends and play resumes at the named section). State maintains a per-combat wound counter (number of resolved attack-strength rounds where the enemy outscored the player).
+- **Codex:** new Rule under the existing combat-resolution rules. Triggers: "after the Nth wound", "if the Wight wounds you three times", "every time the Y hits you it counts as a wound". Worked example with §173 Wight. Decision-table row.
+- **CLI + HTML emulators:** wound counter in combat state, checked after each resolved round; on threshold, transition to the configured `lose_to_after_wounds.target`.
+
+### Reachability tool: cover stat_test / set_flag / input_number paths (discovered codex v2.38.0, Warlock orphan-edge recovery)
+
+**Context.** `scripts/check-reachability.js` (added in codex v2.38.0) traces a fixed set of canonical nav fields — `target`, `win_to`, `flee_to`, `lose_to`, `end_to`, `goto`, `navigate_to`, `to_section`, `return_to`, plus `script_code`'s `navigate_to = N`. The Warlock orphan recovery surfaced three patterns the tool misses, forcing book-side workarounds (mirror choices) just so the static reachability report would look honest:
+
+1. **`stat_test.success_to` / `failure_to`** are real navigation fields used by the engine, but they are NOT in the script's canonical nav-field set. Sections reachable only via a stat_test branch read as stranded.
+2. **`set_flag` + `has_flag` post-action navigation** — e.g. Warlock §234 sets `next_after_wandering=43` and §161's wandering-monster subroutine reads the flag to decide where to route. The static tool sees neither edge.
+3. **`input_number` with `from_inventory_category` + `count`** is partially handled (key-sum puzzles model plausible sums against the `items_catalog`), but the heuristic is hard-coded to the `keys` category and to numeric-suffix-of-id extraction. Other inventory-driven inputs (alphabet puzzles, color-coded items) won't be modelled.
+
+The book-side mirror-choice workarounds (§173's wound-count choice, the key-puzzle static fallback choices on §139/§182/§198) exist primarily so check-reachability reports the truth. Filling this gap removes the need for those workarounds.
+
+- **Tool change only** (no codex / schema / emulator change). Extend the NAV_KEYS set in `scripts/check-reachability.js` to include `success_to`, `failure_to`. Add a flag-propagation pass: scan all sections for `set_flag` actions, build a flag-name → setter-sections map; for each `has_flag` condition encountered during BFS, transitively credit the flag-setting sections as predecessors. Generalise the `input_number` heuristic to: (a) read `event.results[]` if present (explicit valid-input → target table); (b) for `from_inventory_category` events, enumerate from the catalog without hard-coding the category name; (c) optionally consult `items_catalog[id].value` / `.number` / numeric-suffix in the same priority order. Add unit tests under `tests/` using LW1 (clean baseline) and the v237 Warlock parse (the stat_test / set_flag / key-puzzle cases).
+- **Regression:** rerun the Warlock parse's mirror-choice removals (a comprehensive-review sub-agent) and confirm reachability stays at 399/400 without them.
+
+### Warlock OCR catalog: key numbers misread as 112 / 211 (discovered codex v2.38.0, Warlock orphan-edge recovery)
+
+**Context.** `claude_session/warlock_fresh_parse_chat39_v237.json` carries two keys in `items_catalog` with OCR-damaged numbers — `bronze_key_112` (source page reads "112") and `red_key_211` (source page reads "211"). The maintained reference book has both as **111**, which is the catalog state that makes the canonical key-sum puzzle solvable (111 + 99 + 174 → §384 → §400 in the original game; the exact intended sums vary by which 3-of-N keys the player collects). With OCR-true numbers, no combination of collected keys produces a sum that reaches any intended destination — the puzzle is structurally inert. The Warlock orphan-recovery pass added **static fallback choices** to §139/§182/§198 routing directly to the puzzle destinations so reachability is correct in static analysis and end-to-end emulator probing, but the genuine input_number puzzle does not function for a player who tries to solve it.
+
+This is a **book-data fix that depends on a Rule 2 (No Hallucination) judgment call**: do we deliberately overwrite OCR-true content with the maintained-reference values, or do we accept the OCR-true encoding and document that the key-sum puzzle is non-functional for this parse?
+
+- **Recommended option (post-engine-gap-fill):** after the engine gaps above ship and a fresh Warlock re-parse runs against the updated stack, a remediation sub-agent re-examines the source pages for §75 / §258 with a higher-quality OCR (`ocrmypdf --redo-ocr --oversample 600`) and adjudicates 111 vs 112 / 211 against the actual scan. If the higher-quality OCR confirms 111, treat the v237 numbers as documented OCR damage and overwrite (with a `metadata.parser_notes` entry citing the higher-quality re-read as the source of truth). If the higher-quality OCR still reads 112 / 211, the puzzle is what the OCR'd source actually says — leave it; the static fallback choices stay as documented workarounds.
+- **Alternative (if re-OCR is inconclusive):** ship the engine gaps, leave the key catalog OCR-true, and document the puzzle as non-functional in `metadata.parser_notes` and the `known_issues` block. The fallback choices remain the canonical path to the puzzle destinations.
+- **Not in scope of this entry:** the static fallback choices themselves; those are a check-reachability tooling issue (see the "Reachability tool" entry above) and are removed in that entry's regression step.
+
 ---
