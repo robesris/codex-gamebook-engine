@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.21.3';
+const CODEX_EMULATOR_VERSION = '3.22.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -2616,6 +2616,17 @@ function applyAction(state, book, action, args) {
       }
       if (resultText) state.log.push(resultText);
       state.pause = null;
+      // Rule 44 (schema v1.27+): if the matched range carries an `outcome`
+      // tag, record it on state.lastTestResult so subsequent test_succeeded
+      // / test_failed conditions in this section (or the navigated-to
+      // section) see the binary outcome of the roll. Applied BEFORE the
+      // per-range effects and target navigation so an effect or downstream
+      // condition can read the freshly-set value. Opt-in: results entries
+      // without an `outcome` tag leave lastTestResult unchanged.
+      if (matched && matchedEntry && matchedEntry.outcome) {
+        if (matchedEntry.outcome === 'success') state.lastTestResult = true;
+        else if (matchedEntry.outcome === 'failure') state.lastTestResult = false;
+      }
       // Per-range effects (Rule 22, schema v1.8+). Effects fire AFTER the
       // range match and BEFORE the target navigation, so a branch can both
       // mutate state and move the player in a single roll_dice event. Each

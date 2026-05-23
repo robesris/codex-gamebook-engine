@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.19.0';
+const CODEX_EMULATOR_VERSION = '3.20.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -4297,6 +4297,17 @@ function handleRollDice(event) {
       <div class="dice-display">[${result.rolls.join(', ')}] = ${result.total}</div>
       ${resultText ? `<p>${resultText}</p>` : ''}
     `;
+
+    // Rule 44 (schema v1.27+): if the matched range carries an `outcome` tag,
+    // record it on window._lastTestResult so subsequent test_succeeded /
+    // test_failed conditions in this section (or the section navigated to by
+    // target) see the binary outcome of the roll. Applied BEFORE per-range
+    // effects and target navigation. Opt-in: entries without an `outcome`
+    // tag leave _lastTestResult unchanged. Mirrors play.js.
+    if (matched && matchedEntry && matchedEntry.outcome) {
+      if (matchedEntry.outcome === 'success') window._lastTestResult = true;
+      else if (matchedEntry.outcome === 'failure') window._lastTestResult = false;
+    }
 
     // Per-range effects (Rule 22, schema v1.8+). Effects fire AFTER the
     // range match and BEFORE the target navigation. Each entry is a full

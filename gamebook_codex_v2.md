@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.37.0
+# THE GAMEBOOK CODEX v2.39.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -324,6 +324,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "If you have visited this section before, …" / one-time visit flags | Rule 15 + Section 7.6 | `set_flag` on first visit, conditional events gated on `has_flag` thereafter |
 | "Subroutine section that returns to where you came from" | Section 7.6 → Pattern 7.6.8 | `script` event using `state.return_to_section` set by the caller before navigating |
 | Random-branch section ("roll a die: 1–2 → A, 3–4 → B, 5–6 → C") with per-branch side effects — "if 4 or lower, lose 2 ENDURANCE and turn to 140; if 5 or higher, turn to 323" | Rule 22 (Pattern 7.6.9) | `roll_dice` event with per-range `effects` (array of event objects) plus `target`. Schema v1.8+. Effects run AFTER the range match and BEFORE navigation, so a single event mutates state and moves the player. Falls back to `script` only when the effects array cannot express the branching (cumulative loops, conditional re-rolls, complex multi-stage logic). |
+| Choice or event gated on the outcome of an earlier dice roll *in the same section* — "If you successfully tested your Luck …", "If you passed the test, you may also …", "If your Skill roll failed, lose 1 STAMINA", "If you were Lucky (above), …" | Rule 44 (schema v1.27+) | `condition.type: "test_succeeded"` or `"test_failed"` on the choice or event. The predicate reads `state.lastTestResult`, set by the section's `stat_test` (always) or `roll_dice` (when the matched `results[range]` carries `outcome: "success" \| "failure"`). Scope is the current section only — `lastTestResult` clears on navigation. For cross-section gating, set an explicit `set_flag` and use `has_flag` instead. |
 | "If you kill him within N rounds of combat, turn to X / If you are still fighting after N rounds of combat, turn to Y / You may evade after M rounds by turning to Z" / "After M rounds of combat you position yourself to flee" | Rule 38 (schema v1.23+ round-count combat semantics) | Combat event carries `end_after_rounds: N, end_to: Y` for the broken-off auto-end AND/OR `flee_available_after_round: M` for the round-gated evade. Post-combat choices carry `combat_round_count_lte: N` (the kill-within-N branch) and `combat_round_count_gte: N+1` (the still-fighting branch). NEVER a `script` event that reads `combat.round` and calls `navigate_to` — that hides the round-cap from structured enforcement |
 | Book-wide combat rule stated in the *rules section* (not in any specific encounter) — "if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while wearing the Ring of Hostility all enemies attack at +1", any universal combat rule keyed on player state | Rule 23 | `rules.combat_system.standing_modifiers[]` (schema v1.8+). One `combat_modifier` entry per rule, with `target` dot-path, signed `delta`, optional `condition` for "applies when…" rules, optional `reason`. Emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start. Never re-encode the same rule per-section — that's lossy (misses fights the parser forgets) and redundant. |
 | Section describes losing an entire inventory category — "you lose the Pack and all the Equipment that was inside it" (LW1 §188 Kraan Backpack loss), "your weapons are confiscated", "all your Special Items are stripped from you" | Rule 24 | `remove_inventory_category` event (schema v1.8+) with `category` matching the book's own `inventory_category` string (e.g. `"backpack"`, `"special"`, `"weapons"`). Single event replaces per-id `remove_item` sequences; auto-unequips any equipped items whose id falls in the removed category. |
@@ -1235,6 +1236,8 @@ When a section instructs the player to roll and branches on the result, AND one 
 **Backward compatibility.** `results[range]` entries with only `target` and `text` (no `effects`) behave exactly as they did pre-Rule-22 — the field is additive. Existing books that encoded branch-with-side-effect sections as `script` events continue to work unchanged; Rule 22 specifies the preferred shape for new parses and for sub-agent re-runs. Pattern 7.6.9 below is rewritten to recommend `roll_dice` + `effects` as the canonical encoding, with `script` as the fallback for cases the effects array cannot express.
 
 **Verification.** For every `roll_dice` event in a book, check whether any branch attaches a mechanical side effect (stat change, item change, flag set) in the section's narrative. If yes, the corresponding `results[range].effects` array carries the event(s) that apply the side effect. If the section has a parallel section-level `modify_stat` (or similar) event that fires unconditionally, that's a Rule 12 violation — the per-branch effect and the unconditional event double-count.
+
+**Pass/fail outcome tagging.** Schema v1.27+ adds an optional `outcome: "success" | "failure"` field to `results[range]` entries (see Rule 44). When a roll is a structured pass/fail test (typically FF Test-your-Luck encoded as `roll_dice` rather than `stat_test`), tag the lucky range `outcome: "success"` and the unlucky range `outcome: "failure"`; downstream choices and events can then gate on `test_succeeded` / `test_failed`. The outcome tag is independent of `effects` and `target` — all three may coexist on a single range entry.
 
 ### Rule 23: Book-Wide Standing Combat Modifiers
 
@@ -2981,6 +2984,76 @@ Conversely, when the source marks a term you have *not* yet encoded as a mechani
 **Identify the book's convention up front.** Typographic conventions are per-series and sometimes per-book. While reading the rules / instructions section (Processing Strategy, Phase A/B), note *how this book marks its mechanical terms* — which terms are ALL-CAPS, which are initial-capped mid-sentence, which are left lowercase — and carry that profile into section parsing. The Fighting Fantasy and Lone Wolf series profiles (Sections 4 and 5) document the convention for those series; for any other series, derive it from the rules section and a sample of sections. A book that is internally consistent gives you a near-free mechanical-term detector; a book that is inconsistent still gives you a useful candidate generator.
 
 **Verification.** When a section's text contains a typographically-marked term (mid-sentence capital, ALL-CAPS, or small-caps) that names a resource, stat, ability, or item, confirm the section carries the corresponding mechanical encoding — an event, a condition, or a catalog reference — OR that you have made a deliberate decision that the mention is non-mechanical (a proper noun, a creature type-name, a sentence-initial capital). A marked mechanical noun with no corresponding mechanic in the section is a likely miss. This is a reading discipline, not an automated gate — the validator cannot see the source text's typography.
+
+### Rule 44: Post-Roll Outcome Predicate (`test_succeeded` / `test_failed`)
+
+When a section's narrative branches *after* a dice roll on whether the player just passed or failed that roll — phrasing like "If you successfully tested your Luck …", "If your Skill roll failed …", "If you passed the test you may also take the dagger" — encode the downstream branch as a choice or event whose `condition` uses the post-roll outcome predicate. Schema v1.27+ provides two predicates in the standard condition union, evaluated against `state.lastTestResult`:
+
+- `{type: "test_succeeded"}` — true iff the most recent dice resolution within the current section recorded a success.
+- `{type: "test_failed"}` — true iff the most recent dice resolution within the current section recorded a failure.
+
+**What sets `lastTestResult`.** Two event types set the flag, in the natural place:
+
+1. **`stat_test`** — the standard 2d6-vs-stat test. The emulator computes `success = (rolled total ≤ stat)` and writes that boolean to `lastTestResult` at resolution time. This covers FF Test-your-Luck / Test-your-Skill encoded as a `stat_test` event, LW Kai Discipline pass/fail rolls, GrailQuest stat tests, and any 2d6-vs-stat shape.
+2. **`roll_dice`** — when the matched `results[range]` entry carries an `outcome: "success" | "failure"` tag (Rule 22 extension, schema v1.27+). This covers FF Test-your-Luck encoded as `roll_dice` with `'lucky'` / `'unlucky'` range keys (the FF series profile's older shape — Section 4.Test Your Luck), and any roll-driven pass/fail check whose ranges have a binary outcome semantics. Untagged ranges leave `lastTestResult` unchanged.
+
+The flag is cleared on every `navigateTo` (i.e., at section entry), so the predicate's scope is **the current section only**. If you need to remember a roll outcome across a section transition, set an explicit `set_flag` in the result's `effects` array and gate the later choice on `has_flag` instead.
+
+**Trigger phrasing.** Mid-section follow-ups gated on the previous roll:
+
+- "If you **successfully** tested your Luck, turn to A; if not, turn to B."
+- "If you **passed** the test, you may also take the dagger."
+- "If your **Skill roll failed**, lose 1 STAMINA."
+- "If you **rolled equal to or under** your SKILL, …"
+- "If you were **Lucky** (above), …" — the parenthetical "above" is the key signal that the predicate is post-roll, not a fresh roll.
+
+Distinguish from a *fresh* roll: "Test your Luck again" / "Roll once more" introduces a new `stat_test` or `roll_dice`, not a `test_succeeded` predicate.
+
+**Worked example — FF post-Test-your-Luck branching encoded as `roll_dice`.** Source: "Test your Luck. If you are Lucky, the dagger flies true and you may turn to 147 to retrieve it. If you are Unlucky, you stumble — lose 1 STAMINA. In either case, the guard wakes; if you successfully tested your Luck you may strike first (turn to 220), otherwise the guard strikes you (turn to 88)."
+
+```json
+{
+  "events": [
+    {
+      "type": "roll_dice",
+      "dice": "2d6",
+      "prompt": "Test your Luck",
+      "results": {
+        "2-7":  { "text": "Lucky.",   "outcome": "success" },
+        "8-12": { "text": "Unlucky.", "outcome": "failure",
+                  "effects": [{"type": "modify_stat", "stat": "STAMINA", "amount": -1}] }
+      }
+    }
+  ],
+  "choices": [
+    {"text": "Retrieve the dagger",           "target": 147, "condition": {"type": "test_succeeded"}},
+    {"text": "Strike the waking guard first", "target": 220, "condition": {"type": "test_succeeded"}},
+    {"text": "The guard strikes you",         "target": 88,  "condition": {"type": "test_failed"}}
+  ]
+}
+```
+
+The first choice expresses the lucky-only retrieval, the second the lucky-only strike-first, the third the unlucky-only guard-strike. No flag bookkeeping is required because all three are in-section follow-ups.
+
+**Worked example — `stat_test` shape.** Source: "Test your Luck. If you are Lucky you may try to pick the lock (turn to 142). If you are Unlucky you must force it instead — turn to 95." Encode as a `stat_test` that records the outcome without navigating, then two choices gated on the predicate:
+
+```json
+{
+  "events": [
+    {"type": "stat_test", "stat": "LUCK", "success_to": null, "failure_to": null}
+  ],
+  "choices": [
+    {"text": "Pick the lock", "target": 142, "condition": {"type": "test_succeeded"}},
+    {"text": "Force the lock", "target": 95,  "condition": {"type": "test_failed"}}
+  ]
+}
+```
+
+`stat_test` always writes `lastTestResult` (regardless of `success_to` / `failure_to`), so when the test branches directly on the outcome you may also use `success_to` / `failure_to` and skip `test_succeeded`. The predicate is for *follow-up* branches in the same section that are conditional on the outcome but separate from the test's primary navigation — or, as here, for the case where the test itself dispatches no immediate navigation and the section's choices use the predicate to express both branches uniformly.
+
+**Event-level gating.** Like all conditions, `test_succeeded` / `test_failed` also gate event-level `condition` fields. A `modify_stat` event with `condition: {type: "test_failed"}` runs only if the previous roll failed; this is the structural alternative to embedding the loss in the unlucky range's `effects` array. Use the `effects`-array shape when the loss is tightly coupled to the roll branch (and the encoding lives next to the rest of the branch's logic); use a separate event with a `test_failed` condition when the loss is sequenced with other follow-up events and reading the events in order is clearer than reading them inside the `roll_dice` block.
+
+**Verification.** For every section that contains a `stat_test` or a `roll_dice` event, scan the rest of the section's text for follow-up phrases that gate on the roll's outcome ("if you passed / failed", "if you were Lucky / Unlucky", "if your roll succeeded"). Each such phrase should map to either (a) a section-level choice or event with a `test_succeeded` / `test_failed` condition, (b) the `roll_dice` resolution's `success_to` / `failure_to` directly, or (c) an explicit `set_flag` in an `effects` array if the gate is consumed across a section transition. A follow-up phrase with no corresponding mechanic is a likely miss — the player will not see the gated branch when they reach it.
 
 ---
 
@@ -5308,7 +5381,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.38.0 / GBF schema v1.26.0 / CLI emulator v3.21.3 / HTML emulator v3.19.0** (HTML emulator pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.38.0 adds the post-parse coverage check to Step 7 — a layman-friendly walkthrough of recovering stranded sections, paired with the new `scripts/check-reachability.js` tool — no schema or emulator change; see CHANGELOG).
+**Codex v2.39.0 / GBF schema v1.27.0 / CLI emulator v3.22.0 / HTML emulator v3.20.0** (HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.39.0 adds Rule 44 — the `test_succeeded` / `test_failed` post-roll outcome predicate, available on both `stat_test` and `roll_dice` resolutions via the new `results[range].outcome` tag, schema-additive; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

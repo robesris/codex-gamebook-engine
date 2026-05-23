@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.26.0",
+  "title": "Gamebook Format (GBF) v1.27.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -711,7 +711,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "has_talent", "not", "and", "or", "test_failed", "has_equipped_item", "has_equipped_in_slot", "has_equipped_with_property", "is_equipped", "section_had_no_endurance_loss", "section_had_no_combat", "combat_round_count_lte", "combat_round_count_gte"]
+          "enum": ["has_item", "has_flag", "stat_gte", "stat_lte", "has_ability", "has_talent", "not", "and", "or", "test_failed", "test_succeeded", "has_equipped_item", "has_equipped_in_slot", "has_equipped_with_property", "is_equipped", "section_had_no_endurance_loss", "section_had_no_combat", "combat_round_count_lte", "combat_round_count_gte"]
         },
         "item": { "type": "string", "description": "For has_item: item_id to check in inventory. For has_equipped_item: item_id to check in any equipped slot. For has_equipped_in_slot: optional item_id to require in the named slot (if omitted, the condition evaluates true as long as the slot is non-empty). For is_equipped (schema v1.20+): item_id whose currently-equipped state is checked — distinguished from has_equipped_item only in intent (is_equipped is the canonical condition for gating Rule 36 triggered_effects on equipment-slot occupancy, while has_equipped_item is the gate for damage_interactions and Rule 17 modifiers); both check the same state." },
         "flag": { "type": "string", "description": "For has_flag: flag name to check." },
@@ -868,6 +868,11 @@
                 "type": "array",
                 "description": "Schema v1.8+. Per-range side effects applied when this range matches. Each entry is a full event object from the shared event definition (`modify_stat`, `add_item`, `remove_item`, `set_flag`, `remove_inventory_category`, `script`, etc.). Applied in order AFTER the range match is determined and BEFORE the `target` navigation (if any), so a range entry can both change state and navigate in a single roll. Use this for the canonical Pattern 7.6.9 shape where one branch of a roll attaches a mechanical side effect — e.g. 'if the number is 4 or lower, you have fallen. Lose 2 ENDURANCE points and turn to 140. If the number is 5 or higher, turn to 323' encodes as `results: { '0-4': { effects: [{ type: 'modify_stat', stat: 'ENDURANCE', amount: -2 }], target: 140 }, '5-9': { target: 323 } }`. Effects apply regardless of whether `target` is set; an effects-only range with `target: null` produces a stat change and leaves the player on the current section. See Rule 22 in the codex doc for the full specification.",
                 "items": { "$ref": "#/definitions/event" }
+              },
+              "outcome": {
+                "type": "string",
+                "enum": ["success", "failure"],
+                "description": "Schema v1.27+ (Rule 44). Optional tag that records the dice resolution as a logical success or failure for use by the `test_succeeded` / `test_failed` post-roll condition predicate. When the rolled total matches this range, the emulator sets `state.lastTestResult` (true for 'success', false for 'failure') BEFORE the per-range `effects` array and the `target` navigation run. The flag is then visible to any subsequent choice or event that carries a `condition.type` of `test_succeeded` or `test_failed` — either in this same section, on the section navigated to by `target`, or in events queued in the result's `effects` array. Cleared on the next `navigateTo`, the next `stat_test` resolution, or the next `roll_dice` resolution that overwrites it. Use this for Fighting Fantasy Test-your-Luck encoded as `roll_dice` (where the lucky range tags as 'success' and the unlucky range as 'failure') and for any roll-driven pass/fail check whose downstream effects depend on the binary outcome. Opt-in and backwards-compatible: results entries without an `outcome` tag leave `state.lastTestResult` unchanged."
               }
             }
           }
@@ -1121,7 +1126,7 @@
             { "$ref": "#/definitions/condition" },
             { "type": "null" }
           ],
-          "description": "Optional gate evaluated once at combat start. Same condition union as combat_modifiers and event/choice conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`). Condition filtering gates the entire interaction on player/world state; source filtering (`source_has_any` / `source_lacks_all`) gates per damage component on what the round_script emits. The two filters compose: a condition of `{has_equipped_with_property: 'holy'}` combined with `source_has_any: ['undead_slayer']` means 'this interaction applies only when the player has a holy-tagged equipped item AND the damage component is tagged with undead_slayer'. Condition filtering is frozen at combat start so mid-combat state changes do not re-evaluate. Null or absent means the interaction is not condition-gated."
+          "description": "Optional gate evaluated once at combat start. Same condition union as combat_modifiers and event/choice conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`, `test_succeeded`). Condition filtering gates the entire interaction on player/world state; source filtering (`source_has_any` / `source_lacks_all`) gates per damage component on what the round_script emits. The two filters compose: a condition of `{has_equipped_with_property: 'holy'}` combined with `source_has_any: ['undead_slayer']` means 'this interaction applies only when the player has a holy-tagged equipped item AND the damage component is tagged with undead_slayer'. Condition filtering is frozen at combat start so mid-combat state changes do not re-evaluate. Null or absent means the interaction is not condition-gated."
         },
         "reason": {
           "type": "string",
@@ -1150,7 +1155,7 @@
             { "$ref": "#/definitions/condition" },
             { "type": "null" }
           ],
-          "description": "Optional gate evaluated once at combat start. Same condition union as combat_modifiers and damage_interactions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`). Condition filtering gates the entire cap on player/world state. Frozen at combat start; mid-combat state changes do not re-evaluate. Null or absent means the cap is not condition-gated and always applies for the fight's duration. Compound `and` / `or` / `not` conditions are first-class (canonical: §564 Words of Protection requires both the book in inventory AND the recorded-Word flag set)."
+          "description": "Optional gate evaluated once at combat start. Same condition union as combat_modifiers and damage_interactions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`, `test_succeeded`). Condition filtering gates the entire cap on player/world state. Frozen at combat start; mid-combat state changes do not re-evaluate. Null or absent means the cap is not condition-gated and always applies for the fight's duration. Compound `and` / `or` / `not` conditions are first-class (canonical: §564 Words of Protection requires both the book in inventory AND the recorded-Word flag set)."
         },
         "reason": {
           "type": "string",
@@ -1199,7 +1204,7 @@
             { "$ref": "#/definitions/condition" },
             { "type": "null" }
           ],
-          "description": "Optional gate evaluated at trigger-firing time. Same condition union as event conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_talent`, `is_equipped`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`). Distinguished from `gate_roll` — the condition is a deterministic state check; the gate_roll is a dice-driven probabilistic gate. Both may be present on the same entry; both must pass for the effect to fire. Unlike damage_cap / combat_modifier conditions (frozen at combat start), triggered_effect conditions evaluate at each firing — mid-combat state changes do re-evaluate."
+          "description": "Optional gate evaluated at trigger-firing time. Same condition union as event conditions (`has_item`, `has_flag`, `stat_gte`, `stat_lte`, `has_ability`, `has_talent`, `is_equipped`, `has_equipped_item`, `has_equipped_in_slot`, `has_equipped_with_property`, `not`, `and`, `or`, `test_failed`, `test_succeeded`). Distinguished from `gate_roll` — the condition is a deterministic state check; the gate_roll is a dice-driven probabilistic gate. Both may be present on the same entry; both must pass for the effect to fire. Unlike damage_cap / combat_modifier conditions (frozen at combat start), triggered_effect conditions evaluate at each firing — mid-combat state changes do re-evaluate."
         },
         "gate_roll": {
           "type": "object",

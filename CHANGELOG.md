@@ -6,6 +6,26 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.39.0 / GBF v1.27.0 / CLI emulator v3.22.0 / HTML emulator v3.20.0
+
+**Rule 44 — post-roll outcome predicate (`test_succeeded` / `test_failed`).** Adds first-class encoding for the FF / LW / GrailQuest pattern "If you successfully tested your Luck …" / "If your Skill roll failed …" — a follow-up choice or event whose availability depends on the binary outcome of an earlier dice roll in the same section. The two predicates `test_succeeded` and `test_failed` already lived in the codex doc prose and in the CLI / HTML emulators' condition evaluators (set by `stat_test` resolution), but `test_succeeded` was missing from the GBF schema's condition enum, so AJV validation rejected any book that used it — causing the Warlock fresh-parse pass to drop 12 conditional choices across the book (§91, §131, §198, §333, §350, §390, §396) when no schema-allowed encoding existed.
+
+The fix is two coordinated changes:
+
+- **Schema condition enum** (`codex.schema.json` line 714) now lists `test_succeeded` alongside `test_failed`. Sweeps the prose enumerations at lines 1124, 1153, and 1202 (combat_modifier / damage_cap / triggered_effect descriptions) so the documented condition union is consistent across the schema.
+- **`roll_dice.results[range].outcome`** new optional string field (`"success" \| "failure"`). When the rolled total matches a tagged range, the emulator records the outcome on `state.lastTestResult` BEFORE the per-range `effects` array and the `target` navigation run, so subsequent in-section choices and events can gate on `test_succeeded` / `test_failed`. This covers the FF series convention of encoding Test-your-Luck as `roll_dice` with `'lucky'` / `'unlucky'` range keys (rather than as a `stat_test`). Untagged ranges leave `lastTestResult` unchanged — fully backwards-compatible.
+
+Both predicates share a single `state.lastTestResult` slot, set by either `stat_test` (always, on resolution) or `roll_dice` (when the matched range carries `outcome`), and cleared at the next section entry (Rule 44's scope is in-section). Cross-section gating still uses an explicit `set_flag` + `has_flag`.
+
+- **Codex doc** v2.37.0 → v2.39.0 (catches up the title that drifted at v2.38.0; the version-identifiers footer was already at v2.38.0). New **Rule 44** with two worked examples (`roll_dice` with `outcome` tags, and `stat_test` with `success_to: null / failure_to: null`), trigger-phrasing checklist, distinguishment from a fresh roll, event-level vs choice-level gating guidance, and a verification step. **Rule 22** picks up a short "Pass/fail outcome tagging" paragraph cross-referencing Rule 44. New row in the Topical Decision Table.
+- **GBF schema** v1.26.0 → v1.27.0. `test_succeeded` added to the condition `type` enum. `outcome` field added to `roll_dice.results[*]`. Three condition-union prose enumerations updated. Schema-additive — pre-v1.27 books validate unchanged.
+- **CLI emulator** v3.21.3 → v3.22.0. `case 'roll_dice'` resolution sets `state.lastTestResult` from `matchedEntry.outcome` when the field is present, before per-range effects fire.
+- **HTML emulator** v3.19.0 → v3.20.0. Mirrors the CLI change in the `roll_dice` resolution path; reads/writes `window._lastTestResult` per the existing convention.
+- **Tests** (`tests/run.js`): five new tests cover success/failure outcome propagation, the no-op untagged path, schema-enum membership, and the v1.27 schema-additive guarantee. Total now 68/68.
+- **Browser verifier** (`dist/verify-book.bundle.js`) rebuilt from the updated schema + shared sources via `npm run build-verifier`.
+
+**Surfaced by:** the Warlock fresh-parse REMEDIATION pass (codex v2.37.0). The 12 dropped REMEDIATION conditions in `claude_session/warlock_fresh_parse_chat39_v237.json` parser_notes — `test_succeeded` (§91), `if_lucky` (§198), `luck_test_passed` / `unlucky_high_roll` (§333), and the post-combat `if_win` / flag-style remainders — collectively traced to the missing schema-allowed encoding for the post-roll predicate. The §91 case unlocks immediately on schema-enum re-validation; the §198 / §333 luck-test cases unlock when the future Warlock re-remediation tags the `'lucky'` / `'unlucky'` result keys with the new `outcome` field.
+
 ## v2.38.0 / GBF v1.26.0 / CLI emulator v3.21.3 / HTML emulator v3.19.0
 
 **Step 7 — post-parse coverage check (layman-friendly).** The codex `INTERACTIVE FLOW` Step 7 previously said only "Run verification checks on the complete output. Deliver the JSON file." That single line covered the schema validator and not much else, and silently allowed parses where some sections were *structurally* in the book but unreachable from §1 — including, in the worst case, an unreachable victory ending. Surfaced by the Warlock fresh-parse run, where 23 sections in the parsed output had no other section pointing to them and the §400 victory was disconnected.

@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title bumped to v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title bumped to v1.27.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title at v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title at v1.27.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title bumped to v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title bumped to v1.27.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,161 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.26.0', 'schema title is v1.26.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
+});
+
+// ============================================================
+// Test: Rule 44 v2.39.0 — roll_dice with outcome tag sets
+// state.lastTestResult so a follow-up test_succeeded /
+// test_failed condition fires.
+//
+// MOTIVATED_BY: FF books encode Test-your-Luck as roll_dice with
+// 'lucky' / 'unlucky' range keys (not stat_test). Before Rule 44 a
+// post-roll choice like "if you successfully tested your Luck, take
+// the dagger" had no schema-allowed encoding and got dropped.
+// ============================================================
+
+test('Rule 44 v2.39.0: roll_dice success outcome sets lastTestResult true', () => {
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'test your luck',
+        events: [{
+          type: 'roll_dice',
+          dice: 'R10',
+          prompt: 'Test your Luck',
+          results: {
+            '0-4': { text: 'Lucky.',   outcome: 'success', target: null },
+            '5-9': { text: 'Unlucky.', outcome: 'failure', target: null },
+          },
+        }],
+        choices: [
+          { text: 'Take the dagger', target: '2', condition: { type: 'test_succeeded' } },
+          { text: 'Carry on',        target: '3', condition: { type: 'test_failed' } },
+        ],
+      },
+      '2': { text: 'dagger', events: [], choices: [], is_ending: false },
+      '3': { text: 'no dagger', events: [], choices: [], is_ending: false },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  play.navigateTo(state, book, '1');
+  // Force a lucky roll (2 → within 0-4).
+  play.applyAction(state, book, 'provide_roll', [2]);
+  assertEqual(state.lastTestResult, true, 'outcome:success set lastTestResult to true');
+  // The roll has target:null so we stay on §1 and present choices.
+  assertEqual(state.currentSection, '1', 'stayed on §1 with no target');
+  const avail = play.getAvailableActions(state, book);
+  assertTrue(avail && avail.some(a => /dagger/i.test(a.label || a.text || JSON.stringify(a))),
+    'test_succeeded choice is available after lucky roll');
+});
+
+test('Rule 44 v2.39.0: roll_dice failure outcome sets lastTestResult false', () => {
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'test',
+        events: [{
+          type: 'roll_dice',
+          dice: 'R10',
+          prompt: 'Test your Luck',
+          results: {
+            '0-4': { outcome: 'success', target: null },
+            '5-9': { outcome: 'failure', target: null },
+          },
+        }],
+        choices: [
+          { text: 'lucky path',   target: '2', condition: { type: 'test_succeeded' } },
+          { text: 'unlucky path', target: '3', condition: { type: 'test_failed' } },
+        ],
+      },
+      '2': { text: 'win', events: [], choices: [], is_ending: false },
+      '3': { text: 'lose', events: [], choices: [], is_ending: false },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'provide_roll', [8]);
+  assertEqual(state.lastTestResult, false, 'outcome:failure set lastTestResult to false');
+});
+
+test('Rule 44 v2.39.0: untagged roll_dice range leaves lastTestResult unchanged', () => {
+  // target:null means the roll stays on §1, so we can read lastTestResult
+  // after resolution without navigation clearing it.
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'roll for damage',
+        events: [{
+          type: 'roll_dice',
+          dice: 'R10',
+          prompt: 'roll',
+          results: { '0-9': { target: null } },
+        }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  play.navigateTo(state, book, '1');
+  // Seed lastTestResult AFTER navigateTo (which clears it). The untagged
+  // roll must not clobber the seeded value.
+  state.lastTestResult = true;
+  play.applyAction(state, book, 'provide_roll', [4]);
+  assertEqual(state.lastTestResult, true, 'untagged result entry left lastTestResult untouched');
+});
+
+test('Rule 44 v2.39.0: test_succeeded is in the schema condition enum', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const condEnum = schema.definitions.condition.properties.type.enum;
+  assertTrue(condEnum.includes('test_succeeded'), 'test_succeeded present in condition enum');
+  assertTrue(condEnum.includes('test_failed'), 'test_failed still present in condition enum');
+});
+
+test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  const book = {
+    metadata: { title: 'Book', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'X', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      '1': {
+        text: 'x',
+        events: [{
+          type: 'roll_dice',
+          dice: '1d6',
+          // pre-v1.27 — no outcome tag on any results entry
+          results: { '1-3': { target: '1' }, '4-6': { target: '1' } },
+        }],
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.27.0', 'schema title is v1.27.0');
 });
 
 // ============================================================
