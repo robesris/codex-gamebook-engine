@@ -5381,6 +5381,23 @@ The agent must translate from schema concepts to player-facing language. The tra
 
 For unknown book families, the agent uses generic English and inspects the book's own narrative for the stat names, item-category terminology, and discipline/skill names it actually uses. The translation table is a starting point; the agent's broader job is to talk in whatever vocabulary the book itself uses.
 
+**Avoid dev/jargon shorthand even when no schema name is involved.** A handful of casual technical terms creep into prose without sounding "schema-ish" but are still opaque to a regular user. Translate them:
+
+| Dev shorthand | Player-facing phrasing |
+|---|---|
+| "chargen" | "character creation" or "the starting setup" or "when you make your character" |
+| "the parser" / "the parse" | (omit — the user does not need to know there was a parser) |
+| "the validator" | (omit — say "the check that runs on the book" if a reference is unavoidable, or restructure to avoid mention) |
+| "schema" / "schema-valid" | (omit — say "the format the engine expects" only if unavoidable) |
+| "the engine" / "the emulator" | "the game" or "when you play it" — usually omit the actor entirely |
+| "the catalog" / "items_catalog" | "the list of items the book defines" or "the book's item list" |
+| "soft check" / "soft finding" | "a thing the auto-check noticed but isn't blocking" — or just describe the thing |
+| "the codex" | (omit — codex internals are never user-facing) |
+| "false positive" | "the check is wrong here" or "this one isn't actually broken" |
+| "engine gap" | "a thing the game doesn't yet know how to do" |
+
+The cardinal-rule test in §12.1 still applies: read the question aloud and ask whether a player familiar with the book's narrative — but not with this project's tooling — would understand every word. If any word would make them squint, replace it.
+
 ### 12.3 The y/n/flavor/show/other answer protocol
 
 Each user-facing question carries a standard five-option answer menu:
