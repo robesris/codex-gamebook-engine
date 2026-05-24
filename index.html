@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.21.0';
+const CODEX_EMULATOR_VERSION = '3.22.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -751,6 +751,16 @@ let state = {
   // BEFORE the lifecycle trigger fires. Null = no combat resolved yet;
   // combat_round_count_lte/gte conditions return false on null.
   lastCombatRoundCount: null,
+  // Schema v1.30+ / codex v2.42 (Rule 46). Paused-combat snapshot.
+  // Null when no combat is paused. When an interrupt_after_player_wounds
+  // or interrupt_after_enemy_wounds fires the engine snapshots the
+  // in-progress combat here (enemy_ref + enemy_snapshot + currentHealth
+  // + frozen modifiers + wound + round counters) and navigates to the
+  // interrupt's target. A downstream combat event with mode='resume'
+  // continues the fight at preserved STAMINA; mode='start' (default)
+  // clears + replaces; mode='modify' adjusts in place (wandering-monster
+  // pattern). See codex Rule 46.
+  activeCombat: null,
 };
 
 // ==================== UTILITY ====================
@@ -3179,24 +3189,97 @@ function handleChooseItems(event) {
 
 // ==================== COMBAT ====================
 function handleCombat(event) {
+  // Schema v1.30+ / Rule 46. Resolve the lifecycle mode independently of
+  // the multi-enemy ordering mode (the `mode` field is overloaded across
+  // the two axes). Lifecycle defaults to 'start' when absent or when the
+  // value is a multi-enemy ordering value.
+  const lifecycleMode =
+    (event.mode === 'resume' || event.mode === 'modify') ? event.mode : 'start';
+
+  // Rule 46 'modify' — adjust state.activeCombat in place without
+  // engaging combat. Mirrors cli-emulator/play.js startCombat(). No
+  // DOM render happens for modify; the section's choices / subsequent
+  // events render normally. The caller (processNextEvent / the section
+  // event loop) will continue past this event.
+  if (lifecycleMode === 'modify') {
+    if (!state.activeCombat && !event.enemy_ref) {
+      console.warn('R46 modify: no state.activeCombat and no enemy_ref to seed; skipping');
+      processNextEvent();
+      return;
+    }
+    if (!state.activeCombat) {
+      const data = getEnemy(event.enemy_ref) || {};
+      state.activeCombat = {
+        enemy_ref: event.enemy_ref,
+        enemy_snapshot: JSON.parse(JSON.stringify(data)),
+        currentHealth: getEnemyHealth(data),
+        modifiers: [],
+        damageInteractions: [],
+        damageCaps: [],
+        woundsDealt: 0,
+        woundsTaken: 0,
+        round: 0,
+        consecutiveLosses: 0,
+        originSection: state.currentSection,
+        originEventIdx: 0,
+      };
+    }
+    if (event.enemy_ref && event.enemy_ref !== state.activeCombat.enemy_ref) {
+      const data = getEnemy(event.enemy_ref) || {};
+      state.activeCombat.enemy_ref = event.enemy_ref;
+      state.activeCombat.enemy_snapshot = JSON.parse(JSON.stringify(data));
+      if (typeof event.current_health !== 'number') {
+        state.activeCombat.currentHealth = getEnemyHealth(data);
+      }
+    }
+    if (typeof event.current_health === 'number') {
+      state.activeCombat.currentHealth = Math.max(0, event.current_health);
+    }
+    processNextEvent();
+    return;
+  }
+
   const content = document.getElementById('game-content');
   const area = document.createElement('div');
   area.className = 'combat-area';
   content.appendChild(area);
 
-  // Resolve enemies list
+  // Resolve enemies list. Rule 46 'resume' reads enemy state from
+  // state.activeCombat; 'start' (default) reads from the event +
+  // enemies_catalog as before, and clears any stale activeCombat.
   let enemies = [];
-  if (event.enemies) {
-    enemies = event.enemies.map(e => {
-      const data = getEnemy(e.ref);
-      return { ...data, ref: e.ref, currentHealth: getEnemyHealth(data) };
-    });
-  } else if (event.enemy_ref) {
-    const data = getEnemy(event.enemy_ref);
-    enemies = [{ ...data, ref: event.enemy_ref, currentHealth: getEnemyHealth(data) }];
+  let resumed = false;
+  if (lifecycleMode === 'resume') {
+    if (!state.activeCombat) {
+      console.warn('R46 resume: no state.activeCombat to resume; falling back to start');
+    } else {
+      const ac = state.activeCombat;
+      const snap = ac.enemy_snapshot || getEnemy(ac.enemy_ref) || {};
+      enemies = [{ ...snap, ref: ac.enemy_ref, currentHealth: ac.currentHealth }];
+      resumed = true;
+    }
+  }
+  if (!resumed) {
+    if (lifecycleMode === 'start' && state.activeCombat) {
+      state.activeCombat = null;
+    }
+    if (event.enemies) {
+      enemies = event.enemies.map(e => {
+        const data = getEnemy(e.ref);
+        return { ...data, ref: e.ref, currentHealth: getEnemyHealth(data) };
+      });
+    } else if (event.enemy_ref) {
+      const data = getEnemy(event.enemy_ref);
+      enemies = [{ ...data, ref: event.enemy_ref, currentHealth: getEnemyHealth(data) }];
+    }
   }
 
-  const mode = event.mode || 'sequential';
+  // Multi-enemy ordering mode. The `mode` field is overloaded with
+  // lifecycle values too (Rule 46); fall back to 'sequential' when the
+  // value is a lifecycle value, mirroring the CLI emulator's split.
+  const mode = (event.mode === 'resume' || event.mode === 'modify' || event.mode === 'start' || !event.mode)
+    ? 'sequential'
+    : event.mode;
   const winTo = event.win_to;
   const fleeTo = event.flee_to || null;
   const specialRules = event.special_rules || null;
@@ -3537,6 +3620,17 @@ function handleCombat(event) {
     // combat_modifiers carrying a `removed_after_consecutive_losses`
     // threshold.
     consecutiveLosses: 0,
+    // Schema v1.30+ / Rule 46. Per-fight wound counters distinct from
+    // consecutiveLosses (which is a streak that resets on non-loss
+    // rounds). wounds counters are monotonic across the fight and drive
+    // the interrupt-after-N-wounds checks below. Reset to 0 on every
+    // combat start AND on every Rule 46 resume — each resumed combat
+    // gets its own interrupt window.
+    woundsDealt: 0,
+    woundsTaken: 0,
+    interruptAfterPlayerWounds: event.interrupt_after_player_wounds || null,
+    interruptAfterEnemyWounds: event.interrupt_after_enemy_wounds || null,
+    lifecycleMode,
     // When combat ends (victory or flee), this holds the section id
     // the Continue button should navigate to. If null, Continue falls
     // through to processNextEvent() instead.
@@ -3905,6 +3999,16 @@ function handleCombat(event) {
       c.lastRoundResult = null;
     }
 
+    // Schema v1.30+ / Rule 46. Update monotonic per-fight wound counters
+    // from the round_script's last_result tag. Ties / simultaneous / no-
+    // damage rounds do NOT increment. These drive the interrupt-after-N-
+    // wounds checks in checkCombatEnd.
+    if (lr === 'player_wounds_enemy') {
+      c.woundsDealt = (c.woundsDealt || 0) + 1;
+    } else if (lr === 'enemy_wounds_player') {
+      c.woundsTaken = (c.woundsTaken || 0) + 1;
+    }
+
     updateStatBar();
 
     // Check for post-round script (luck testing, etc.)
@@ -3998,9 +4102,52 @@ function handleCombat(event) {
     if (getPlayerHealth() <= 0) {
       c.combatLog.push('<span class="hit">You have been slain!</span>');
       c.renderCombat();
+      // Rule 46: death clears any active combat snapshot — a dead
+      // player cannot resume a paused fight.
+      state.activeCombat = null;
       setTimeout(() => {
         showEnding({ text: 'You have fallen in combat. Your adventure is over.', ending_type: 'death', events: [], choices: [] });
       }, 1000);
+      return;
+    }
+
+    // Schema v1.30+ / Rule 46. Interrupt-after-N-wounds check. Mirrors
+    // the cli-emulator behavior: runs BEFORE win_after_rounds /
+    // end_after_rounds / enemy-defeated; player-wounds takes priority
+    // over enemy-wounds when both fire on the same round. Pause action:
+    // snapshot enemy state into state.activeCombat (preserving frozen
+    // modifiers + wound + round counters) and route Continue to the
+    // interrupt's target. on_combat_end does NOT fire on a pause — the
+    // combat is not ended, only paused.
+    function pauseCombatTo(reason, target) {
+      const snapEnemy = getEnemy(enemy.ref) || enemy;
+      state.activeCombat = {
+        enemy_ref: enemy.ref,
+        enemy_snapshot: JSON.parse(JSON.stringify(snapEnemy)),
+        currentHealth: enemy.currentHealth,
+        modifiers: (c.appliedModifiers || []).slice(),
+        damageInteractions: (c.appliedDamageInteractions || []).slice(),
+        damageCaps: (c.appliedDamageCaps || []).slice(),
+        woundsDealt: c.woundsDealt || 0,
+        woundsTaken: c.woundsTaken || 0,
+        round: c.roundNum,
+        consecutiveLosses: c.consecutiveLosses || 0,
+        originSection: state.currentSection,
+        originEventIdx: 0,
+      };
+      c.combatLog.push(`<span>R46 ${reason}: pausing vs ${enemy.name || enemy.ref} at ${enemy.currentHealth} health → §${target}</span>`);
+      c.combatOver = true;
+      c.combatEndTarget = target;
+      c.renderCombat();
+    }
+    const iap = c.interruptAfterPlayerWounds;
+    if (iap && typeof iap.count === 'number' && (c.woundsTaken || 0) >= iap.count && iap.target !== undefined && iap.target !== null) {
+      pauseCombatTo(`interrupt_after_player_wounds (${c.woundsTaken}/${iap.count})`, iap.target);
+      return;
+    }
+    const iae = c.interruptAfterEnemyWounds;
+    if (iae && typeof iae.count === 'number' && (c.woundsDealt || 0) >= iae.count && iae.target !== undefined && iae.target !== null) {
+      pauseCombatTo(`interrupt_after_enemy_wounds (${c.woundsDealt}/${iae.count})`, iae.target);
       return;
     }
 
@@ -4017,6 +4164,8 @@ function handleCombat(event) {
       if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
       state.lastCombatRoundCount = c.roundNum;
       r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
+      // Rule 46: normal completion clears any active combat snapshot.
+      state.activeCombat = null;
       c.combatOver = true;
       c.combatEndTarget = c.winTo;
       c.renderCombat();
@@ -4036,6 +4185,8 @@ function handleCombat(event) {
       if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
       state.lastCombatRoundCount = c.roundNum;
       r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
+      // Rule 46: normal completion clears any active combat snapshot.
+      state.activeCombat = null;
       c.combatOver = true;
       c.combatEndTarget = (c.endTo !== undefined && c.endTo !== null) ? c.endTo : state.currentSection;
       c.renderCombat();
@@ -4068,6 +4219,8 @@ function handleCombat(event) {
         if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
         state.lastCombatRoundCount = c.roundNum;
         r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
+        // Rule 46: normal completion clears any active combat snapshot.
+        state.activeCombat = null;
         c.combatOver = true;
         c.combatEndTarget = c.winTo;
         c.renderCombat();
@@ -4107,6 +4260,9 @@ function handleCombat(event) {
     // lastCombatRoundCount so post-combat conditions evaluate correctly.
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
     state.lastCombatRoundCount = c.roundNum;
+    // Rule 46: player-initiated flee is normal combat completion —
+    // clear any active combat snapshot.
+    state.activeCombat = null;
 
     if (getPlayerHealth() <= 0) {
       c.checkCombatEnd();
@@ -5153,6 +5309,9 @@ function r36_useItem(itemId) {
     if (state.sectionEntrySnapshot) state.sectionEntrySnapshot.hadCombat = true;
     state.lastCombatRoundCount = combat.roundNum;
     r36_dispatchLifecycleTriggers('on_combat_end', { combatScope: true });
+    // Rule 46: R36 flee_combat is normal combat completion — clear any
+    // active combat snapshot.
+    state.activeCombat = null;
     combat.combatOver = true;
     combat.combatEndTarget = fledTo;
     window._combat = null;
