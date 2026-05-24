@@ -1,4 +1,4 @@
-# THE GAMEBOOK CODEX v2.41.0
+# THE GAMEBOOK CODEX v2.42.0
 ## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
 
 ---
@@ -340,6 +340,7 @@ The table exists because the codex doc is read by an AI that does not search it 
 | "Restored *to* your Initial total" / "STAMINA is fully restored" / "you are healed to full" — SET phrasing, no numeric amount stated; outcome is "you are at Initial" regardless of how far below you were | Rule 45 (schema v1.28+) | `restore_to_initial` event with `stat` matching a declared `rules.stats[].name`. Semantics: `stat = max(current, initial)` — raises current to Initial, never lowers. Distinguished from the clamped-ADD shape ("regain N, up to Initial") which uses `modify_stat` + `initial_is_max: true` on the stat. NEVER `modify_stat: +999` with a parser_note about manual clamping — that's an earlier workaround that fails visibly when `initial_is_max` is missing from the stat declaration. |
 | "Regain N, up to your Initial" / "restores 4 ENDURANCE points per dose" / numeric heal capped at Initial | Rule 45 (no schema change; uses existing `initial_is_max`) | Ordinary `modify_stat` with `amount: N` AND ensure the relevant stat declaration in `rules.stats[]` carries `initial_is_max: true`. The `modify_stat` handler clamps `newVal = min(current + amount, initial)` automatically when the flag is set. Distinguished from SET phrasing (which uses `restore_to_initial`) — the difference is whether the source text states a numeric amount. |
 | "If you kill him within N rounds of combat, turn to X / If you are still fighting after N rounds of combat, turn to Y / You may evade after M rounds by turning to Z" / "After M rounds of combat you position yourself to flee" | Rule 38 (schema v1.23+ round-count combat semantics) | Combat event carries `end_after_rounds: N, end_to: Y` for the broken-off auto-end AND/OR `flee_available_after_round: M` for the round-gated evade. Post-combat choices carry `combat_round_count_lte: N` (the kill-within-N branch) and `combat_round_count_gte: N+1` (the still-fighting branch). NEVER a `script` event that reads `combat.round` and calls `navigate_to` — that hides the round-cap from structured enforcement |
+| Mid-combat interrupt — "after your Nth wound, turn to X" / "after you inflict your first wound on him, turn to Y" / "the fight goes on" + recurring per-Nth-wound interlude pattern | Rule 46 (schema v1.30+) | Combat event with `interrupt_after_player_wounds: {count, target}` for the wounds-TAKEN interrupt or `interrupt_after_enemy_wounds: {count, target}` for the wounds-DEALT interrupt. The pause writes `state.activeCombat` (preserving enemy STAMINA, frozen modifiers, round + wound counters). A downstream combat event with `mode: 'resume'` continues the same fight at preserved STAMINA; `mode: 'start'` (default, absent) replaces any stale activeCombat. The "every Nth wound costs 1 SKILL / continue / flee" recurring loop is encoded by giving both the original combat event and the resumed continuation the same `interrupt_after_player_wounds` (each pause writes a fresh interlude visit; resume opens a new interrupt window). Distinguished from Rule 38's `end_after_rounds` (counts ROUND number, not wounds) and Rule 31's `win_after_rounds` (endurance victory after N rounds). Supersedes the deprecated boolean `interrupt_on_first_player_hit` — migrate to `interrupt_after_enemy_wounds: {count: 1, target: ...}`. See Rule 46 for the full specification including FF Warlock §41 / §173 worked examples and the `mode: 'modify'` extension for wandering-monster determination. |
 | Book-wide combat rule stated in the *rules section* (not in any specific encounter) — "if you enter combat with no weapons, deduct 4 from COMBAT SKILL", "while wearing the Ring of Hostility all enemies attack at +1", any universal combat rule keyed on player state | Rule 23 | `rules.combat_system.standing_modifiers[]` (schema v1.8+). One `combat_modifier` entry per rule, with `target` dot-path, signed `delta`, optional `condition` for "applies when…" rules, optional `reason`. Emulator merges with per-section `combat_modifiers` and per-enemy `intrinsic_modifiers` at every combat's start. Never re-encode the same rule per-section — that's lossy (misses fights the parser forgets) and redundant. |
 | Section describes losing an entire inventory category — "you lose the Pack and all the Equipment that was inside it" (LW1 §188 Kraan Backpack loss), "your weapons are confiscated", "all your Special Items are stripped from you" | Rule 24 | `remove_inventory_category` event (schema v1.8+) with `category` matching the book's own `inventory_category` string (e.g. `"backpack"`, `"special"`, `"weapons"`). Single event replaces per-id `remove_item` sequences; auto-unequips any equipped items whose id falls in the removed category. |
 | Computed navigation: "add up your gold and turn to that section" / cipher-style page jumps | Section 8.1 | `input_number` event with `target: "computed"` and a documented formula |
@@ -3171,6 +3172,133 @@ ENDURANCE is declared `initial_is_max: true` in LW1's `rules.stats[]`, so the +4
 
 This rule does not introduce new ceiling-management primitives; `modify_initial` (Rule 30) still moves the ceiling. Rule 45 specifies which primitive expresses "heal up to ceiling" cleanly for each of the two source shapes.
 
+### Rule 46: Pausable / Resumable Combat as Active State
+
+**One-line summary.** A combat can be paused mid-fight by an Nth-wound interrupt and resumed at a later section with the enemy's STAMINA, frozen modifiers, and round / wound counters preserved.
+
+**The source-text shapes this addresses.**
+
+1. **First-wound exit ("after you have inflicted your first wound on him, turn to X").** The fight ends after the player lands one successful blow — typically because the enemy reveals an immunity, retreats, or the narrative shifts. The destination is a NEW situation, not a paused fight. Example: FF Warlock §41's Wight reveals it is immune to ordinary weapons after the first wound and the player must navigate to §310 (where they learn they need a silver weapon and may re-engage at §211).
+
+2. **Nth-wound interrupt with resume ("after your third wound, turn to X. ... Otherwise the fight goes on").** The fight pauses mid-flow for a narrative interlude. The player may make a choice (typically lose-some-stat-and-continue OR flee), and on "continue" the SAME fight resumes against the SAME enemy at its CURRENT remaining STAMINA, often with a new modifier introduced by the interlude. Example: FF Warlock §173 + §24. After the player's third wound the §173 Wight fight pauses to §24, which presents continue (-1 SKILL, fight resumes with every-third-wound recurring) or flee.
+
+3. **Dynamic enemy determination ("roll to determine which monster appears").** A roll table selects the enemy at runtime; the combat that follows uses the selected enemy. Future extension via `mode: 'modify'` — the roll's per-range effect writes the chosen `enemy_ref` (and optionally `current_health`) into `state.activeCombat`, and a downstream `mode: 'resume'` combat engages the selected enemy. Pre-Rule-46 this pattern was expressible via `roll_dice` + per-result combat events (one branch per enemy); Rule 46 lets it collapse to a single combat event when the enemy roster is too large to enumerate cleanly per-range.
+
+**Schema additions (v1.30+).**
+
+On the `combat` event type:
+
+- `mode: "start" | "resume" | "modify"` (default `"start"`). The same `mode` field continues to carry the multi-enemy ordering values (`"sequential"`, `"simultaneous"`, `"player_choice"`); the lifecycle and ordering axes coexist on the same field. A `combat` event with `mode: "resume"` defaults its ordering to `"sequential"`, and a `combat` event with `mode: "sequential"` (or absent) defaults its lifecycle to `"start"`. `start` creates a fresh activeCombat from `enemy_ref`, runs combat to completion, clears activeCombat on normal completion. `resume` continues an existing `state.activeCombat` — uses its preserved `enemy_ref` and `currentHealth` as the resumed combat's starting state; the resuming event's OWN `combat_modifiers` / `damage_interactions` / `damage_caps` apply fresh (NOT inherited from the prior paused combat — this lets §24's interlude introduce new modifiers cleanly). `modify` adjusts `state.activeCombat` without engaging combat — supports updating `enemy_ref` and `current_health` in-place.
+
+- `interrupt_after_player_wounds: {count, target}`. Pause when the player has TAKEN `count` wounds (rounds whose round_script reported `combat.last_result === 'enemy_wounds_player'`).
+
+- `interrupt_after_enemy_wounds: {count, target}`. Pause when the player has DEALT `count` wounds (rounds whose round_script reported `combat.last_result === 'player_wounds_enemy'`).
+
+- `current_health: <int>`. Only meaningful when `mode === "modify"` — sets `state.activeCombat.currentHealth` to this value without engaging combat. Use with a roll-table-driven `enemy_ref` swap for wandering-monster patterns.
+
+- `interrupt_on_first_player_hit: boolean` is **deprecated** since v1.30. Pre-v1.30 books carrying the boolean continue to validate; new books MUST use `interrupt_after_enemy_wounds: {count: 1, target: ...}`. The boolean's pre-v1.30 behavior — redirect after the first wound dealt — was per-emulator convention; the structured replacement carries the destination on the field itself.
+
+**Runtime state.**
+
+```jsonc
+state.activeCombat = {
+  "enemy_ref": "wight_173",
+  "enemy_snapshot": { /* deep copy of enemies_catalog[enemy_ref] at start of original combat */ },
+  "currentHealth": 4,            // enemy STAMINA preserved across pause
+  "modifiers": [...],            // applied combat_modifiers (frozen at original combat start)
+  "damageInteractions": [...],   // frozen interactions
+  "damageCaps": [...],           // frozen caps
+  "woundsDealt": 0,              // player-wins this combat (resets per combat event)
+  "woundsTaken": 3,              // player-losses this combat (preserved across pause)
+  "round": 5,                    // round count when paused
+  "consecutiveLosses": 0,        // Rule 17 streak counter at pause moment
+  "originSection": 173,
+  "originEventIdx": 0
+}
+```
+
+`state.activeCombat` is preserved across section transitions and round-tripped through `compactState` so save/load survives a paused combat.
+
+**Emulator behavior.**
+
+1. **At combat event dispatch:**
+   - `mode === "modify"`: apply `enemy_ref` and `current_health` to `state.activeCombat`, refresh `enemy_snapshot` if `enemy_ref` changed, do not engage combat, advance to next event.
+   - `mode === "resume"`: build the enemy initial state from `state.activeCombat` (preserved `enemy_ref`, `currentHealth`, `enemy_snapshot`). If `state.activeCombat === null`, log an error and fall through to `start` behavior (the source-text pattern is broken but the engine should not deadlock). The resuming event's own `combat_modifiers` / `damage_interactions` / `damage_caps` are evaluated fresh and frozen on the new `state.combat` (NOT inherited from `state.activeCombat.modifiers`). `woundsDealt` and `woundsTaken` reset to 0 for the resumed combat — each resume gets its own interrupt window. If the resume itself carries `interrupt_after_player_wounds: {count: 3, target: 24}`, the cycle continues (every 3 wounds → §24 → resume).
+   - `mode === "start"` (default): clear any existing `state.activeCombat`, build initial state from `enemy_ref` per current behavior.
+
+2. **During combat round handling:** track `playerWoundsTaken` and `enemyWoundsDealt` counters in `state.combat`. Increment on `combat.lastRoundResult === 'enemy_wounds_player'` / `'player_wounds_enemy'` respectively. Tie / simultaneous / no-damage rounds do not increment. Mirror to `state.activeCombat.woundsTaken` / `.woundsDealt` so they're preserved if an interrupt fires.
+
+3. **After each round (before `checkCombatEnd`'s existing win/lose/round-cap checks):**
+   - If `combat.interruptAfterPlayerWounds` is set and `playerWoundsTaken >= count`: pause. (Priority: this fires before the enemy-wounds check if both thresholds met on the same round.)
+   - Else if `combat.interruptAfterEnemyWounds` is set and `enemyWoundsDealt >= count`: pause.
+   - Pause action: snapshot enemy state into `state.activeCombat`, navigate to interrupt's target (NOT `win_to` / `lose_to` / `flee_to`), clear `state.combat`. The `on_combat_end` lifecycle trigger does NOT fire on an interrupt pause — the combat is not ended, only paused. (A `mode: 'start'` combat downstream that replaces `state.activeCombat` does not fire `on_combat_end` for the displaced paused combat either; the displaced fight is treated as abandoned.)
+
+4. **On normal combat completion** (win, lose, flee, `end_after_rounds`, `win_after_rounds`): clear `state.activeCombat = null` (before or after `on_combat_end` dispatch — the order matters only if `on_combat_end` effects read activeCombat, which is not a documented pattern). Then existing navigation (`win_to`, `lose_to`, etc.) fires.
+
+5. **`compactState`** includes `state.activeCombat` in the serialized form.
+
+**Worked example — FF Warlock §41 Wight first-wound exit.**
+
+```jsonc
+{
+  "type": "combat",
+  "enemy_ref": "wight_s41",
+  "win_to": null,
+  "interrupt_after_enemy_wounds": { "count": 1, "target": 310 }
+}
+```
+
+The player engages the Wight; the moment they land a hit (`combat.last_result === 'player_wounds_enemy'`), the round resolves, the enemy-wounds counter increments to 1, the interrupt fires, `state.activeCombat` is populated with the Wight's remaining STAMINA, and the player navigates to §310. §310's narrative reveals the Wight's immunity and routes the player to fetch a silver weapon; §211's re-engagement is itself a `mode: 'resume'` combat (or, if the source intends a fresh fight, a `mode: 'start'` combat that clears the §41 snapshot).
+
+**Worked example — FF Warlock §173 + §24 third-wound interrupt with recurring resume.**
+
+§173:
+
+```jsonc
+{
+  "type": "combat",
+  "enemy_ref": "wight_s173",
+  "win_to": 174,
+  "interrupt_after_player_wounds": { "count": 3, "target": 24 }
+}
+```
+
+§24 (continue branch):
+
+```jsonc
+{
+  "type": "combat",
+  "mode": "resume",
+  "combat_modifiers": [
+    { "target": "player.SKILL", "delta": -1, "reason": "Every third wound costs 1 SKILL" }
+  ],
+  "win_to": 174,
+  "interrupt_after_player_wounds": { "count": 3, "target": 24 }
+}
+```
+
+The player takes their 3rd wound in §173 → engine pauses, preserves Wight at remaining STAMINA, navigates to §24. §24's continue choice opens a new combat with `mode: 'resume'`: the engine pulls `enemy_ref` and `currentHealth` from `state.activeCombat`, applies the fresh -1 SKILL modifier, resets per-resume wound counters, and engages. After 3 more wounds taken, the cycle repeats → §24 → resume → another -1 SKILL → and so on until the player wins (Wight STAMINA → 0 → `win_to: 174`), dies (player ENDURANCE → 0), or flees if available.
+
+**Why a stateful `activeCombat` instead of a "save_enemy_health_to_flag" field.**
+
+The simpler alternative would have been a pair of fields like `save_enemy_health_to: "wight_173_health"` on the pausing combat and `restore_enemy_health_from: "wight_173_health"` on the resuming combat — backed by a generic stat slot. We rejected this (the "Design A" in the Chat-40 design discussion) in favor of the active-combat object (Design B) because:
+
+1. **It generalizes.** Mid-fight modifier introductions (§24 adds -1 SKILL per cycle), mid-fight enemy swaps (a transforming boss), wandering-monster determination via `mode: 'modify'`, and future patterns we haven't seen yet — all of these naturally extend `state.activeCombat` with one more field. Design A would have ossified into a series of one-off fields (`save_enemy_modifiers_to`, `save_round_count_to`, ...) as new cases surfaced.
+
+2. **It survives save/load cleanly.** A single object in `compactState` round-trips as one unit. Design A would have leaked combat state into arbitrary `state.stats` / `state.flags` slots, where the convention of which slot encodes what would have to be carried in book-side parser_notes or in the codex doc.
+
+3. **It matches the source text's mental model.** Sections describing a paused fight ("the fight goes on") describe a *fight* that resumes, not a *stat* that gets restored. The data model mirrors the fiction.
+
+**Detection during parsing.**
+
+Source-text triggers that indicate Rule 46 candidates:
+
+- "after you have inflicted your first / Nth wound on [enemy], turn to X" → `interrupt_after_enemy_wounds`.
+- "after you have suffered your Nth wound, turn to X" / "after the [enemy] has wounded you three times" → `interrupt_after_player_wounds`.
+- "the fight goes on" / "if you defeat the creature, turn to X" appearing in a destination section that was entered from a combat interrupt → indicates a `mode: 'resume'` combat event on the continue branch.
+- "every Nth wound costs 1 [stat]" appearing in a resume-section's interlude → indicates a recurring interrupt loop (place the same `interrupt_after_player_wounds` on both the original combat AND the resume combat so the cycle repeats).
+- "roll to determine which monster appears" / wandering-monster tables → candidate for `mode: 'modify'` with a roll-table-driven `enemy_ref` swap followed by a downstream `mode: 'resume'` combat.
+
 ---
 
 1. Universal Gamebook Concepts
@@ -5497,7 +5625,7 @@ If the user runs the remediation agent on a maintained, well-reviewed book and t
 
 ## Version identifiers
 
-**Codex v2.41.0 / GBF schema v1.29.0 / CLI emulator v3.23.0 / HTML emulator v3.21.0** (HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix; codex v2.41.0 + schema v1.29.0 are doc-only changes documenting the reachability mirror-choice workaround pattern in the schema (`section.choices`, `stat_test.success_to`/`failure_to`, `input_number.target = "computed"`) and in the Step 7 verification walkthrough, with no shape change and no emulator change; see CHANGELOG).
+**Codex v2.42.0 / GBF schema v1.30.0 / CLI emulator v3.24.0 / HTML emulator v3.22.0** (Rule 46 adds pausable / resumable combat as active state — new `state.activeCombat` object preserves enemy STAMINA, frozen modifiers, and round / wound counters across an Nth-wound interrupt; new combat-event fields `mode: "start" | "resume" | "modify"`, `interrupt_after_player_wounds: {count, target}`, `interrupt_after_enemy_wounds: {count, target}`, `current_health` (modify-mode helper); deprecates the boolean `interrupt_on_first_player_hit` in favor of `interrupt_after_enemy_wounds: {count: 1, target: ...}`; schema-additive — pre-v1.30 books validate unchanged. HTML emulator still pending Rules 40 + 42 wire-up AND the chargen `roll_table` action fix from prior bumps; codex v2.41.0 + schema v1.29.0 were doc-only changes documenting the reachability mirror-choice workaround pattern; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
