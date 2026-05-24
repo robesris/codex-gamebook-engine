@@ -5621,6 +5621,41 @@ The remediation pass is for **post-fresh-parse triage** — surfacing what the f
 
 If the user runs the remediation agent on a maintained, well-reviewed book and the validator surfaces 0 soft findings, the agent should respond with a single "no findings to triage" message and exit — not invent work.
 
+### 12.13 Progress framing — surface the total count up front
+
+When the remediation pass begins, the agent reports the total number of findings BEFORE the first question. Each subsequent question carries a "Finding #N of M" progress indicator so the user always knows where they are in the pass.
+
+**Why:** users in the middle of a long pass need a sense of pace — am I 10% through or 90%? Without a count, the pass feels open-ended (and stressful). With a count, each yes / no / flavor is a measurable step toward a known endpoint.
+
+**Format:**
+
+```
+Starting remediation pass. <M> findings to triage.
+
+## Finding #1 of <M> — <short topic phrase>
+...
+[ y | n | flavor | show | other ]
+```
+
+**Counting rules:**
+
+- **Schema errors count individually** when they cover distinct corrections, BUT the agent groups findings that share a single fix (e.g., three malformed `choose_one` options that all flow from one shape mismatch is ONE finding, not three). The grouping is decided when the pass starts, before any user-facing message.
+- **Soft findings** (dangling catalog, loss-in-choice-text, condition-text-mismatch, etc.) each count as one finding apiece, since each requires an independent decision.
+- **Reachability findings** (stranded sections) MAY be grouped when they share a fix pattern (e.g., the v2.41+ mirror-choice workaround applied to all `stat_test.success_to`/`failure_to` cases at once). The grouping is a judgment call; the agent states the grouping criterion in the opening count summary.
+- **If the count shifts mid-pass** (a `show` request reveals a related issue, or resolving one finding cascades into another), the agent updates the total and announces the adjustment: *"Finding count adjusted from M to M' — discovered <X> while reviewing <Y>."*
+
+**Bad framing (no progress indicator):**
+
+> "## Finding — meal timing
+> The book says meals only happen when a section invites them..."
+
+**Good framing:**
+
+> "## Finding #1 of 14 — meal timing
+> The book says meals only happen when a section invites them..."
+
+The total count is honest: it's the CURRENT estimate, not a contract. Findings the user defers (`n` or `flavor`) still count toward the denominator — they were triaged, just not fixed. The denominator only grows if the pass surfaces work the agent hadn't seen at the start.
+
 ---
 
 ## Version identifiers
