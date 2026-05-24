@@ -5395,6 +5395,15 @@ For unknown book families, the agent uses generic English and inspects the book'
 | "the codex" | (omit — codex internals are never user-facing) |
 | "false positive" | "the check is wrong here" or "this one isn't actually broken" |
 | "engine gap" | "a thing the game doesn't yet know how to do" |
+| "set-flag", "flag-routing", "set-flag-then-route" | "the book remembers <X> happened earlier and uses it to decide where to go later" |
+| "computed-target navigation" / "computed edge" | "the player types a number and the book sends them to that section" |
+| "static reachability" / "reachability tool" / "static check" | "the auto-check that tries to walk every section the player could visit" |
+| "stat_test edge" / "stat_test branch" / "success_to / failure_to" | "the success / failure outcome of the Test Your Luck (or Skill, etc.)" |
+| "mirror choice" / "reachability mirror" | "a placeholder choice we add so the auto-check can see this destination exists" |
+| "synthetic section" / "stop-over section" / "sub-section" | "a small in-between section we add to do one thing and then continue" |
+| "subroutine" / "subroutine return" | "a side trip the player takes that comes back to where they were" |
+| "wandering-monster table" | (use the book's own phrasing — "the random monster encounter list," etc.) |
+| "predicate" / "condition expression" | "the rule that decides whether <X> happens" — or just describe what the rule is |
 
 The cardinal-rule test in §12.1 still applies: read the question aloud and ask whether a player familiar with the book's narrative — but not with this project's tooling — would understand every word. If any word would make them squint, replace it.
 
