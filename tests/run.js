@@ -3855,6 +3855,413 @@ test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', 
 });
 
 // ============================================================
+// Rule 46 v2.42.0 — Pausable / resumable combat as active state
+// ============================================================
+// MOTIVATED_BY: FF Warlock §173 + §24 third-wound interrupt with
+// resume — the player engages the Wight, after their third wound the
+// fight pauses and they navigate to §24, which offers continue (-1
+// SKILL) or flee, and on continue the SAME fight resumes against the
+// SAME Wight at its preserved STAMINA. Pre-Rule-46 there was no way
+// to pause a combat for a section visit and resume with enemy STAMINA
+// preserved; the source mechanic could only be approximated with a
+// narrative-only workaround (a conditional choice on §173 that
+// invited the player to honest-self-count their wounds).
+//
+// FF Warlock §41 first-wound exit is the companion case (after the
+// first wound dealt, the fight ends and the player navigates to the
+// reveal section §310) and is addressed by the same machinery in the
+// enemy-wounds direction.
+//
+// Design B (active-combat state) chosen over Design A (targeted
+// save-and-restore-HP fields) in the chat-40 design discussion — see
+// codex Rule 46 "Why a stateful activeCombat" for the rationale.
+//
+// END_TO_END_VERIFY: drive the CLI emulator through FF Warlock §173
+// and confirm the third player-wound triggers the §24 navigation; on
+// §24's continue choice, confirm the resumed combat starts against
+// the same Wight at its preserved STAMINA (not the catalog default)
+// with the new -1 SKILL modifier applied; confirm the cycle repeats
+// every 3 further wounds. Also drive §41 and confirm the first
+// player-DEALT wound triggers the §310 navigation with the Wight
+// state captured in state.activeCombat.
+// ============================================================
+
+// Build a minimal combat-capable book for Rule 46 tests. The
+// round_script is deterministic — pass `forceResult` per round via
+// state.forcedScriptRolls before calling 'attack'. We use forced
+// rolls rather than synthetic dice because the engine's
+// runCombatRound reads result.combat.last_result directly from the
+// round_script, and a script that consults a forced roll lets each
+// test stage a sequence of player-loss / player-win / tie rounds.
+function buildRule46Book(extraSection1Events, section24Events) {
+  return buildBook({
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }, { name: 'STAMINA', initial: 20, initial_is_max: true }],
+      health_stat: 'STAMINA',
+      combat_system: {
+        // Forced-result round_script. roll() returns the first forced
+        // value (1 = player loses round / takes wound; 2 = player wins
+        // round / deals wound; 3 = tie). Damage is symmetric so neither
+        // side dies in a single test round.
+        round_script: [
+          'local r = roll("1d6").total',
+          'if r == 1 then',
+          '  combat.damage_to_enemy = 0',
+          '  combat.damage_to_player = 1',
+          '  combat.last_result = "enemy_wounds_player"',
+          'elseif r == 2 then',
+          '  combat.damage_to_enemy = 1',
+          '  combat.damage_to_player = 0',
+          '  combat.last_result = "player_wounds_enemy"',
+          'else',
+          '  combat.damage_to_enemy = 0',
+          '  combat.damage_to_player = 0',
+          '  combat.last_result = "tie"',
+          'end',
+        ].join('\n'),
+      },
+    },
+    enemies_catalog: {
+      wight_s173: { name: 'Wight (§173)', SKILL: 8, STAMINA: 9 },
+      wight_alt: { name: 'Alt Wight', SKILL: 7, STAMINA: 6 },
+    },
+    sections: {
+      '1': { text: 'fight', events: extraSection1Events, choices: [], is_ending: false },
+      '24': { text: 'interlude', events: section24Events || [], choices: [{ text: 'continue', target: '1', condition: null }], is_ending: false },
+      '174': { text: 'win', events: [], choices: [], is_ending: false },
+      '310': { text: 'reveal', events: [], choices: [], is_ending: false },
+    },
+  });
+}
+
+function setupRule46Player() {
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true;
+  state.creationDone = true;
+  state.pause = null;
+  state.stats = { SKILL: 10, STAMINA: 20 };
+  state.initialStats = { SKILL: 10, STAMINA: 20 };
+  state.inventory = [];
+  state.equipment = {};
+  return state;
+}
+
+// One d6 per forced round; encoded as a comma-string per the
+// applyAction('attack', [forcedRollsString]) contract.
+function forceRound(state, book, value) {
+  play.applyAction(state, book, 'attack', [String(value)]);
+}
+
+test('Rule 46 v2.42.0: interrupt_after_player_wounds pauses combat after Nth wound TAKEN and writes activeCombat', () => {
+  const book = buildRule46Book([{
+    type: 'combat',
+    enemy_ref: 'wight_s173',
+    win_to: '174',
+    flee_to: null,
+    interrupt_after_player_wounds: { count: 3, target: '24' },
+  }]);
+  const state = setupRule46Player();
+  play.navigateTo(state, book, '1');
+  assertTrue(!!state.combat, 'combat started');
+  assertEqual(state.combat.interruptAfterPlayerWounds.count, 3, 'interrupt threshold passed through');
+
+  // Three losing rounds — player takes 3 wounds.
+  forceRound(state, book, 1);
+  assertEqual(state.combat.woundsTaken, 1, 'woundsTaken=1 after round 1');
+  assertTrue(!!state.combat, 'combat still active after 1 wound');
+
+  forceRound(state, book, 1);
+  assertEqual(state.combat.woundsTaken, 2, 'woundsTaken=2 after round 2');
+  assertTrue(!!state.combat, 'combat still active after 2 wounds');
+
+  forceRound(state, book, 1);
+  assertTrue(!state.combat, 'combat paused after 3rd wound');
+  assertEqual(state.currentSection, '24', 'navigated to interrupt target §24');
+  assertTrue(!!state.activeCombat, 'activeCombat snapshot written');
+  assertEqual(state.activeCombat.enemy_ref, 'wight_s173', 'activeCombat carries enemy_ref');
+  assertEqual(state.activeCombat.currentHealth, 9, 'enemy STAMINA preserved (no damage dealt)');
+  assertEqual(state.activeCombat.woundsTaken, 3, 'woundsTaken counter preserved');
+  assertEqual(state.activeCombat.round, 3, 'round counter preserved');
+});
+
+test('Rule 46 v2.42.0: interrupt_after_enemy_wounds pauses combat after Nth wound DEALT', () => {
+  const book = buildRule46Book([{
+    type: 'combat',
+    enemy_ref: 'wight_s173',
+    win_to: '174',
+    flee_to: null,
+    interrupt_after_enemy_wounds: { count: 1, target: '310' },
+  }]);
+  const state = setupRule46Player();
+  play.navigateTo(state, book, '1');
+  assertTrue(!!state.combat, 'combat started');
+
+  // One winning round — player deals 1 wound.
+  forceRound(state, book, 2);
+  assertTrue(!state.combat, 'combat paused after 1st wound dealt');
+  assertEqual(state.currentSection, '310', 'navigated to enemy-wounds interrupt target §310');
+  assertTrue(!!state.activeCombat, 'activeCombat snapshot written');
+  assertEqual(state.activeCombat.enemy_ref, 'wight_s173', 'activeCombat carries enemy_ref');
+  assertEqual(state.activeCombat.currentHealth, 8, 'enemy STAMINA reduced by the dealt wound (9 → 8)');
+  assertEqual(state.activeCombat.woundsDealt, 1, 'woundsDealt counter preserved');
+});
+
+test('Rule 46 v2.42.0: ties and simultaneous rounds do not increment wound counters', () => {
+  const book = buildRule46Book([{
+    type: 'combat',
+    enemy_ref: 'wight_s173',
+    win_to: '174',
+    flee_to: null,
+    interrupt_after_player_wounds: { count: 2, target: '24' },
+  }]);
+  const state = setupRule46Player();
+  play.navigateTo(state, book, '1');
+
+  forceRound(state, book, 3); // tie
+  assertEqual(state.combat.woundsTaken, 0, 'tie does not increment woundsTaken');
+  assertEqual(state.combat.woundsDealt, 0, 'tie does not increment woundsDealt');
+  assertTrue(!!state.combat, 'combat still active after tie');
+
+  forceRound(state, book, 3); // another tie
+  assertEqual(state.combat.woundsTaken, 0, 'two ties still 0 woundsTaken');
+  assertTrue(!!state.combat, 'no interrupt on ties');
+});
+
+test('Rule 46 v2.42.0: mode=resume reads enemy state from activeCombat (preserves STAMINA)', () => {
+  // Pre-populate activeCombat as if a prior combat had paused.
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }, { name: 'STAMINA', initial: 20, initial_is_max: true }],
+      health_stat: 'STAMINA',
+      combat_system: {
+        // No-op round_script — both sides report 0 damage so health
+        // and counters stay clean for this test; we only need to
+        // assert the initial enemy state at combat-start.
+        round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0\ncombat.last_result = "tie"',
+      },
+    },
+    enemies_catalog: { wight_s173: { name: 'Wight (§173)', SKILL: 8, STAMINA: 9 } },
+    sections: {
+      '24': {
+        text: 'resume',
+        events: [{ type: 'combat', mode: 'resume', win_to: '174', flee_to: null }],
+        choices: [],
+        is_ending: false,
+      },
+      '174': { text: 'win', events: [], choices: [], is_ending: false },
+    },
+  });
+  const state = setupRule46Player();
+  state.activeCombat = {
+    enemy_ref: 'wight_s173',
+    enemy_snapshot: { name: 'Wight (§173)', SKILL: 8, STAMINA: 9 },
+    currentHealth: 4, // resumed at 4, not 9
+    modifiers: [],
+    damageInteractions: [],
+    damageCaps: [],
+    woundsDealt: 0,
+    woundsTaken: 3,
+    round: 5,
+    consecutiveLosses: 0,
+    originSection: '173',
+    originEventIdx: 0,
+  };
+
+  play.navigateTo(state, book, '24');
+  assertTrue(!!state.combat, 'resumed combat is active');
+  assertEqual(state.combat.enemies.length, 1, 'one enemy in resumed combat');
+  assertEqual(state.combat.enemies[0].ref, 'wight_s173', 'resumed against same enemy_ref');
+  assertEqual(state.combat.enemies[0].currentHealth, 4, 'resumed at preserved STAMINA, not catalog default 9');
+  assertEqual(state.combat.woundsDealt, 0, 'resumed combat resets woundsDealt counter');
+  assertEqual(state.combat.woundsTaken, 0, 'resumed combat resets woundsTaken counter');
+});
+
+test('Rule 46 v2.42.0: mode=start clears stale activeCombat', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }, { name: 'STAMINA', initial: 20, initial_is_max: true }],
+      health_stat: 'STAMINA',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0\ncombat.last_result = "tie"' },
+    },
+    enemies_catalog: {
+      wight_s173: { name: 'Wight', SKILL: 8, STAMINA: 9 },
+      goblin: { name: 'Goblin', SKILL: 5, STAMINA: 5 },
+    },
+    sections: {
+      '50': {
+        text: 'fresh fight',
+        events: [{ type: 'combat', enemy_ref: 'goblin', win_to: '51', flee_to: null }],
+        choices: [],
+        is_ending: false,
+      },
+      '51': { text: 'win', events: [], choices: [], is_ending: false },
+    },
+  });
+  const state = setupRule46Player();
+  state.activeCombat = {
+    enemy_ref: 'wight_s173',
+    enemy_snapshot: { name: 'Wight', SKILL: 8, STAMINA: 9 },
+    currentHealth: 4,
+    modifiers: [], damageInteractions: [], damageCaps: [],
+    woundsDealt: 0, woundsTaken: 3, round: 5, consecutiveLosses: 0,
+    originSection: '173', originEventIdx: 0,
+  };
+
+  play.navigateTo(state, book, '50');
+  // 'start' (default mode) should have cleared activeCombat before
+  // creating the new combat against the Goblin.
+  assertTrue(!!state.combat, 'new combat is active');
+  assertEqual(state.combat.enemies[0].ref, 'goblin', 'fighting the new enemy (goblin), not the stale Wight');
+  assertEqual(state.activeCombat, null, 'stale activeCombat cleared by mode=start');
+});
+
+test('Rule 46 v2.42.0: mode=modify updates activeCombat without engaging combat', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }, { name: 'STAMINA', initial: 20, initial_is_max: true }],
+      health_stat: 'STAMINA',
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 0\ncombat.last_result = "tie"' },
+    },
+    enemies_catalog: {
+      wight_s173: { name: 'Wight', SKILL: 8, STAMINA: 9 },
+      wight_alt: { name: 'Alt Wight', SKILL: 7, STAMINA: 6 },
+    },
+    sections: {
+      '99': {
+        text: 'wandering monster swap',
+        events: [{ type: 'combat', mode: 'modify', enemy_ref: 'wight_alt', current_health: 5 }],
+        choices: [{ text: 'next', target: '99', condition: null }],
+        is_ending: false,
+      },
+    },
+  });
+  const state = setupRule46Player();
+  state.activeCombat = {
+    enemy_ref: 'wight_s173',
+    enemy_snapshot: { name: 'Wight', SKILL: 8, STAMINA: 9 },
+    currentHealth: 4,
+    modifiers: [], damageInteractions: [], damageCaps: [],
+    woundsDealt: 0, woundsTaken: 0, round: 0, consecutiveLosses: 0,
+    originSection: '50', originEventIdx: 0,
+  };
+
+  play.navigateTo(state, book, '99');
+  assertEqual(state.combat, null, 'mode=modify does NOT engage combat');
+  assertTrue(!!state.activeCombat, 'activeCombat still present after modify');
+  assertEqual(state.activeCombat.enemy_ref, 'wight_alt', 'enemy_ref swapped to wandering monster');
+  assertEqual(state.activeCombat.currentHealth, 5, 'currentHealth overridden by event.current_health');
+  assertEqual(state.activeCombat.enemy_snapshot.name, 'Alt Wight', 'enemy_snapshot refreshed to new enemy');
+});
+
+test('Rule 46 v2.42.0: normal combat completion (enemy defeated) clears activeCombat', () => {
+  const book = buildBook({
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }, { name: 'STAMINA', initial: 20, initial_is_max: true }],
+      health_stat: 'STAMINA',
+      combat_system: {
+        // One-shot kill round_script.
+        round_script: 'combat.damage_to_enemy = 99\ncombat.damage_to_player = 0\ncombat.last_result = "player_wounds_enemy"',
+      },
+    },
+    enemies_catalog: { goblin: { name: 'Goblin', SKILL: 5, STAMINA: 1 } },
+    sections: {
+      '1': {
+        text: 'fight',
+        events: [{ type: 'combat', enemy_ref: 'goblin', win_to: '2', flee_to: null }],
+        choices: [],
+        is_ending: false,
+      },
+      '2': { text: 'win', events: [], choices: [], is_ending: false },
+    },
+  });
+  const state = setupRule46Player();
+  // Pre-populate activeCombat from an unrelated prior pause — the
+  // mode=start (default) combat should have cleared it on entry.
+  state.activeCombat = {
+    enemy_ref: 'stale_wight', enemy_snapshot: { name: 'Stale Wight' }, currentHealth: 3,
+    modifiers: [], damageInteractions: [], damageCaps: [],
+    woundsDealt: 0, woundsTaken: 0, round: 0, consecutiveLosses: 0,
+    originSection: '0', originEventIdx: 0,
+  };
+
+  play.navigateTo(state, book, '1');
+  assertEqual(state.activeCombat, null, 'mode=start cleared the stale snapshot on entry');
+  forceRound(state, book, 1); // 1 → not used by this round_script (it ignores rolls); kills goblin
+  assertEqual(state.currentSection, '2', 'navigated to win_to');
+  assertEqual(state.activeCombat, null, 'normal completion leaves activeCombat null');
+});
+
+test('Rule 46 v2.42.0: activeCombat round-trips through compactState', () => {
+  const state = setupRule46Player();
+  state.activeCombat = {
+    enemy_ref: 'wight_s173',
+    enemy_snapshot: { name: 'Wight (§173)', SKILL: 8, STAMINA: 9 },
+    currentHealth: 4,
+    modifiers: [{ target: 'player.SKILL', delta: -1, reason: 'every third wound', duration: 'fight', removedAfterConsecutiveLosses: null }],
+    damageInteractions: [],
+    damageCaps: [],
+    woundsDealt: 0,
+    woundsTaken: 3,
+    round: 5,
+    consecutiveLosses: 0,
+    originSection: '173',
+    originEventIdx: 0,
+  };
+  const compact = play.compactState(state);
+  assertTrue(!!compact.activeCombat, 'compactState includes activeCombat');
+  assertEqual(compact.activeCombat.enemy_ref, 'wight_s173', 'enemy_ref preserved');
+  assertEqual(compact.activeCombat.currentHealth, 4, 'currentHealth preserved');
+  assertEqual(compact.activeCombat.woundsTaken, 3, 'woundsTaken preserved');
+  assertEqual(compact.activeCombat.modifiers.length, 1, 'frozen modifiers preserved');
+});
+
+test('Rule 46 v2.42.0: interrupt_after_player_wounds is declared on the event schema', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ep = schema.definitions.event.properties;
+  assertTrue(!!ep.interrupt_after_player_wounds, 'event.interrupt_after_player_wounds declared');
+  assertTrue(!!ep.interrupt_after_enemy_wounds, 'event.interrupt_after_enemy_wounds declared');
+  assertEqual(ep.interrupt_after_player_wounds.required.join(','), 'count,target', 'required: count + target');
+  assertTrue(ep.mode.enum.includes('start'), 'mode enum includes start');
+  assertTrue(ep.mode.enum.includes('resume'), 'mode enum includes resume');
+  assertTrue(ep.mode.enum.includes('modify'), 'mode enum includes modify');
+  // Backwards-compat: legacy multi-enemy ordering values still valid.
+  assertTrue(ep.mode.enum.includes('sequential'), 'mode enum still includes sequential');
+});
+
+test('Rule 46 v2.42.0: schema-additive — pre-v1.30 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  const book = {
+    metadata: { title: 'Book', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'X', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: { goblin: { name: 'Goblin', X: 5 } },
+    sections: {
+      '1': {
+        text: 'x',
+        // pre-v1.30 — no mode lifecycle, no interrupt_after_*_wounds,
+        // ordinary combat event with default-start behavior.
+        events: [{ type: 'combat', enemy_ref: 'goblin', win_to: '1', flee_to: null }],
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  };
+  const ok = validate(book);
+  assertTrue(ok, `pre-v1.30 book should validate clean: ${JSON.stringify(validate.errors)}`);
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.30.0', 'schema title is v1.30.0');
+});
+
+// ============================================================
 // Runner footer
 // ============================================================
 const total = passed + failures.length;
