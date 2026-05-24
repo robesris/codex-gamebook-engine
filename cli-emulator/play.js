@@ -24,7 +24,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.23.0';
+const CODEX_EMULATOR_VERSION = '3.24.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -185,6 +185,19 @@ function initialState(bookPath) {
     // return false on null (safe default — stale conditions reached
     // without a prior combat do not fire spuriously).
     lastCombatRoundCount: null,
+    // Schema v1.30+ / codex v2.42 (Rule 46). Pausable / resumable combat
+    // as active state. Null when no combat is paused. When an
+    // interrupt_after_player_wounds or interrupt_after_enemy_wounds fires,
+    // the engine snapshots the in-progress combat here (enemy_ref +
+    // enemy_snapshot + currentHealth + frozen modifiers + wound + round
+    // counters) and navigates to the interrupt's target. The active
+    // snapshot persists across section visits until a downstream combat
+    // event with `mode: "resume"` continues the fight at the preserved
+    // STAMINA, or `mode: "start"` (default) clears + replaces it, or
+    // `mode: "modify"` adjusts the snapshot in place (wandering-monster
+    // pattern). Round-tripped through compactState so save/load survives
+    // a paused combat. See Rule 46.
+    activeCombat: null,
   };
 }
 
@@ -1672,15 +1685,110 @@ function runScriptEvent(event, state, book) {
 }
 
 function startCombat(event, state, book) {
+  // Schema v1.30+ / Rule 46. Resolve the lifecycle mode. The `mode` field
+  // is overloaded with both lifecycle values (start/resume/modify) and
+  // multi-enemy ordering values (sequential/simultaneous/player_choice);
+  // we read each axis independently. The lifecycle axis defaults to
+  // 'start' when absent or when the value is a multi-enemy ordering value.
+  const lifecycleMode =
+    (event.mode === 'resume' || event.mode === 'modify') ? event.mode : 'start';
+
+  // Rule 46 'modify' — adjust state.activeCombat in place without engaging
+  // combat. Supports enemy_ref swap (with a fresh enemy_snapshot rebuild)
+  // and current_health override. Useful for wandering-monster patterns
+  // where a roll-table effect pre-populates the active combat with the
+  // rolled enemy before a downstream `mode: "resume"` engages it. No-op
+  // if there is no active combat AND no enemy_ref to seed one — that's
+  // a book-shape error worth surfacing in the log.
+  if (lifecycleMode === 'modify') {
+    if (!state.activeCombat && !event.enemy_ref) {
+      state.log.push('R46 modify: no state.activeCombat and no enemy_ref to seed; skipping');
+      return 'continue';
+    }
+    if (!state.activeCombat) {
+      const data = book.enemies_catalog[event.enemy_ref] || {};
+      state.activeCombat = {
+        enemy_ref: event.enemy_ref,
+        enemy_snapshot: JSON.parse(JSON.stringify(data)),
+        currentHealth: getEnemyHealth(data, book),
+        modifiers: [],
+        damageInteractions: [],
+        damageCaps: [],
+        woundsDealt: 0,
+        woundsTaken: 0,
+        round: 0,
+        consecutiveLosses: 0,
+        originSection: state.currentSection,
+        originEventIdx: 0,
+      };
+      state.log.push(`R46 modify: seeded activeCombat with ${event.enemy_ref}`);
+    }
+    if (event.enemy_ref && event.enemy_ref !== state.activeCombat.enemy_ref) {
+      const data = book.enemies_catalog[event.enemy_ref] || {};
+      state.activeCombat.enemy_ref = event.enemy_ref;
+      state.activeCombat.enemy_snapshot = JSON.parse(JSON.stringify(data));
+      // When the enemy swaps without an explicit current_health, refresh
+      // the health to the new enemy's catalog default — the prior enemy's
+      // remaining HP would be meaningless on a different creature.
+      if (typeof event.current_health !== 'number') {
+        state.activeCombat.currentHealth = getEnemyHealth(data, book);
+      }
+      state.log.push(`R46 modify: activeCombat.enemy_ref → ${event.enemy_ref}`);
+    }
+    if (typeof event.current_health === 'number') {
+      state.activeCombat.currentHealth = Math.max(0, event.current_health);
+      state.log.push(`R46 modify: activeCombat.currentHealth → ${state.activeCombat.currentHealth}`);
+    }
+    return 'continue';
+  }
+
   let enemies = [];
-  if (event.enemies) {
-    enemies = event.enemies.map(e => {
-      const data = book.enemies_catalog[e.ref] || {};
-      return { ref: e.ref, name: data.name, currentHealth: getEnemyHealth(data, book), data };
-    });
-  } else if (event.enemy_ref) {
-    const data = book.enemies_catalog[event.enemy_ref] || {};
-    enemies = [{ ref: event.enemy_ref, name: data.name, currentHealth: getEnemyHealth(data, book), data }];
+  let resumed = false;
+
+  // Rule 46 'resume' — continue an existing paused combat. The activeCombat
+  // snapshot supplies enemy_ref / enemy_snapshot / currentHealth; the
+  // resuming event's OWN combat_modifiers / damage_interactions / damage_caps
+  // apply fresh (NOT inherited from the snapshot — this lets the interlude
+  // introduce new modifiers cleanly, per the §24 "every third wound costs
+  // 1 SKILL" pattern). woundsDealt / woundsTaken reset to 0 for the resumed
+  // combat — each resume opens a fresh interrupt window. If there is no
+  // active combat to resume, log and fall through to 'start' behavior
+  // (the source-text pattern is broken but the engine should not deadlock).
+  if (lifecycleMode === 'resume') {
+    if (!state.activeCombat) {
+      state.log.push('R46 resume: no state.activeCombat to resume; falling back to start');
+    } else {
+      const ac = state.activeCombat;
+      const snap = ac.enemy_snapshot || book.enemies_catalog[ac.enemy_ref] || {};
+      enemies = [{
+        ref: ac.enemy_ref,
+        name: snap.name,
+        currentHealth: ac.currentHealth,
+        data: snap,
+      }];
+      resumed = true;
+      state.log.push(`R46 resume: continuing vs ${snap.name || ac.enemy_ref} at ${ac.currentHealth} health`);
+    }
+  }
+
+  // 'start' (default) and the resume-fallback path both read enemies from
+  // the event. 'start' also clears any stale activeCombat — the displaced
+  // paused fight is treated as abandoned (no on_combat_end dispatch, per
+  // the Rule 46 spec: interrupts pause; only normal completion ends).
+  if (!resumed) {
+    if (lifecycleMode === 'start' && state.activeCombat) {
+      state.log.push(`R46 start: clearing stale activeCombat (vs ${state.activeCombat.enemy_ref})`);
+      state.activeCombat = null;
+    }
+    if (event.enemies) {
+      enemies = event.enemies.map(e => {
+        const data = book.enemies_catalog[e.ref] || {};
+        return { ref: e.ref, name: data.name, currentHealth: getEnemyHealth(data, book), data };
+      });
+    } else if (event.enemy_ref) {
+      const data = book.enemies_catalog[event.enemy_ref] || {};
+      enemies = [{ ref: event.enemy_ref, name: data.name, currentHealth: getEnemyHealth(data, book), data }];
+    }
   }
   // Evaluate combat_modifiers (schema v1.4) once at combat start. We
   // merge the combat event's `combat_modifiers` with the intrinsic
@@ -1857,6 +1965,26 @@ function startCombat(event, state, book) {
     // no-damage round). Used to gate combat_modifiers carrying a
     // `removed_after_consecutive_losses` threshold.
     consecutiveLosses: 0,
+    // Schema v1.30+ / Rule 46. Per-fight wound counters distinct from
+    // consecutiveLosses (which is a streak that resets on non-loss rounds).
+    // wounds counters are monotonic across the fight and drive the
+    // interrupt-after-N-wounds checks below. Reset to 0 on every combat
+    // start AND on every Rule 46 resume — each resumed combat gets its
+    // own interrupt window. Increment per the round_script's last_result
+    // tag ('player_wounds_enemy' → woundsDealt++; 'enemy_wounds_player'
+    // → woundsTaken++; tie / simultaneous / no-damage rounds do not
+    // increment).
+    woundsDealt: 0,
+    woundsTaken: 0,
+    interruptAfterPlayerWounds: event.interrupt_after_player_wounds || null,
+    interruptAfterEnemyWounds: event.interrupt_after_enemy_wounds || null,
+    // Rule 46 lifecycle context — preserved on combat so checkCombatEnd
+    // can know whether a 'mode: resume' continuation that subsequently
+    // completes normally should still produce on_combat_end dispatches
+    // (yes: a resumed combat ending normally clears activeCombat AND
+    // fires on_combat_end as usual). Currently informational; the
+    // checkCombatEnd / interrupt paths read activeCombat directly.
+    lifecycleMode,
   };
 
   // Rule 36 on_combat_start triggers (schema v1.20+): fire after frozen
@@ -2900,6 +3028,8 @@ function handleCombatAction(action, args, state, book) {
     if (getPlayerHealth(state, book) <= 0) {
       state.pause = { type: 'ending', ending_type: 'death', text: 'You died fleeing.' };
       state.combat = null;
+      // Rule 46: death clears any active combat snapshot.
+      state.activeCombat = null;
       return state;
     }
     if (combat.fleeTo) {
@@ -2911,6 +3041,9 @@ function handleCombatAction(action, args, state, book) {
       state.lastCombatRoundCount = combat.round;
       dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
       state.combat = null;
+      // Rule 46: player-initiated flee is normal combat completion —
+      // clear any active combat snapshot.
+      state.activeCombat = null;
       return navigateTo(state, book, combat.fleeTo);
     }
     return state;
@@ -3240,6 +3373,18 @@ function runCombatRound(forcedRollsArg, state, book) {
   combat.lastRoundResult = result.combat?.last_result;
   combat.lastDamage = result.combat?.last_damage || 0;
 
+  // Schema v1.30+ / Rule 46. Update monotonic per-fight wound counters
+  // from the round_script's last_result tag. These drive the
+  // interrupt-after-N-wounds checks in checkCombatEnd. Tie /
+  // simultaneous / no-damage rounds (any last_result that isn't one of
+  // the two tagged outcomes) do NOT increment — only rounds the script
+  // explicitly tagged as a wound count.
+  if (combat.lastRoundResult === 'player_wounds_enemy') {
+    combat.woundsDealt = (combat.woundsDealt || 0) + 1;
+  } else if (combat.lastRoundResult === 'enemy_wounds_player') {
+    combat.woundsTaken = (combat.woundsTaken || 0) + 1;
+  }
+
   // Schema v1.14+ (Rule 17 modifier-expiry-on-loss-streak): update the
   // per-fight player-loss streak counter using post-interaction damage
   // totals. A round counts as a player loss when the player took strictly
@@ -3407,6 +3552,9 @@ function runUserUse(state, book, itemId) {
     state.lastCombatRoundCount = combat.round;
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     state.combat = null;
+    // Rule 46: R36 flee_combat is normal combat completion — clear any
+    // active combat snapshot.
+    state.activeCombat = null;
     return navigateTo(state, book, fledTo);
   }
   return state;
@@ -3418,8 +3566,55 @@ function checkCombatEnd(state, book) {
 
   if (getPlayerHealth(state, book) <= 0) {
     state.combat = null;
+    // Rule 46: player death clears any active combat snapshot — a dead
+    // player cannot resume a paused fight.
+    state.activeCombat = null;
     state.pause = { type: 'ending', ending_type: 'death', text: 'You have been slain in combat.' };
     return state;
+  }
+
+  // Schema v1.30+ / Rule 46. Interrupt-after-N-wounds check. Runs BEFORE
+  // win_after_rounds / end_after_rounds / enemy-defeated so a wounding
+  // interrupt threshold met on the same round as an end-condition fires
+  // the interrupt (the interrupt is the more specific source-text
+  // instruction). Within the two interrupt kinds, player-wounds takes
+  // priority over enemy-wounds when both fire on the same round (the
+  // player-wounds case is the more dramatic narrative beat — the player
+  // is being dragged off, not the enemy retreating). Pauses snapshot
+  // the current combat state into state.activeCombat (preserving enemy
+  // STAMINA, frozen modifiers, wound + round counters) and navigate to
+  // the interrupt's target. The on_combat_end lifecycle trigger does
+  // NOT fire on an interrupt pause — the combat is not ended, only
+  // paused. A downstream `mode: "resume"` combat event continues the
+  // same fight at preserved STAMINA.
+  function pauseCombat(reason, target) {
+    const snapEnemy = enemy.data || book.enemies_catalog[enemy.ref] || {};
+    state.activeCombat = {
+      enemy_ref: enemy.ref,
+      enemy_snapshot: JSON.parse(JSON.stringify(snapEnemy)),
+      currentHealth: enemy.currentHealth,
+      modifiers: (combat.appliedModifiers || []).slice(),
+      damageInteractions: (combat.appliedDamageInteractions || []).slice(),
+      damageCaps: (combat.appliedDamageCaps || []).slice(),
+      woundsDealt: combat.woundsDealt || 0,
+      woundsTaken: combat.woundsTaken || 0,
+      round: combat.round,
+      consecutiveLosses: combat.consecutiveLosses || 0,
+      originSection: state.currentSection,
+      originEventIdx: 0,
+    };
+    state.log.push(`R46 ${reason}: pausing vs ${enemy.name || enemy.ref} at ${enemy.currentHealth} health → §${target}`);
+    state.combat = null;
+    return navigateTo(state, book, target);
+  }
+
+  const iap = combat.interruptAfterPlayerWounds;
+  if (iap && typeof iap.count === 'number' && (combat.woundsTaken || 0) >= iap.count && iap.target !== undefined && iap.target !== null) {
+    return pauseCombat(`interrupt_after_player_wounds (${combat.woundsTaken}/${iap.count})`, iap.target);
+  }
+  const iae = combat.interruptAfterEnemyWounds;
+  if (iae && typeof iae.count === 'number' && (combat.woundsDealt || 0) >= iae.count && iae.target !== undefined && iae.target !== null) {
+    return pauseCombat(`interrupt_after_enemy_wounds (${combat.woundsDealt}/${iae.count})`, iae.target);
   }
 
   // Schema v1.13+ / Rule 31: survive-N-rounds win condition. If the
@@ -3439,6 +3634,8 @@ function checkCombatEnd(state, book) {
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
+    // Rule 46: normal completion clears any active combat snapshot.
+    state.activeCombat = null;
     if (winTo) return navigateTo(state, book, winTo);
     return processNextEvent(state, book);
   }
@@ -3460,6 +3657,8 @@ function checkCombatEnd(state, book) {
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const endTo = combat.endTo;
     state.combat = null;
+    // Rule 46: normal completion clears any active combat snapshot.
+    state.activeCombat = null;
     if (endTo !== undefined && endTo !== null) return navigateTo(state, book, endTo);
     return processNextEvent(state, book);
   }
@@ -3480,6 +3679,8 @@ function checkCombatEnd(state, book) {
     dispatchLifecycleTriggers(state, book, 'on_combat_end', { combatScope: true });
     const winTo = combat.winTo;
     state.combat = null;
+    // Rule 46: normal completion clears any active combat snapshot.
+    state.activeCombat = null;
     if (winTo) return navigateTo(state, book, winTo);
     return processNextEvent(state, book);
   }
@@ -3537,6 +3738,11 @@ function compactState(state) {
     // state JSON so combat_round_count_lte/gte conditions on choices
     // and events continue to evaluate correctly across act() calls.
     lastCombatRoundCount: state.lastCombatRoundCount ?? null,
+    // Rule 46 / schema v1.30+. Paused-combat snapshot. Null when no
+    // combat is paused. Round-tripped through state JSON so a saved-mid-
+    // pause session can resume against the same enemy at preserved
+    // STAMINA after reload.
+    activeCombat: state.activeCombat ?? null,
     log: state.log.slice(-20), // Keep recent log entries only
   };
   return out;
