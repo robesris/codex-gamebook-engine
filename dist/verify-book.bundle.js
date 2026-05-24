@@ -4,7 +4,7 @@
  * (fengari-web.js, cli-emulator/script-runtime.js, scripts/book-checks.js,
  * scripts/verifier-driver.js) + a standalone validator compiled from
  * codex.schema.json. Rebuild: node scripts/build-browser-verifier.js
- * Built: 2026-05-24T15:14:55.971Z
+ * Built: 2026-05-24T15:19:58.944Z
  * Schema: Gamebook Format (GBF) v1.30.0
  *
  * Usage in the Analysis tool:
@@ -634,6 +634,38 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
 
   // Orphan sections: no events, no choices, not flagged as an ending.
   // Dangling catalog entries: defined but never granted (possible missed pickup).
+  // Rule 46 (schema v1.30+) — flag combat events that try to RESUME a
+  // paused combat without any combat-pause site upstream. Partial
+  // static analysis: walks every section's flattened events looking
+  // for combat events with mode='resume', and walks the same events
+  // looking for combat events carrying interrupt_after_player_wounds
+  // or interrupt_after_enemy_wounds. If the resume set is non-empty
+  // but the interrupt set is empty, every resume site is structurally
+  // dead — there's no way state.activeCombat ever gets populated.
+  // (We do NOT try to trace reachability from each individual interrupt
+  // to each individual resume — a false positive on a complex flag-
+  // chain or stat_test-driven detour is more annoying than a missed
+  // diagnosis. The all-or-nothing check catches the common bug shape:
+  // a parser emitted resume sites but forgot to emit any pause sites.)
+  function checkRule46OrphanResumes(book) {
+    const resumeSites = [];
+    const interruptSites = [];
+    for (const [id, section] of Object.entries(book.sections || {})) {
+      for (const ev of flattenSectionEvents(section)) {
+        if (!ev || ev.type !== 'combat') continue;
+        if (ev.mode === 'resume') resumeSites.push(`§${id}`);
+        if (ev.interrupt_after_player_wounds || ev.interrupt_after_enemy_wounds) {
+          interruptSites.push(`§${id}`);
+        }
+      }
+    }
+    if (resumeSites.length === 0) return [];
+    if (interruptSites.length === 0) {
+      return [`Rule 46: ${resumeSites.length} combat event(s) carry mode:'resume' (${resumeSites.slice(0, 5).join(', ')}${resumeSites.length > 5 ? ', …' : ''}) but no combat event in the book carries an interrupt_after_player_wounds or interrupt_after_enemy_wounds — state.activeCombat is never populated, so every resume site falls back to start behavior`];
+    }
+    return [];
+  }
+
   function checkStructural(book) {
     const catalogIds = Object.keys(book.items_catalog || {});
     const granted = collectGrantedItemIds(book);
@@ -662,6 +694,7 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
       missingEatMeal: checkMissingEatMeal(book),
       categoryVsTextLanguage: checkCategoryVsTextLanguage(book),
       catalogEffectPromise: checkCatalogEffectPromise(book),
+      rule46OrphanResumes: checkRule46OrphanResumes(book),
     };
   }
 
@@ -747,6 +780,7 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
     checkMissingEatMeal,
     checkCategoryVsTextLanguage,
     checkCatalogEffectPromise,
+    checkRule46OrphanResumes,
     checkStructural,
     collectSoftFindings,
     buildScriptContext,
@@ -856,6 +890,7 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
       enumerate('missing eat_meal findings', soft.missingEatMeal);
       enumerate('catalog-category-vs-text-language findings', soft.categoryVsTextLanguage);
       enumerate('catalog-effect-promise-without-machinery findings', soft.catalogEffectPromise);
+      enumerate('Rule 46 orphan-resume findings', soft.rule46OrphanResumes || []);
 
       if (scriptCheck.skipped) {
         lines.push(`  Script execution: SKIPPED — ${scriptCheck.skipped}`);

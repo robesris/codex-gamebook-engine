@@ -6,6 +6,47 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.42.0 / GBF v1.30.0 / CLI emulator v3.24.0 / HTML emulator v3.22.0
+
+**Rule 46 — Pausable / Resumable Combat as Active State.** Adds first-class support for the source-text shape where a combat can be paused mid-fight by an Nth-wound interrupt and resumed at a later section with the enemy's STAMINA, frozen modifiers, and round + wound counters preserved. Surfaced by the FF Warlock chat-40 fresh parse against codex v2.41.0 — §173's Wight pauses to §24 after the player's third wound and §24's continue path resumes the SAME fight at the SAME enemy's remaining STAMINA, with a new "every third wound costs 1 SKILL" modifier introduced by the interlude. The pre-Rule-46 engine had no way to model this; the only workaround was a narrative-only "if you were wounded a third time" choice on §173 that asked the player to honest-self-count. FF Warlock §41's first-wound exit (Wight reveals immunity after the first wound dealt; player navigates to §310 to learn they need a silver weapon) is the companion case, addressed by the same machinery in the enemy-wounds direction.
+
+Schema additions (schema-additive — pre-v1.30 books validate unchanged):
+
+- `combat.mode` enum extended with three new lifecycle values that coexist with the existing multi-enemy ordering values on the same field: `"start"` (default — creates a fresh activeCombat from `enemy_ref`, runs combat to completion, clears activeCombat on normal completion); `"resume"` (continues an existing `state.activeCombat` — uses its preserved `enemy_ref` and `currentHealth` as the resumed combat's starting state; the resuming event's OWN combat_modifiers / damage_interactions / damage_caps apply fresh, NOT inherited from the prior paused combat — this lets §24's interlude introduce new modifiers cleanly); `"modify"` (adjusts `state.activeCombat` without engaging combat — supports updating `enemy_ref` and `current_health` in-place for patterns like wandering-monster determination).
+- `combat.interrupt_after_player_wounds: {count, target}` — pause and save activeCombat on the player's Nth wound TAKEN. Counted via the round_script's `combat.last_result === 'enemy_wounds_player'` rounds; ties / simultaneous / no-damage rounds do not increment.
+- `combat.interrupt_after_enemy_wounds: {count, target}` — pause and save activeCombat on the player's Nth wound DEALT. Counted via `'player_wounds_enemy'` rounds.
+- `combat.current_health` — modify-mode helper for wandering-monster patterns; sets `state.activeCombat.currentHealth` without engaging combat.
+- `combat.interrupt_on_first_player_hit` (boolean) is **deprecated** in favor of `interrupt_after_enemy_wounds: {count: 1, target: ...}`. Pre-v1.30 books carrying the boolean continue to validate (the schema description carries the migration note); new books MUST use the structured replacement.
+
+Runtime state:
+
+- `state.activeCombat` — new top-level state object preserving paused-combat state across section transitions. Round-tripped through `compactState` so save/load survives a paused combat. Shape: `{enemy_ref, enemy_snapshot, currentHealth, modifiers, damageInteractions, damageCaps, woundsDealt, woundsTaken, round, consecutiveLosses, originSection, originEventIdx}`.
+
+Emulator changes (CLI v3.24.0 and HTML v3.22.0, in lockstep):
+
+- `startCombat` / `handleCombat` dispatch on the lifecycle mode before the existing enemy-resolution + frozen-modifier pipeline. `'modify'` returns without engaging combat. `'resume'` reads enemy state from `state.activeCombat`; falls back to `'start'` with a log warning when activeCombat is null (the source-text pattern is broken but the engine should not deadlock). `'start'` (default) clears any stale activeCombat — the displaced paused fight is treated as abandoned (no `on_combat_end` dispatch).
+- `state.combat` / `window._combat` carry new `woundsDealt` / `woundsTaken` counters incremented in `runCombatRound` / `combatAttack` from the round_script's `last_result` tag, plus `interruptAfterPlayerWounds` / `interruptAfterEnemyWounds` frozen from the event at combat start.
+- `checkCombatEnd` runs the interrupt-after-N-wounds check at the top (after the player-death check, before win_after_rounds / end_after_rounds / enemy-defeated). Player-wounds takes priority over enemy-wounds when both thresholds fire on the same round. Pause snapshots enemy state into `state.activeCombat`, navigates to the interrupt's target, clears `state.combat` (does NOT fire `on_combat_end` — interrupts pause; only normal completion ends).
+- All normal completion paths (win_after_rounds, end_after_rounds, all-enemies-defeated, player-flee, R36 flee_combat, player-death) clear `state.activeCombat` alongside `state.combat` / `window._combat`.
+
+Codex doc (v2.42.0):
+
+- New **Rule 46** with full specification: source-text shapes (first-wound exit, Nth-wound interrupt with resume, dynamic enemy determination), schema additions, runtime state, emulator behavior, Design B (active-combat state) vs Design A (save-and-restore-HP fields) rationale, and parser detection triggers. Worked examples for FF Warlock §41 first-wound exit and §173 + §24 third-wound interrupt with recurring resume loop.
+- New Topical Decision Table row covering both interrupt shapes, the resume pattern, the modify-mode wandering-monster extension, and the migration from the deprecated boolean.
+
+Validator:
+
+- `scripts/book-checks.js` adds `checkRule46OrphanResumes` — soft (non-blocking) check that flags books where `mode: "resume"` combat events exist but no combat event in the book carries an `interrupt_after_*_wounds` field. Partial static analysis: catches the all-or-nothing common-case bug (parser emitted resume sites but forgot to emit any pause sites) without false-positive-flagging per-site reachability detours. Wired into both `scripts/validate-book.js` (Node) and `scripts/verifier-driver.js` (browser bundle) for consistent reporting in both environments.
+- Browser verifier (`dist/verify-book.bundle.js`) rebuilt from the updated schema + shared sources via `npm run build-verifier`.
+
+Tests (`tests/run.js`):
+
+- Ten new tests covering: interrupt_after_player_wounds basic pause + snapshot; interrupt_after_enemy_wounds with reduced enemy STAMINA preserved; ties / simultaneous / no-damage rounds do NOT increment wound counters; mode='resume' preserves enemy STAMINA at the saved value (not catalog default); mode='start' clears stale activeCombat; mode='modify' updates activeCombat in place (enemy_ref swap + current_health override) without engagement; normal completion clears activeCombat; activeCombat round-trips through compactState; schema declares the new fields on event.properties with required {count, target}; schema-additive — pre-v1.30 books validate unchanged. Total: 85/85.
+
+Design rationale: Chose **Design B (general activeCombat state)** over Design A (targeted save/restore-HP fields) per the chat-40 design discussion. Active-combat state generalizes to mid-fight modifier introductions (§24's recurring -1 SKILL), mid-fight enemy swaps (transforming bosses), wandering-monster determination via `mode: 'modify'`, and future patterns we haven't seen yet, where the simpler save-and-restore field would have grown ad-hoc as new cases surfaced. The data model also matches the source-text mental model: the fiction describes a *fight* that resumes, not a *stat* that gets restored.
+
+**Surfaced by:** the FF Warlock chat-40 fresh parse against codex v2.41.0 — see the chat-39-handoff-qcmWC branch's HANDOFF doc for the parse artifacts, the engine-gap analysis that pushed back on "impossible to express" claims, and the Design A vs Design B decision discussion. Resolves the "Combat interrupt on Nth player wound" entry in DEV_PROCESS.md → Tracked engine backlog (entry now marked ✅ RESOLVED). After Rule 46 ships, a future Warlock comprehensive-review sub-agent migrates §41 (`interrupt_after_enemy_wounds: {count: 1, target: 310}`) and §173 + §24 (paired `interrupt_after_player_wounds: {count: 3, target: 24}` + `mode: 'resume'` recurring loop) to the canonical Rule 46 encoding, replacing the pre-Rule-46 narrative-only workarounds.
+
 ## v2.41.0 / GBF v1.29.0 / CLI emulator v3.23.0 / HTML emulator v3.21.0
 
 **Doc-only — reachability mirror-choice workaround pattern is now documented in the schema and Step 7.** Surfaced during the Rule 45 retrospective: the Warlock orphan-recovery pass had added explicit `choices[]` entries to several sections to teach `scripts/check-reachability.js` about navigation edges that exist in play but are not in the script's canonical nav-field set (`stat_test.success_to`/`failure_to`, `set_flag` → `has_flag` round-trips, `input_number` with `target: "computed"`). These "mirror choices" are typically never presented to the player at runtime because the implicit-edge mechanism (stat_test pause, flag-driven event, input_number prompt) fires first and navigates away before the section's `choices[]` array renders — they exist purely as tooling artifacts that pad the static reachability graph until it matches the in-play graph.

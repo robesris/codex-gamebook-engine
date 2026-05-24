@@ -94,6 +94,7 @@
       enumerate('missing eat_meal findings', soft.missingEatMeal);
       enumerate('catalog-category-vs-text-language findings', soft.categoryVsTextLanguage);
       enumerate('catalog-effect-promise-without-machinery findings', soft.catalogEffectPromise);
+      enumerate('Rule 46 orphan-resume findings', soft.rule46OrphanResumes || []);
 
       if (scriptCheck.skipped) {
         lines.push(`  Script execution: SKIPPED — ${scriptCheck.skipped}`);

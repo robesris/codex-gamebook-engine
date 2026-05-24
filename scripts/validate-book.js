@@ -112,6 +112,7 @@ function printSoftChecks(book) {
   enumerate('missing eat_meal findings', f.missingEatMeal);
   enumerate('catalog-category-vs-text-language findings', f.categoryVsTextLanguage);
   enumerate('catalog-effect-promise-without-machinery findings', f.catalogEffectPromise);
+  enumerate('Rule 46 orphan-resume findings', f.rule46OrphanResumes || []);
 }
 
 const bookText = fs.readFileSync(bookPath, 'utf8');
