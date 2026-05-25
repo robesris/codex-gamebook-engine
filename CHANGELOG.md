@@ -6,7 +6,7 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
-## v2.44.0 / GBF v1.32.0 / CLI emulator v3.26.0 / HTML emulator v3.22.0
+## v2.44.0 / GBF v1.32.0 / CLI emulator v3.27.0 / HTML emulator v3.22.0
 
 **Rule 48 — Round-cap combat interrupt with preserved active state (`interrupt_after_rounds`).** Schema-additive ship that pushes the chat-40 Warlock fresh-parse coverage from 99.5% (413/415) to **100% (418/418)**.
 

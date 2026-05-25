@@ -2,8 +2,11 @@
 /**
  * Grimoire: The Universal Gamebook Engine — CLI Emulator
  *
- * Version: 2.5.0
- * Compatible with codex doc >= 2.7 and GBF schema >= 1.4.0
+ * The authoritative emulator version is the `CODEX_EMULATOR_VERSION`
+ * constant below. The codex doc's "Version identifiers" section names
+ * the version of this file the rest of the toolchain currently ships
+ * with; the "CODEX VERSION AND COMPATIBILITY" table near the top of
+ * the codex doc names the minimums the parser AI requires.
  *
  * Stateless command-line emulator for GBF game data files.
  * Each invocation takes a state JSON + an action and outputs a new state.
@@ -24,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.24.0';
+const CODEX_EMULATOR_VERSION = '3.27.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
