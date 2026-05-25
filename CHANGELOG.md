@@ -6,6 +6,24 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.47.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
+
+**Rule 49.1 — stat-name-in-note catch-net + parser-attention principle.** Surfaced when FF Warlock §131 (the shared-meal half-heal section) was found to be silently un-enforced. The source text *"You may, if you wish, eat a meal from your Provisions, but you will have to share it with them and thus will only gain half the normal STAMINA points"* was encoded as `{ type: "eat_meal", required: false, note: "May eat Provisions but must share - only gain 2 STAMINA instead of 4" }`, leaving the heal amount at the global default (4) instead of using the per-event `heal_amount` override the schema already provided. The Rule 49 `mechanic-verbs-in-note` catch-net from v2.45.0 didn't fire — its regex set (`must drop`, `also lose`, `in addition to`, etc.) didn't include the §131 verbs (`must share`, `only gain`, `instead of N`, `half|double the normal`).
+
+Two complementary fixes, validator-only — no schema or emulator change:
+
+- **Extended `mechanic-verbs-in-note` regex vocabulary.** Added: `\bmust\s+share\b`, `\bonly\s+(?:gain|get|receive|restore|lose|recover)\b`, `\binstead\s+of\s+(?:the\s+)?(?:normal|usual|standard|\d+)\b`, `\b(?:half|halve|halved|double|doubled)\s+(?:the\s+|your\s+)?(?:normal|usual)\b`. Conservative — each requires a constraint-shaped phrase, not a bare stat-name mention.
+
+- **New soft check `stat-name-in-note`** (Rule 49.1). Walks every event's `note` field and flags any note that mentions a declared stat name (from `book.rules.stats[].name` plus the cross-engine alias set: `stamina, skill, luck, endurance, combat_skill, willpower, provisions, gold`) AND contains a digit AND contains a constraint-shaped word (`only, must, instead of, half, halve, double, share, forfeit, ...`). All three signals required — tuned so that benign parser commentary like `"First word 'STAMINA' confirmed from PDF"` (stat name only, no digit, no constraint) and `"STAMINA cap remains 24"` (stat + digit, no constraint) do NOT flag. Cross-book scan against the six first-party books surfaces exactly ONE finding before re-encoding: Warlock §131.
+
+The parser-attention principle (the user-noted insight, now documented in Rule 49.1): any text containing a declared stat name (in any casing) or a differently-cased rule token (`Backpack`, `Weapon`, `Provisions`, `Equipment List`, `Action Chart`, `Special Ability`, etc.) almost always carries mechanical weight in the source. Sub-agents performing first-pass parsing should treat such tokens as mandatory-encode signals, not flavor.
+
+Resolution shape for §131-style heal-amount variation: `heal_amount` is already a per-event integer override on `eat_meal` (alongside the global default in `provisions_rules.heal_amount`), and both emulators honor it. The §131 encoding becomes a one-field deviation: `{ "type": "eat_meal", "required": false, "heal_amount": 2 }`. Use the highest-level event field that expresses the variation; only drop to raw `modify_stat` primitives wrapped in a `prompt_choice` when no schema field fits.
+
+Follow-up: a comprehensive-review sub-agent run on FF Warlock to re-encode §131 with the `heal_amount: 2` override and remove the orphaned note. The extended catch-net will be re-run cross-book after the fix to confirm zero remaining findings.
+
+---
+
 ## v2.46.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
 
 **Rule 50 — `prompt_choice` event for voluntary binary player decisions.** Surfaced by the Rule 49 follow-up sub-agent run on FF Warlock. After §155 / §34 / §327 / §328 migrated to Rule 40 `choose_items mode:"remove"`, the resulting encoding was over-permissive: the source-text idiom *"you may keep this if you are prepared to forfeit one of your items"* offers the player a real choice to decline the entire trade (no item gained, no item dropped), but Rule 40's strict-exchange shape forces the trade. The `optional: true` field on `add_item` was documented as "player can choose whether to take/apply this" but was a no-op in both emulators (a silent pre-existing bug, since the optional pickups had never been gated on anything downstream). The fix is a new event type that surfaces the binary choice to the player and exposes the decision as flags downstream events can gate on.

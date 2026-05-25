@@ -4,7 +4,7 @@
  * (fengari-web.js, cli-emulator/script-runtime.js, scripts/book-checks.js,
  * scripts/verifier-driver.js) + a standalone validator compiled from
  * codex.schema.json. Rebuild: node scripts/build-browser-verifier.js
- * Built: 2026-05-25T18:01:15.720Z
+ * Built: 2026-05-25T18:17:41.962Z
  * Schema: Gamebook Format (GBF) v1.34.0
  *
  * Usage in the Analysis tool:
@@ -705,8 +705,11 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
     // or stat/inventory deltas that should be in the events array.
     const verbs = [
       /\bmust\s+drop\b/i,
-      /\bmust\s+(?:give\s+up|leave|exchange|trade)\b/i,
+      /\bmust\s+(?:give\s+up|leave|exchange|trade|share)\b/i,
       /\balso\s+(?:lose|gain|deduct|reduce|restore)\b/i,
+      /\bonly\s+(?:gain|get|receive|restore|lose|recover)\b/i,
+      /\binstead\s+of\s+(?:the\s+)?(?:normal|usual|standard|\d+)\b/i,
+      /\b(?:half|halve|halved|double|doubled)\s+(?:the\s+|your\s+)?(?:normal|usual)\b/i,
       /\bin\s+addition\s+to\b/i,
       /\bmay\s+(?:only|not)\s+(?:take|keep|use)\s+if\b/i,
       /\bcan\s+only\s+be\s+(?:taken|kept|used)\s+if\b/i,
@@ -725,6 +728,47 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
         }
         if (!matched) continue;
         findings.push(`§${secId} ${ev.type} event: note describes un-encoded mechanic ("${matched}") — full note: "${note.slice(0, 120)}${note.length > 120 ? '...' : ''}"`);
+      }
+    }
+    return findings;
+  }
+
+  // Rule 49.1 (codex v2.47+). Notes that mention a declared stat name
+  // alongside a digit AND a constraint-shaped word are highly suspicious:
+  // the §131 idiom "only gain 2 STAMINA instead of 4" is the canonical
+  // case. Tuned to be conservative: requires ALL THREE signals (stat name
+  // + digit + constraint word) so benign parser commentary like
+  // "First word 'STAMINA' confirmed from PDF" or "STAMINA cap is 24"
+  // does NOT flag (former: no digit AND no constraint; latter: digit but
+  // no constraint word). The user-noted insight: text containing a stat
+  // name or a differently-cased rule-word ("Backpack", "Provisions",
+  // "Equipment List") warrants extra parser attention because such
+  // tokens almost always carry mechanical weight in the source.
+  function checkStatNameInNote(book) {
+    const findings = [];
+    const declared = (book.rules?.stats || []).map(s => (s && s.name) ? s.name.toLowerCase() : null).filter(Boolean);
+    // Common stat-name aliases across the engine's first-party books, in
+    // case a book's `rules.stats[]` declares one spelling but the note
+    // uses the source-text spelling (e.g. declared "endurance" vs note
+    // "ENDURANCE points"). Conservative additions only.
+    const aliases = ['stamina', 'skill', 'luck', 'endurance', 'combat_skill', 'combat skill', 'willpower', 'provisions', 'gold'];
+    const statNames = new Set([...declared, ...aliases]);
+    const digit = /\d/;
+    // Constraint-shaped words: quantifiers and conditionals that almost
+    // always co-occur with a mechanical effect (as distinct from pure
+    // narrative or parser commentary).
+    const constraint = /\b(?:only|just|must|may\s+only|can\s+only|instead\s+of|half|halve|halved|double|doubled|share|share\s+it|forfeit|forced\s+to)\b/i;
+    for (const [secId, s] of Object.entries(book.sections || {})) {
+      if (!s) continue;
+      for (const ev of flattenSectionEvents(s)) {
+        if (!ev || typeof ev.note !== 'string') continue;
+        const note = ev.note;
+        const nl = note.toLowerCase();
+        const hitStat = [...statNames].find(name => nl.includes(name));
+        if (!hitStat) continue;
+        if (!digit.test(note)) continue;
+        if (!constraint.test(note)) continue;
+        findings.push(`§${secId} ${ev.type} event: note mentions stat "${hitStat.toUpperCase()}" with a numeric value and constraint phrasing — likely un-encoded mechanic. Full note: "${note.slice(0, 140)}${note.length > 140 ? '...' : ''}"`);
       }
     }
     return findings;
@@ -760,6 +804,7 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
       catalogEffectPromise: checkCatalogEffectPromise(book),
       rule46OrphanResumes: checkRule46OrphanResumes(book),
       mechanicVerbsInNote: checkMechanicVerbsInNote(book),
+      statNameInNote: checkStatNameInNote(book),
     };
   }
 
@@ -957,6 +1002,7 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
       enumerate('catalog-effect-promise-without-machinery findings', soft.catalogEffectPromise);
       enumerate('Rule 46 orphan-resume findings', soft.rule46OrphanResumes || []);
       enumerate('Rule 49 mechanic-verbs-in-note findings', soft.mechanicVerbsInNote || []);
+      enumerate('Rule 49.1 stat-name-in-note findings', soft.statNameInNote || []);
 
       if (scriptCheck.skipped) {
         lines.push(`  Script execution: SKIPPED — ${scriptCheck.skipped}`);

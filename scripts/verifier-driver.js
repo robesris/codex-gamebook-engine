@@ -96,6 +96,7 @@
       enumerate('catalog-effect-promise-without-machinery findings', soft.catalogEffectPromise);
       enumerate('Rule 46 orphan-resume findings', soft.rule46OrphanResumes || []);
       enumerate('Rule 49 mechanic-verbs-in-note findings', soft.mechanicVerbsInNote || []);
+      enumerate('Rule 49.1 stat-name-in-note findings', soft.statNameInNote || []);
 
       if (scriptCheck.skipped) {
         lines.push(`  Script execution: SKIPPED — ${scriptCheck.skipped}`);

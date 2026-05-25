@@ -4531,6 +4531,94 @@ test('Rule 49 v2.45.0: disarmament regex now catches FF-dialect "leave behind" /
 });
 
 // ============================================================
+// Rule 49.1 v2.47.0 — stat-name-in-note + extended mechanic-verbs vocab
+// ============================================================
+
+test('Rule 49.1 v2.47.0: stat-name-in-note flags §131-shape "only gain N STAMINA" notes', () => {
+  const BookChecks = require('../scripts/book-checks.js');
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 3 },
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }, { name: 'STAMINA', initial: 20 }, { name: 'LUCK', initial: 10 }],
+      provisions: { enabled: true, heal_amount: 4, heal_stat: 'stamina' },
+    },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      // §131-shape: shared-meal half-heal stashed in note on an eat_meal
+      '131': {
+        text: '...',
+        events: [{ type: 'eat_meal', required: false, note: 'May eat Provisions but must share - only gain 2 STAMINA instead of 4' }],
+        choices: [],
+        is_ending: false,
+      },
+      // Negative #1: benign parser commentary mentioning a stat with no
+      // digit AND no constraint — must NOT trip (the false positive the
+      // heuristic is tuned against)
+      '20': {
+        text: '...',
+        events: [{ type: 'add_item', item: 'shield', note: "First word 'STAMINA' confirmed from PDF illustration" }],
+        choices: [],
+        is_ending: false,
+      },
+      // Negative #2: stat name + digit but no constraint word — also
+      // benign (parser noting a cap or initial value)
+      '21': {
+        text: '...',
+        events: [{ type: 'add_item', item: 'shield', note: 'STAMINA cap remains 24 throughout' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  };
+  const findings = BookChecks.collectSoftFindings(book).statNameInNote;
+  assertTrue(findings.length === 1, `expected exactly 1 finding, got ${findings.length}: ${JSON.stringify(findings)}`);
+  assertTrue(findings[0].includes('§131') && findings[0].includes('STAMINA'), '§131 STAMINA finding present');
+  assertTrue(!findings.some(f => f.includes('§20')), '§20 benign parser-commentary note not flagged');
+  assertTrue(!findings.some(f => f.includes('§21')), '§21 stat+digit-without-constraint note not flagged');
+});
+
+test('Rule 49.1 v2.47.0: extended mechanic-verbs vocab catches "must share" / "only gain" / "instead of N"', () => {
+  const BookChecks = require('../scripts/book-checks.js');
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 3 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }] },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      // The §131 phrase that the v2.45 vocab missed
+      '131': {
+        text: '...',
+        events: [{ type: 'eat_meal', required: false, note: 'May eat Provisions but must share - only gain 2 STAMINA instead of 4' }],
+        choices: [],
+        is_ending: false,
+      },
+      // "half the normal" variant
+      '132': {
+        text: '...',
+        events: [{ type: 'eat_meal', required: false, note: 'Eat meal but heal half the normal STAMINA' }],
+        choices: [],
+        is_ending: false,
+      },
+      // Negative: a note that uses NONE of the new verbs (and none of the
+      // pre-v2.47 verbs) must NOT trip
+      '1': {
+        text: '...',
+        events: [{ type: 'modify_stat', stat: 'SKILL', amount: 1, note: 'gain 1 SKILL per source text' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  };
+  const findings = BookChecks.collectSoftFindings(book).mechanicVerbsInNote;
+  assertTrue(findings.some(f => f.includes('§131') && f.includes('must share')), `§131 'must share' flagged: ${JSON.stringify(findings)}`);
+  assertTrue(findings.some(f => f.includes('§132')), `§132 'half the normal' flagged: ${JSON.stringify(findings)}`);
+  assertTrue(!findings.some(f => f.includes('§1 ')), '§1 benign descriptive note not flagged');
+});
+
+// ============================================================
 // Rule 50 v2.46.0 — prompt_choice (voluntary binary player decision)
 // ============================================================
 
