@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.33.0",
+  "title": "Gamebook Format (GBF) v1.34.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -762,6 +762,7 @@
             "script",
             "return_to_caller",
             "route_by_flag",
+            "prompt_choice",
             "custom"
           ]
         },
@@ -796,6 +797,12 @@
         "note": { "type": "string", "description": "Any event: supplementary parser note." },
 
         "flag": { "type": "string", "description": "set_flag: flag name to set." },
+
+        "prompt": { "type": "string", "description": "prompt_choice (schema v1.34+, Rule 50): the question / offer text shown to the player. The narrative wording the player sees on the accept/decline prompt — e.g. \"You may take the iron shield, but only if you leave behind one item of equipment. Take the shield?\"" },
+        "accept_label": { "type": "string", "description": "prompt_choice: label for the ACCEPT button. Defaults to \"Accept\" if absent. Use a verb phrase that names the affirmative consequence (\"Take the shield (drop one item)\", \"Drink the potion\")." },
+        "decline_label": { "type": "string", "description": "prompt_choice: label for the DECLINE button. Defaults to \"Decline\" if absent. Use a verb phrase that names the negative consequence (\"Leave the shield\", \"Refuse the offer\")." },
+        "accept_set_flag": { "type": "string", "description": "prompt_choice: optional flag to set if the player accepts. Used by downstream events' `condition` fields to fire only on acceptance (the canonical voluntary-trade pattern: prompt_choice → choose_items mode:'remove' gated on accept_set_flag → add_item gated on the choose_items' on_success_set_flag)." },
+        "decline_set_flag": { "type": "string", "description": "prompt_choice: optional flag to set if the player declines. Rarely needed (the absence of accept_set_flag conveys the same information), but useful when a section has BOTH an accept branch AND a decline branch with separate downstream effects." },
 
         "enemy_ref": { "type": "string", "description": "combat (single enemy): reference to enemies_catalog." },
         "enemies": {

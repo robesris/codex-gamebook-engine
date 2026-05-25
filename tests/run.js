@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title bumped to v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title bumped to v1.34.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title bumped to v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title bumped to v1.34.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,7 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -3677,7 +3677,7 @@ test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -3851,7 +3851,7 @@ test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.28 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -4258,7 +4258,7 @@ test('Rule 46 v2.42.0: schema-additive — pre-v1.30 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.30 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 // ============================================================
@@ -4434,7 +4434,7 @@ test('Rule 49 v2.45.0: schema accepts both failure_penalty shapes', () => {
   assertTrue(validate(baseBook({ stat: 'SKILL', amount: -1 })), 'single-object shape validates');
   assertTrue(validate(baseBook([{ stat: 'SKILL', amount: -1 }, { stat: 'SKILL', amount: -2 }])), 'array shape validates');
   assertTrue(!validate(baseBook('bogus')), 'string penalty rejected');
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
 });
 
 test('Rule 49 v2.45.0: schema-additive — pre-v1.33 books validate unchanged', () => {
@@ -4528,6 +4528,172 @@ test('Rule 49 v2.45.0: disarmament regex now catches FF-dialect "leave behind" /
   };
   const findings = BookChecks.collectSoftFindings(book).disarmamentWithoutEvent;
   assertTrue(findings.some(f => f.includes('§155')), `§155 should be flagged: ${JSON.stringify(findings)}`);
+});
+
+// ============================================================
+// Rule 50 v2.46.0 — prompt_choice (voluntary binary player decision)
+// ============================================================
+
+test('Rule 50 v2.46.0: prompt_choice pauses with accept/decline actions', () => {
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'offer',
+        events: [{
+          type: 'prompt_choice',
+          prompt: 'Take it?',
+          accept_label: 'Yes',
+          decline_label: 'No',
+          accept_set_flag: 'took_it',
+        }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  });
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state = play.navigateTo(state, book, 1);
+  assertEqual(state.pause?.type, 'prompt_choice', 'paused at prompt_choice');
+  const actions = play.getAvailableActions(state, book).map(a => a.name);
+  assertTrue(actions.includes('accept') && actions.includes('decline'), 'accept and decline exposed');
+});
+
+test('Rule 50 v2.46.0: accept sets accept_set_flag and continues', () => {
+  const book = buildBook({
+    sections: {
+      '1': {
+        text: 'offer',
+        events: [
+          { type: 'prompt_choice', prompt: 'Take it?', accept_set_flag: 'took_it' },
+          { type: 'set_flag', flag: 'after_prompt' },
+        ],
+        choices: [{ text: 'end', target: '1', condition: null }],
+      },
+    },
+  });
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state = play.navigateTo(state, book, 1);
+  state = play.applyAction(state, book, 'accept');
+  assertTrue(state.flags.includes('took_it'), 'accept_set_flag set on accept');
+  assertTrue(state.flags.includes('after_prompt'), 'subsequent events ran after resume');
+  assertTrue(!state.pause || state.pause.type !== 'prompt_choice', 'no longer paused on prompt_choice');
+});
+
+test('Rule 50 v2.46.0: decline sets decline_set_flag and skips accept-gated events', () => {
+  const book = buildBook({
+    items_catalog: { gem: { name: 'Gem' } },
+    sections: {
+      '1': {
+        text: 'offer',
+        events: [
+          { type: 'prompt_choice', prompt: 'Take it?', accept_set_flag: 'took_it', decline_set_flag: 'refused_it' },
+          { type: 'add_item', item: 'gem', condition: { type: 'has_flag', flag: 'took_it' } },
+        ],
+        choices: [{ text: 'end', target: '1', condition: null }],
+      },
+    },
+  });
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state = play.navigateTo(state, book, 1);
+  state = play.applyAction(state, book, 'decline');
+  assertTrue(state.flags.includes('refused_it'), 'decline_set_flag set on decline');
+  assertEqual(state.flags.includes('took_it'), false, 'accept flag NOT set on decline');
+  assertEqual(state.inventory.includes('gem'), false, 'accept-gated add_item did not fire');
+});
+
+test('Rule 50 v2.46.0: prompt_choice + choose_items mode:remove composes for voluntary accept-with-trade', () => {
+  // The canonical §155-shape encoding: optional accept, mandatory trade
+  // on acceptance, no trade and no grant on decline.
+  const book = buildBook({
+    items_catalog: {
+      shield: { name: 'Shield' },
+      sword: { name: 'Sword' },
+      torch: { name: 'Torch' },
+    },
+    sections: {
+      '1': {
+        text: 'You may take the shield, but only if you drop one item.',
+        events: [
+          { type: 'prompt_choice', prompt: 'Take the shield?', accept_set_flag: 'accept_shield' },
+          // The trade ONLY runs if the player accepted.
+          {
+            type: 'choose_items', mode: 'remove', count: 1,
+            on_success_set_flag: 'shield_traded',
+            condition: { type: 'has_flag', flag: 'accept_shield' },
+            description: 'Drop one item',
+          },
+          // The grant ONLY runs if the trade actually happened (which
+          // in turn only runs if the player accepted).
+          { type: 'add_item', item: 'shield', condition: { type: 'has_flag', flag: 'shield_traded' } },
+          // Clean up scratch flags so they don't leak forward.
+          { type: 'clear_flag', flag: 'accept_shield' },
+          { type: 'clear_flag', flag: 'shield_traded' },
+        ],
+        choices: [{ text: 'end', target: '1', condition: null }],
+      },
+    },
+  });
+
+  // Path A: decline
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.inventory = ['sword', 'torch'];
+  state = play.navigateTo(state, book, 1);
+  state = play.applyAction(state, book, 'decline');
+  assertEqual(state.inventory.includes('shield'), false, 'decline: no shield gained');
+  assertEqual(state.inventory.length, 2, 'decline: nothing dropped');
+
+  // Path B: accept, then pick which item to drop
+  state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.inventory = ['sword', 'torch'];
+  state = play.navigateTo(state, book, 1);
+  state = play.applyAction(state, book, 'accept');
+  // choose_items mode:remove now pauses with the multi-eligible inventory
+  assertEqual(state.pause?.type, 'choose_items', 'accept: choose_items pauses for drop pick');
+  state = play.applyAction(state, book, 'choose_items', ['torch']);
+  assertTrue(state.inventory.includes('shield'), 'accept: shield granted');
+  assertEqual(state.inventory.includes('torch'), false, 'accept: torch dropped');
+  assertEqual(state.flags.includes('accept_shield'), false, 'scratch flag cleared');
+  assertEqual(state.flags.includes('shield_traded'), false, 'scratch flag cleared');
+});
+
+test('Rule 50 v2.46.0: prompt_choice is in the schema event-type enum', () => {
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  const eventEnum = schema.definitions.event.properties.type.enum;
+  assertTrue(eventEnum.includes('prompt_choice'), 'prompt_choice in event type enum');
+});
+
+test('Rule 50 v2.46.0: schema-additive — pre-v1.34 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A v1.33-era book with no prompt_choice events.
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      '1': {
+        text: 't',
+        events: [{ type: 'modify_stat', stat: 'SKILL', amount: 1 }],
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  };
+  assertTrue(validate(book), `pre-v1.34 book should validate clean: ${JSON.stringify(validate.errors)}`);
 });
 
 // ============================================================

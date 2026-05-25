@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.24.0';
+const CODEX_EMULATOR_VERSION = '3.25.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2618,6 +2618,9 @@ function processNextEvent() {
       break;
     case 'input_text':
       handleInputText(event);
+      break;
+    case 'prompt_choice':
+      handlePromptChoice(event);
       break;
     case 'choose_items':
       handleChooseItems(event);
@@ -4867,6 +4870,38 @@ function handleInputNumber(event) {
       navigateTo(num);
     }
   };
+}
+
+// ==================== PROMPT CHOICE ====================
+// Schema v1.34+ (Rule 50). Binary accept/decline player decision.
+// On accept sets event.accept_set_flag (if declared); on decline sets
+// event.decline_set_flag (if declared). Subsequent events in the same
+// section's events[] queue can gate on those flags via Rule 15.
+function handlePromptChoice(event) {
+  const content = document.getElementById('game-content');
+  const area = document.createElement('div');
+  area.className = 'prompt-choice-area';
+  content.appendChild(area);
+
+  const acceptLabel = event.accept_label || 'Accept';
+  const declineLabel = event.decline_label || 'Decline';
+
+  area.innerHTML = `
+    <h3>${event.prompt || 'Make a choice'}</h3>
+    <div class="mt-2 center" style="display:flex;gap:12px;justify-content:center;">
+      <button class="btn" id="prompt-accept">${acceptLabel}</button>
+      <button class="btn" id="prompt-decline">${declineLabel}</button>
+    </div>
+  `;
+
+  const resolve = (accepted) => {
+    const flag = accepted ? event.accept_set_flag : event.decline_set_flag;
+    if (flag && !state.flags.includes(flag)) state.flags.push(flag);
+    area.innerHTML = `<div class="event-msg">${accepted ? acceptLabel : declineLabel}</div>`;
+    processNextEvent();
+  };
+  area.querySelector('#prompt-accept').addEventListener('click', () => resolve(true));
+  area.querySelector('#prompt-decline').addEventListener('click', () => resolve(false));
 }
 
 // ==================== INPUT TEXT ====================

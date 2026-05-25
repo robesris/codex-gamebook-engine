@@ -6,6 +6,25 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.46.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
+
+**Rule 50 — `prompt_choice` event for voluntary binary player decisions.** Surfaced by the Rule 49 follow-up sub-agent run on FF Warlock. After §155 / §34 / §327 / §328 migrated to Rule 40 `choose_items mode:"remove"`, the resulting encoding was over-permissive: the source-text idiom *"you may keep this if you are prepared to forfeit one of your items"* offers the player a real choice to decline the entire trade (no item gained, no item dropped), but Rule 40's strict-exchange shape forces the trade. The `optional: true` field on `add_item` was documented as "player can choose whether to take/apply this" but was a no-op in both emulators (a silent pre-existing bug, since the optional pickups had never been gated on anything downstream). The fix is a new event type that surfaces the binary choice to the player and exposes the decision as flags downstream events can gate on.
+
+Schema additions (v1.34+, schema-additive — pre-v1.34 books validate unchanged):
+
+- **New event type `prompt_choice`** with fields `prompt` (offer text), `accept_label` / `decline_label` (button labels, defaulting to `"Accept"` / `"Decline"`), `accept_set_flag` / `decline_set_flag` (the flags set on the player's answer). Subsequent events in the same section's `events[]` array gate on the resulting flag(s) via the standard Rule 15 `condition: {has_flag: ...}` infrastructure.
+
+Emulator additions:
+
+- CLI emulator (`cli-emulator/play.js`): new event-dispatcher case sets `state.pause = {type: 'prompt_choice', event}`; `getAvailableActions` exposes `accept` and `decline` actions (with `accept_label` / `decline_label` as their descriptions); `applyAction` sets the appropriate flag and clears the pause on either action.
+- HTML emulator (`index.html`): new `handlePromptChoice` renders an inline two-button area; click handler sets the flag and continues the event queue.
+
+Canonical worked example — the §155 voluntary accept-with-trade encoding becomes a four-event chain: `prompt_choice` (offer) → flag-gated `choose_items mode:"remove"` (the trade, only on accept) → flag-gated `add_item` (the grant, only when trade happened) → two `clear_flag` cleanups. Decline path: no flags set → both downstream events no-op via their conditions → no item gained, no item dropped. The Rule 40 `on_success_set_flag` continues to gate the `add_item` so the strict half of the trade also stays intact.
+
+The pre-existing `optional: true` field on `add_item` is now documented as deprecated. Both emulators were silently ignoring it; the new prompt_choice + flag-gate chain is the canonical replacement. Future schema bumps may drop the field, but pre-v1.34 books carrying it continue to validate.
+
+Follow-up: a comprehensive-review sub-agent run on FF Warlock to re-encode §155 / §34 / §327 / §328 to the new `prompt_choice` + flag-gated `choose_items mode:"remove"` shape, replacing the over-permissive Rule 40 strict-exchange encoding from the previous bump.
+
 ## v2.45.0 / GBF v1.33.0 / CLI emulator v3.28.0 / HTML emulator v3.24.0
 
 **Rule 49 — Multi-stat `failure_penalty` + un-encoded-constraint catch-net.** Three coupled findings drove this rule: FF Warlock §155 (iron-shield trade) had a Rule 40 voluntary-trade constraint sitting in a freeform `note` because the validator's disarmament regex set didn't catch FF-dialect phrasings; FF Warlock §361 (poison-gas key) had a multi-stat failure penalty (lose 2 SKILL AND 3 STAMINA) where the schema's `failure_penalty: {stat, amount}` could only carry one, so the second penalty ended up in a `note`; and the HTML emulator's `failure_penalty` handler was checking `penalty.type === 'modify_stat'` — a shape the schema never produced — so even single-stat penalties were silently dropped in the browser. All three are addressed together.

@@ -4954,6 +4954,65 @@ Both emulators' `failure_penalty` handlers normalise to array form (`Array.isArr
 
 **Verification.** Applied first to FF Warlock §361 (poison-gas key) for the multi-stat shape, and to FF Warlock §155 (iron-shield trade) for the disarmament-regex extension. The catch-net soft check surfaces both as `mechanic-verbs-in-note` findings before migration and goes quiet after the sub-agent re-encodes them properly. Sub-agents running a comprehensive review on any first-party book should examine every `mechanic-verbs-in-note` finding and either (a) migrate the constraint into a structured event (the common case) or (b) edit the note to remove the mechanic-verb phrasing if the note is genuinely parser commentary that the heuristic over-matched.
 
+### Rule 50: Voluntary binary player decision (`prompt_choice` event)
+
+Surfaced by the Rule 49 follow-up sub-agent run on FF Warlock. After §155 / §34 / §327 / §328 migrated to Rule 40 `choose_items mode:"remove"`, the resulting encoding was over-permissive: the source-text idiom *"you may keep this if you are prepared to forfeit one of your items of equipment"* offers the player a real choice to decline the entire trade (no item gained, no item dropped), but Rule 40's strict-exchange shape forces the trade. The `optional: true` field on `add_item` was documented as "player can choose whether to take/apply this" but was a no-op in both emulators (a silent pre-existing bug, since the optional pickups had never been gated on anything downstream). The fix is a new event type that surfaces the binary choice to the player and exposes the decision as flags downstream events can gate on.
+
+**Schema addition (v1.34+, schema-additive — pre-v1.34 books validate unchanged):**
+
+New event type **`prompt_choice`** with the following fields:
+
+- `prompt` (string, optional) — the offer text shown to the player. The narrative wording the player sees on the accept/decline prompt.
+- `accept_label` (string, optional, default `"Accept"`) — label for the affirmative button. Use a verb phrase that names the consequence (`"Take the shield (drop one item)"`, `"Drink the potion"`).
+- `decline_label` (string, optional, default `"Decline"`) — label for the negative button. Use a verb phrase that names the negative consequence (`"Leave the shield"`).
+- `accept_set_flag` (string, optional) — flag set on accept. Downstream events in the same section's `events[]` array gate on this via the standard Rule 15 `condition: {has_flag: ...}` infrastructure.
+- `decline_set_flag` (string, optional) — flag set on decline. Rarely needed (absent `accept_set_flag` conveys the same information), but useful when a section has BOTH an accept branch AND a decline branch with separate downstream effects.
+
+**Emulator semantics:**
+
+On event dispatch the emulator pauses with `pause.type = "prompt_choice"`. The CLI emulator exposes two actions (`accept`, `decline`) via `getAvailableActions`. The HTML emulator renders an inline two-button area. On accept (or decline), the corresponding flag is set if declared, the pause is cleared, and the section's event queue continues. Flags persist on `state.flags` and behave like any other flag — they accumulate across sections unless explicitly cleared with `clear_flag`. Cleanup of scratch flags inside a section is the encoder's responsibility (the canonical voluntary-accept-with-trade pattern below ends with `clear_flag` events).
+
+**Canonical worked example — FF Warlock §155 (the iron-shield trade):**
+
+The source text: *"You may take this shield if it will aid you in battles … However, the shield is heavy and you will have to leave behind one item of equipment (adjust your Equipment List) to be able to carry it. You now leave the room and continue up the corridor. Turn to 300."*
+
+```json
+"events": [
+  {
+    "type": "prompt_choice",
+    "prompt": "You pick up the iron shield with the golden crescent and feel its weight on your arm. It will aid you in battles, but it is heavy — to carry it you must leave behind one item of equipment. Take the shield?",
+    "accept_label": "Take the shield (drop one item)",
+    "decline_label": "Leave the shield",
+    "accept_set_flag": "accept_shield_155"
+  },
+  {
+    "type": "choose_items",
+    "mode": "remove",
+    "count": 1,
+    "on_success_set_flag": "shield_155_traded",
+    "condition": { "type": "has_flag", "flag": "accept_shield_155" },
+    "description": "Choose one item of equipment to leave behind."
+  },
+  {
+    "type": "add_item",
+    "item": "iron_shield_crescent",
+    "condition": { "type": "has_flag", "flag": "shield_155_traded" }
+  },
+  { "type": "clear_flag", "flag": "accept_shield_155" },
+  { "type": "clear_flag", "flag": "shield_155_traded" }
+]
+```
+
+Three flag-gated halves: (1) the `prompt_choice` offers the trade and sets `accept_shield_155` ONLY on accept; (2) the `choose_items mode:"remove"` fires ONLY on acceptance and sets `shield_155_traded` ONLY when an item was actually dropped (Rule 40 strict semantics); (3) the `add_item` fires ONLY when the trade actually happened. Decline → no flags set → both downstream events no-op via their conditions → no item gained, no item dropped. The two `clear_flag` events at the end keep the scratch flags from leaking forward.
+
+**When to use it.** Whenever the source text describes a player decision that has BOTH a non-trivial mechanical consequence (item swap, stat change, narrative branch) AND a genuine "no, thanks" alternative. The clearest tell is permissive phrasing — *"if you wish"*, *"you may"*, *"you may keep this if you are prepared to"* — paired with a non-trivial cost. The FF voluntary-trade idiom is the canonical case, but the same shape covers *"will you drink the strange potion?"*, *"do you accept the wizard's bargain?"*, *"do you read the cursed book?"* — any binary decision where the section's downstream effects should depend on the player's answer.
+
+**When NOT to use it.** Multi-branch choices (more than two options) belong in `choices[]` — `prompt_choice` is strictly binary. A choice that immediately navigates to a different section without any inline effects ALSO belongs in `choices[]` (a `prompt_choice` followed only by a navigation event is a `choices[]` entry with extra steps). Mandatory mechanics with no decline branch (Rule 40 strict-exchange or Rule 49 multi-stat penalty on a forced test) do not need `prompt_choice` — the existing flag-gated chain works without an upstream prompt.
+
+**Relationship to the old `optional: true` field.** Prior to Rule 50, `add_item` carried an `optional: true` field intended to make pickups skippable. Both emulators silently ignored it — every `add_item` auto-fired regardless of `optional`. The new Rule 50 encoding replaces it: where a section wants the player to actually choose, use `prompt_choice` upstream and gate the `add_item` on the resulting flag. The `optional: true` field is preserved in the schema for back-compat but is deprecated — future schema bumps may drop it.
+
+**Verification.** Applied first to FF Warlock §155 (and the three sibling sections §34 / §327 / §328 that the Rule 49 sub-agent had migrated with the over-permissive Rule 40 shape). After the Rule 50 re-encoding pass the player who declines the trade neither gains the item nor drops anything — matching the source. The Rule 49 `mechanic-verbs-in-note` and disarmament soft checks stay green (the new encoding is structurally complete).
+
 ---
 
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
@@ -6071,7 +6130,7 @@ The resume flow turns a previously-frustrating "this book can't be parsed yet" o
 
 ## Version identifiers
 
-**Codex v2.45.0 / GBF schema v1.33.0 / CLI emulator v3.28.0 / HTML emulator v3.24.0** (Rule 49 generalises `failure_penalty` to accept either the pre-v1.33 single-object `{stat, amount}` shape or an array of them, so multi-stat failure penalties — FF Warlock §361's "-2 SKILL AND -3 STAMINA poison-gas failure" canonical case — can be encoded directly instead of stashing the second penalty in a `note`. Both emulators normalise to array form. Also extends the validator's `checkDisarmamentWithoutEvent` regex set with FF-dialect triggers (`adjust your Equipment List`, `leave behind one item`, `in exchange`, `may take only if exchange`) — the §155-shape Rule 40 gap — and adds a new soft check `checkMechanicVerbsInNote` that flags ANY event whose `note` field uses imperative-mood mechanic verbs (`must drop`, `also lose`, `in addition to`, etc.) as a shape-agnostic catch-net for un-encoded constraints. Also fixes a pre-Rule-49 HTML-emulator bug where `failure_penalty` was gated on a non-existent `penalty.type === 'modify_stat'` shape — single-stat penalties were silently dropped in the browser. Schema-additive — pre-v1.33 books validate unchanged. v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt with preserved active state; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
+**Codex v2.46.0 / GBF schema v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0** (Rule 50 adds the `prompt_choice` event type — a binary accept/decline player decision that exposes the answer as `accept_set_flag` / `decline_set_flag` for downstream events to gate on via Rule 15 conditions. Closes the FF voluntary-trade gap: pre-Rule-50 the Rule 40 strict-exchange shape was the only available encoding for "you may take this if you forfeit one item" passages, which forced the trade and silently broke the source's "no thanks" branch. The new prompt_choice + flag-gated choose_items + flag-gated add_item chain restores the genuine decline path. Also documents the deprecated `optional: true` on add_item as a no-op carried for back-compat. Schema-additive — pre-v1.34 books validate unchanged. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

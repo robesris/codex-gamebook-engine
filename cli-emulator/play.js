@@ -27,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.28.0';
+const CODEX_EMULATOR_VERSION = '3.29.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1561,6 +1561,13 @@ function handleEvent(event, state, book) {
     case 'input_text':
       state.pause = { type: 'input_text', event };
       return 'pause';
+    case 'prompt_choice':
+      // Schema v1.34+ (Rule 50): pause for a binary player decision.
+      // Player resolves with `accept` or `decline`; subsequent events
+      // can gate on event.accept_set_flag / event.decline_set_flag
+      // via the existing condition infrastructure (Rule 15).
+      state.pause = { type: 'prompt_choice', event };
+      return 'pause';
     case 'choose_items': {
       // Schema v1.25+ (Rule 40): when event.mode === 'remove', the event
       // is a loss-variant — eligible pool is filtered from state.inventory
@@ -2189,6 +2196,13 @@ function getAvailableActions(state, book) {
     case 'input_text':
       actions.push({ name: 'submit_text', description: 'submit_text <text>' });
       break;
+
+    case 'prompt_choice': {
+      const ev = state.pause.event;
+      actions.push({ name: 'accept', description: ev.accept_label || 'Accept' });
+      actions.push({ name: 'decline', description: ev.decline_label || 'Decline' });
+      break;
+    }
 
     case 'choose_items':
       actions.push({ name: 'select_items', description: `Choose ${state.pause.event.count} items: select_items <id1> <id2> ...` });
@@ -2942,6 +2956,24 @@ function applyAction(state, book, action, args) {
         return navigateTo(state, book, num);
       }
       return navigateTo(state, book, event.target);
+    }
+
+    case 'prompt_choice': {
+      // Schema v1.34+ (Rule 50). On accept/decline, set the corresponding
+      // flag (if declared) and continue with the section's event queue.
+      // Subsequent events gate on the flag via Rule 15 conditions.
+      const event = state.pause.event;
+      const accepted = action === 'accept';
+      const declined = action === 'decline';
+      if (!accepted && !declined) {
+        state.log.push(`prompt_choice: unknown action "${action}" — expected accept or decline`);
+        return state;
+      }
+      const flagToSet = accepted ? event.accept_set_flag : event.decline_set_flag;
+      if (flagToSet && !state.flags.includes(flagToSet)) state.flags.push(flagToSet);
+      state.log.push(`prompt_choice: ${accepted ? 'accepted' : 'declined'}${flagToSet ? ` (set flag ${flagToSet})` : ''}`);
+      state.pause = null;
+      return processNextEvent(state, book);
     }
 
     case 'input_text': {
