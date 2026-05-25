@@ -6,6 +6,26 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.48.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
+
+**Interactive flow: output verbosity mode + visual question affordance.** Surfaced during a fresh-parse session on a new gamebook in an incognito chat — the user noted the volume of technical monologue could be overwhelming, and that questions requiring a user response weren't visually distinguished from the surrounding running commentary. Two new guidelines added to the codex's `INTERACTIVE FLOW` section:
+
+- **Step 2c: Output Verbosity Mode.** A session-opening preference, asked right after the tier-selection block. Two modes:
+  - **Verbose (default)** — normal Claude-style narration. Explain reasoning as you go, surface decisions in real time, annotate file_path:line_number references, give running updates between tool calls.
+  - **Just the basics** — suppress the technical monologue. Surface only the questions the user must answer, bottom-line conclusions, just enough context to inform a decision, and critical warnings. Internal tool calls and parsing quality are identical between modes; only the surface narration changes.
+
+  Mode is sticky for the session and switchable any time by typing "verbose" or "basics". The agent should override the user's mode preference only for genuinely ambiguous decisions (three-plus reasonable interpretations affecting book correctness) — drop into verbose for that one fork, return to basics. Three things are always rendered regardless of mode: user-facing questions, blocking errors, and final commit/push status.
+
+- **Visual question affordance** (new sub-section, applies regardless of verbosity mode). Every question that requires a user response must be visually distinguished from monologue. Two mechanisms in preference order:
+  1. **`AskUserQuestion` tool** for discrete-option choices (renders as selectable chips — faster, less error-prone).
+  2. **Bold markdown** for free-form answers, with the question itself in the bold span (not a heading or label preceding it).
+
+  Anti-patterns named explicitly: burying the question inside a paragraph of monologue, multiple un-bolded questions in one turn, soft suggestions used in place of real questions ("I could proceed with option A if that sounds right"), and rhetorical-question filler. When the answer is implicit from prior user authorisation, do not ask — just act and report the result.
+
+Documentation-only — no schema, validator, or emulator change. Codex doc bumped to v2.48.0; schema and emulators unchanged.
+
+---
+
 ## v2.47.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
 
 **Rule 49.1 — stat-name-in-note catch-net + parser-attention principle.** Surfaced when FF Warlock §131 (the shared-meal half-heal section) was found to be silently un-enforced. The source text *"You may, if you wish, eat a meal from your Provisions, but you will have to share it with them and thus will only gain half the normal STAMINA points"* was encoded as `{ type: "eat_meal", required: false, note: "May eat Provisions but must share - only gain 2 STAMINA instead of 4" }`, leaving the heal amount at the global default (4) instead of using the per-event `heal_amount` override the schema already provided. The Rule 49 `mechanic-verbs-in-note` catch-net from v2.45.0 didn't fire — its regex set (`must drop`, `also lose`, `in addition to`, etc.) didn't include the §131 verbs (`must share`, `only gain`, `instead of N`, `half|double the normal`).

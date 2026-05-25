@@ -120,6 +120,75 @@ Quality: approaches or exceeds a fully hand-iterated file. Cost: Tier 3 plus ano
 
 **Long books: plan multi-chat chunking up front.** Books with more than ~200–300 sections, books with dense rules pages, and scanned-PDF sources of any size will not fit in a single chat's context and token budget. Do NOT attempt a single-chat parse in that case — the failure mode is losing mid-parse work to a context or message-limit overflow. Before parsing begins, confirm the section count and source quality with the user, and if you are over the single-chat ceiling, propose the canonical chunk breakdown documented in Section 9.9 (skeleton + rules + character_creation as chunk 1; section ranges of ~100 each as chunks 2..N; catalog reconciliation + verification as chunk N+1; playability validation as chunk N+2). Each chunk is a separate chat with the accumulating book JSON, relevant PDF pages, and prior-chunk notes as inputs. Section 9.9 has the full procedure, what to carry between chats, and what not to carry.
 
+### Step 2c: Output Verbosity Mode
+
+Right after the tier selection (and before parsing begins), ask the user which **output verbosity mode** they'd like for the session. The two modes change ONLY how the agent presents progress to the user — they do not change parsing quality, validation rigor, or tier behavior. They also do not change the volume of internal tool calls (file reads, validator runs, sub-agent dispatches) — only what the agent says to the user about them.
+
+**Verbose (the default).** Normal Claude-style narration. Explain reasoning as you go, surface decisions in real time, annotate `file_path:line_number` references when relevant, give running updates between tool calls, summarise findings before moving on. Suitable for users who want to follow along, learn the codex semantics, or trust-but-verify the agent's reasoning. Verbose is the default because new users benefit from seeing the agent's work and because debugging an unexpected outcome is much easier when the prior reasoning is visible.
+
+**Just the basics.** Suppress the technical monologue. Surface only:
+- **Questions the user must answer** (always — these are the only thing the user MUST see).
+- **Bottom-line conclusions** — what changed, what's next, in one or two sentences.
+- **Just enough context to inform a decision** — when asking a question, include the minimum context the user needs to choose well, but no more.
+- **Critical warnings** — validation errors, blocking issues, anything that would make the user's next decision wrong if they didn't see it.
+
+Suppress in basics mode:
+- Pre-tool-call announcements ("Let me read the file..."), per-step running commentary, between-tool-call narration.
+- File-path / line-number annotations except when directly relevant to a user decision.
+- Recaps of what the agent just did (the diff or the validator output is the record).
+- Re-statements of prior context the user already has.
+- Explanations of WHY a tool was chosen unless the user asks.
+
+**Worked-example contrast** — same actual work, two presentations:
+
+*Verbose:*
+
+> Let me read the §131 encoding to see the current state.
+>
+> [Read tool call]
+>
+> Found the eat_meal event at line 9700. The note reads `"May eat Provisions but must share - only gain 2 STAMINA instead of 4"` — this is the §131-shape un-encoded constraint we discussed earlier. The schema's `heal_amount` field on `eat_meal` is the right encoding here; both emulators already honor it via `event.heal_amount ?? book.rules?.provisions?.heal_amount ?? 4` (cli-emulator/play.js:2902, index.html:4684). I'll re-encode as `heal_amount: 2` and drop the note since the constraint will be structural.
+>
+> [Edit tool call]
+>
+> [Validator run]
+>
+> Both catch-nets now silent on §131. Cross-book scan still surfaces zero findings. Want me to commit this change and push to the feature branch?
+
+*Just the basics:*
+
+> §131 needs `heal_amount: 2` on the eat_meal event. Both catch-nets will go silent after the fix.
+>
+> **Apply and commit?**
+
+The actual tool calls and reasoning are identical — the difference is what the user sees. In basics mode, the agent still reads the file, still runs the validator, still has the full reasoning available internally; it just doesn't narrate any of it to the user. The user gets the question that needs an answer and the minimum context to answer it.
+
+**Mode persistence and switching.** The mode the user picks at Step 2c persists for the rest of the session unless they explicitly switch. A user can switch any time by saying `verbose`, `basics`, or `just the basics` (case-insensitive). The agent acknowledges the switch with one brief confirmation line and then immediately adopts the new mode (no recap of what was suppressed under the prior mode).
+
+**What never changes between modes.** Three things are always rendered identically regardless of mode:
+1. Questions requiring user response — see "Visual question affordance" below.
+2. Blocking errors and validation failures — basics mode does not suppress these; they ARE the bottom line.
+3. Final commit / push status — basics mode still confirms when work has been pushed and at what commit SHA.
+
+**When to override the user's choice.** If the user picked basics but the agent encounters a genuinely ambiguous decision — one where any of three or more reasonable interpretations could be correct AND the choice affects book correctness — the agent should drop into a verbose-mode question for that one decision (state the options, recommend one, ask), then return to basics. Brevity for routine work, deliberate detail for genuine forks.
+
+### Visual question affordance
+
+Independent of verbosity mode, every question that requires a user response must be **visually distinguished** from monologue. The user should never have to scan a paragraph to find the question. Two mechanisms, in preference order:
+
+1. **`AskUserQuestion` tool (preferred for choices with discrete options).** Renders the question as selectable option chips. Use it for any binary or multi-option decision: tier selection, verbosity mode, accept/decline a recommended fix, choose among two interpretation paths for an ambiguous source-text passage, etc. The user clicks instead of typing, and the selected option appears in-line in the conversation history — both faster and less error-prone than free-form text. Always provide 2–4 concrete options; the harness will add an "Other" fallback automatically.
+
+2. **Bold markdown for free-form questions.** When the question genuinely needs a free-form answer (e.g. "what's the path to the PDF?", "describe the variant rule you want") OR when AskUserQuestion is unavailable in the current harness, render the question in **bold** so it stands out from surrounding monologue. The bold span should be the question itself, not a heading or label preceding it. Example: `**Which encoding shape do you prefer for §327 — single drop for both items, or one drop per item?**`.
+
+**Anti-patterns to avoid:**
+
+- Burying the question inside a paragraph of monologue. ❌ *"…and after weighing the trade-offs I think option A is cleaner, though option B preserves more of the source's wording, so which do you prefer?"* The user has to re-read the paragraph to find the question.
+- Multiple questions in one turn without bold or AskUserQuestion. The user will answer one and miss the others.
+- Ending with a soft suggestion that's actually a request for permission. ❌ *"I could proceed with option A if that sounds right."* Either commit to acting (the answer is implicit) or surface a real question (use AskUserQuestion or bold).
+- Rhetorical questions ("Want me to fix this?") used as filler. If you genuinely need an answer, render it as a question; if you don't, state the next action and proceed.
+
+**When the answer is implicit, don't ask.** Basics mode users in particular will be annoyed by a question whose answer is obvious from the preceding instruction ("Apply and commit?" after the user said "go ahead with the fix"). When the user has already authorised the action, just do it and report the result. Use questions for genuine forks, not procedural confirmations.
+
 ### Step 3: Assess Source Quality
 Once the source is available, evaluate it:
 - If it's a PDF, check whether it has a usable text layer or is image-only
@@ -6163,7 +6232,7 @@ The resume flow turns a previously-frustrating "this book can't be parsed yet" o
 
 ## Version identifiers
 
-**Codex v2.47.0 / GBF schema v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0** (Rule 49.1 extends the un-encoded-constraint catch-net: the `mechanic-verbs-in-note` regex set picks up `must share` / `only gain` / `instead of N` / `half|double the normal` — the FF Warlock §131 shared-meal vocabulary that the v2.45.0 set missed — and a new `stat-name-in-note` soft check flags any event note that mentions a declared stat name alongside a digit and a constraint word, the §131-shape fingerprint. Both catch-nets are validator-only — no schema or emulator change. Documents the user-noted parser-attention principle: text containing a declared stat name or a differently-cased rule token (`Backpack`, `Provisions`, `Equipment List`, etc.) almost always carries mechanical weight and is a mandatory-encode signal during parsing. Cross-book scan against the six first-party books surfaces exactly one finding (§131) before re-encoding, zero after. v2.46.0 added Rule 50's `prompt_choice` event — a binary accept/decline player decision that exposes the answer as `accept_set_flag` / `decline_set_flag` for downstream events to gate on via Rule 15 conditions; closes the FF voluntary-trade gap (the Rule 40 strict-exchange shape was over-permissive on the source's "no thanks" branch). Schema-additive — pre-v1.34 books validate unchanged. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
+**Codex v2.48.0 / GBF schema v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0** (Step 2c "Output Verbosity Mode" — verbose (default) vs just-the-basics, a session-opening preference that controls how the agent presents progress to the user. Verbose narrates reasoning, surfaces tool calls and file references, gives running updates; basics suppresses the monologue and shows only questions, bottom-line conclusions, and just enough context to inform a decision. Mode is sticky for the session, switchable any time by typing "verbose" or "basics". Internal tool calls and parsing quality are identical between modes. Companion sub-section "Visual question affordance" mandates that every user-facing question be either an `AskUserQuestion` tool call (preferred for choices with discrete options — renders as selectable chips) or **bold markdown** (for free-form answers), so users never have to scan paragraphs of monologue to find the question. Both guidelines apply during interactive parsing sessions; documentation-only — no schema or emulator change. v2.47.0 added Rule 49.1's stat-name-in-note catch-net. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
