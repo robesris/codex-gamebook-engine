@@ -1,15 +1,15 @@
-# Codex Gamebook Engine
+# Grimoire: The Universal Gamebook Engine
 
 A universal web-based engine that plays gamebooks (Fighting Fantasy, Choose Your Own Adventure, Lone Wolf, etc.) from structured JSON data files. No copyrighted content is included — you bring your own books.
 
-**Play now:** [robesris.github.io/codex-gamebook-engine](https://robesris.github.io/codex-gamebook-engine/)
+**Play now:** [robesris.github.io/grimoire-gamebook-engine](https://robesris.github.io/grimoire-gamebook-engine/)
 
 ## Quick Start (minimal prompt + uploads)
 
 Want to parse a gamebook into a playable JSON? Open a new AI chat that supports file uploads, then:
 
 1. **Upload these four files from this repo** alongside **your gamebook source** (PDF or text — bring your own; no copyrighted content ships here):
-   - `gamebook_codex_v2.md` — the parser's playbook
+   - `THE_CODEX_OF_ULTIMATE_WISDOM.md` — the parser's playbook
    - `codex.schema.json` — the JSON shape the engine expects
    - `cli-emulator/play.js` — the engine (the AI uses this to play-test the parse)
    - `cli-emulator/script-runtime.js` — the Lua sandbox the engine uses to execute script events
@@ -22,7 +22,7 @@ Want to parse a gamebook into a playable JSON? Open a new AI chat that supports 
 
 4. **Download the resulting JSON** when the AI says it's ready, then load it at the play link above.
 
-**If the AI hits a genuine engine limitation** (something the current engine can't model — rare, but possible), it will tell you which limitation, point you to the engine's [issue tracker](https://github.com/robesris/codex-gamebook-engine/issues), and stop. Submit a feature request. When the engine ships an update, come back to the AI chat with the new versions of the four uploaded files (and the updated `gamebook_codex_v2.md`) and tell it to resume — it can either re-parse fresh from source or continue with the partially-completed JSON via another remediation→DFS loop. See the codex doc's **§12.15 Resuming after an engine update** section for the exact resume protocol the AI will walk you through.
+**If the AI hits a genuine engine limitation** (something the current engine can't model — rare, but possible), it will tell you which limitation, point you to the engine's [issue tracker](https://github.com/robesris/grimoire-gamebook-engine/issues), and stop. Submit a feature request. When the engine ships an update, come back to the AI chat with the new versions of the four uploaded files (and the updated `THE_CODEX_OF_ULTIMATE_WISDOM.md`) and tell it to resume — it can either re-parse fresh from source or continue with the partially-completed JSON via another remediation→DFS loop. See the codex doc's **§12.15 Resuming after an engine update** section for the exact resume protocol the AI will walk you through.
 
 ## How It Works
 
@@ -32,12 +32,12 @@ Want to parse a gamebook into a playable JSON? Open a new AI chat that supports 
 
 ## Creating a Game Data File
 
-You'll need an AI chat that supports file uploads. The included `gamebook_codex_v2.md` is a prompt document that instructs the AI how to parse a gamebook into the JSON format the engine expects.
+You'll need an AI chat that supports file uploads. The included `THE_CODEX_OF_ULTIMATE_WISDOM.md` is a prompt document that instructs the AI how to parse a gamebook into the JSON format the engine expects.
 
 ### Steps
 
 1. Start a new AI chat conversation
-2. Upload `gamebook_codex_v2.md` along with your gamebook (PDF or text)
+2. Upload `THE_CODEX_OF_ULTIMATE_WISDOM.md` along with your gamebook (PDF or text)
 3. The AI will walk you through the parsing process interactively
 4. When it's done, download the resulting JSON file
 5. Load it into the engine and play
@@ -105,6 +105,6 @@ No build step required. Just open `index.html` directly in your browser — no s
 
 ## License
 
-Codex Gamebook Engine is released under the [MIT License](LICENSE). No copyrighted gamebook content is included in this repository — you bring your own books.
+Grimoire: The Universal Gamebook Engine is released under the [MIT License](LICENSE). No copyrighted gamebook content is included in this repository — you bring your own books.
 
 This repository bundles `fengari-web.js`, a webpack build of [Fengari](https://fengari.io/) (a Lua 5.3 VM written in JavaScript), which is also distributed under the MIT License. Upstream copyrights for the bundled file are Benoit Giannangeli, Daurnimator, and Lua.org / PUC-Rio. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full notices.

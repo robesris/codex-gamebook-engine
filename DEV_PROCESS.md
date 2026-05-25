@@ -1,8 +1,8 @@
 # Development Process
 
-This document describes how to develop and maintain the Codex Gamebook Engine itself — the codex doc, the GBF schema, the reference emulators, and the books we maintain as first-party tests of the system.
+This document describes how to develop and maintain the Grimoire: The Universal Gamebook Engine itself — the codex doc, the GBF schema, the reference emulators, and the books we maintain as first-party tests of the system.
 
-It is **not** a guide for end users running the codex on their own books. End users should read `gamebook_codex_v2.md` directly. This file is for the people editing that document.
+It is **not** a guide for end users running the codex on their own books. End users should read `THE_CODEX_OF_ULTIMATE_WISDOM.md` directly. This file is for the people editing that document.
 
 ---
 
@@ -32,8 +32,8 @@ Every change to a book file happens the same way: the main session improves the 
 
 If you are an agent that was spawned via the Agent tool (`subagent_type: general-purpose` or similar) with a prompt that:
 
-- Points you at specific, updated reference files in `/home/user/codex-gamebook-engine/` — the codex doc (`gamebook_codex_v2.md`), the schema (`codex.schema.json`), and/or the emulators — and tells you to read them first, AND
-- Explicitly instructs you to write fixes in place to a specific book file under `/home/user/codex-engine-books/books/`, AND
+- Points you at specific, updated reference files in `/home/user/grimoire-gamebook-engine/` — the codex doc (`THE_CODEX_OF_ULTIMATE_WISDOM.md`), the schema (`codex.schema.json`), and/or the emulators — and tells you to read them first, AND
+- Explicitly instructs you to write fixes in place to a specific book file under `/home/user/grimoire-engine-books/books/`, AND
 - Names a specific scope of changes (e.g., "apply Rule 19 equipment tagging," "run a Tier 3 Thorough comprehensive review," "migrate the round_script to the new contract"),
 
 ...then **you are the comprehensive-review sub-agent, you are the authorized production-line mechanism, and your edits to the book file are not a violation of this rule — they *are* the production line running correctly.** Proceed with the task exactly as your prompt instructs.
@@ -80,14 +80,14 @@ If you find yourself writing a sub-agent prompt whose scope says "set field X to
 
 ## What this project is, in one paragraph
 
-The codex (`gamebook_codex_v2.md`) is a set of instructions for an AI to convert a gamebook into a structured JSON file in the GBF format defined by `codex.schema.json`. The reference emulators (`cli-emulator/play.js` for Node, `index.html` + `fengari-web.js` for the browser) are deterministic players of that JSON. The four artifacts move together: the codex tells the AI what to produce, the schema constrains what the AI can produce, and the emulators define what the AI's output actually does at runtime. Bugs can live in any of the four. The dev process below describes how to figure out where a bug lives and how to fix it without making things worse.
+The codex (`THE_CODEX_OF_ULTIMATE_WISDOM.md`) is a set of instructions for an AI to convert a gamebook into a structured JSON file in the GBF format defined by `codex.schema.json`. The reference emulators (`cli-emulator/play.js` for Node, `index.html` + `fengari-web.js` for the browser) are deterministic players of that JSON. The four artifacts move together: the codex tells the AI what to produce, the schema constrains what the AI can produce, and the emulators define what the AI's output actually does at runtime. Bugs can live in any of the four. The dev process below describes how to figure out where a bug lives and how to fix it without making things worse.
 
 ## The four kinds of bugs
 
 When a bug surfaces during a playthrough, classify it before fixing it:
 
 1. **Data bug.** A book JSON file (e.g. `lw_01_flight_from_the_dark.json`) contains an encoding that doesn't match the source book's text. Symptoms: a section is missing an event the text describes, a choice is missing a condition the text gates on, an enemy stat is wrong, a target points to the wrong section.
-2. **Codex bug.** The instructions in `gamebook_codex_v2.md` are missing a rule or have an incomplete rule, so the AI produces wrong output across many books or many sections. Symptoms: the same class of data bug shows up repeatedly, or a fresh codex run on a new book reproduces a bug we've seen before.
+2. **Codex bug.** The instructions in `THE_CODEX_OF_ULTIMATE_WISDOM.md` are missing a rule or have an incomplete rule, so the AI produces wrong output across many books or many sections. Symptoms: the same class of data bug shows up repeatedly, or a fresh codex run on a new book reproduces a bug we've seen before.
 3. **Schema bug.** The GBF schema doesn't allow the encoding the book actually needs, OR it allows an encoding the emulators can't interpret. Symptoms: the codex can't represent a real mechanic in any structured way and falls back to `custom` events; the emulator silently ignores a field.
 4. **Emulator bug.** One of the emulators (CLI or HTML) doesn't correctly execute valid GBF JSON. Symptoms: an event is shown but its mechanical effect doesn't apply; a choice is offered when its condition shouldn't allow it; UI flow swallows information the player needs to see.
 
@@ -101,7 +101,7 @@ This is the single most important rule for codex maintainers, and it's encoded i
 
 If the answer is yes:
 
-1. Improve the rule first. Add it to `gamebook_codex_v2.md` with a concrete example drawn from the bug, and a clear "do this, not that" formulation.
+1. Improve the rule first. Add it to `THE_CODEX_OF_ULTIMATE_WISDOM.md` with a concrete example drawn from the bug, and a clear "do this, not that" formulation.
 2. Bump the codex version in the doc's version history.
 3. Run a comprehensive review (Step 3a-1) on the affected book against the improved codex. Use a sub-agent for this — see the "Comprehensive review via sub-agent" section below.
 4. Verify the bug is fixed in the new output and that nothing regressed. Run the full playbook regression on the affected book.
@@ -141,7 +141,7 @@ The schema, the codex general rules, and both reference emulators must be series
 
 **Where it's fine to mention series by name.** In codex doc rule *examples* (to illustrate), in series profiles (Sections 3–7 of the codex doc, which are convenience pre-loads of well-known series), and in field description examples in the schema (where citing "e.g. Gold Crowns (LW), Gold Pieces (FF), Credits (sci-fi)" helps the reader understand the field's range). Where it's not fine: in the mechanism itself, in the emulator code paths, or in schema field names and required-field lists.
 
-**Series profiles are optimizations, not preconditions.** Sections 3–7 of `gamebook_codex_v2.md` pre-load knowledge about well-known series (LW's Combat Ratio Table, FF's 2d6 combat, AD&D's percentile rolls, etc.) so the codex doesn't re-derive them from scratch on every run. They are valuable and we should keep adding to them as we support new series. But **a codex run on an unprofiled series must still produce a correct, playable GBF JSON using only the general rules and the "Unknown/Other Series" handler (Section 7).** The quality gap between profiled and unprofiled series should be small — measured in percentage points of rule-catching, not in "works vs. doesn't work."
+**Series profiles are optimizations, not preconditions.** Sections 3–7 of `THE_CODEX_OF_ULTIMATE_WISDOM.md` pre-load knowledge about well-known series (LW's Combat Ratio Table, FF's 2d6 combat, AD&D's percentile rolls, etc.) so the codex doesn't re-derive them from scratch on every run. They are valuable and we should keep adding to them as we support new series. But **a codex run on an unprofiled series must still produce a correct, playable GBF JSON using only the general rules and the "Unknown/Other Series" handler (Section 7).** The quality gap between profiled and unprofiled series should be small — measured in percentage points of rule-catching, not in "works vs. doesn't work."
 
 **Accountability: the unprofiled-series stress test.** Periodically — and especially after adding any new schema field, rule, or emulator mechanism — run the codex on a gamebook from a series we don't have a profile for, in a scoped sub-agent. Compare the result against what we'd expect from the general rules. If anything breaks, if the codex gets stuck on a mechanic it can't represent, if the sub-agent ends up writing "the book uses Lone Wolf's COMBAT SKILL" when it should be using the book's actual stat name, those are bugs in the general machinery. Fix them before declaring the new feature done. The stress test is how we verify that generality claims are real.
 
@@ -193,7 +193,7 @@ This rule is a workflow extension of codex doc Rule 16 ("Codex Maintainer Discip
 
 **Activation note.** As of the writing of this section, the codex doc does not yet have either the topical decision table or the pre-output verification checklist — both are tracked engine backlog items (see `NEXT_SESSION.md` in the books repo for the work track that introduces them). When that work lands, this rule activates retroactively for the existing 19 rules: each one needs to be backfilled with its checklist line and decision-table entry as part of the same commit (or commit series) that introduces the table and checklist. After that, every new rule shipped in any future session carries the discipline forward. Until then, the rule is captured here so the requirement is not forgotten when the prominence-improvement session is scheduled.
 
-**Keep rule-body prose project-opaque.** Rule-body prose in `gamebook_codex_v2.md` should be readable by someone who has never heard of this project's iter numbering, chat numbering, session naming, or internal tracking files. The reader of that doc is an AI parsing a new gamebook against the codex — it should not need to understand our development history to apply the rules. Dev-process framing belongs in commit messages and in this file, not in rule bodies. When describing a real-world bug that motivated a rule, cite the book and section as public facts (e.g., *"LW1 section 267"*) and describe the bug in terms of its mechanical shape (e.g., *"a compound-pickup paragraph whose second item was missed because the parser's loot vocabulary didn't include container-positional phrasing"*), not in terms of its position in our iter history (e.g., not *"the section 267 bug that iter 12's sub-agent missed"*). "As of schema v1.X.Y (codex v2.Y)" parenthetical notes are also inappropriate in rule bodies — the canonical source for when-what-landed is the VERSION HISTORY (or `CHANGELOG.md` once extracted), not scattered in-rule annotations. If a rule's current wording depends on a schema or emulator capability, describe the capability as a property of the current system, not as a historical transition. This rule is a sibling to Rule 6 in the codex doc (Never Echo Book Narrative into Your Own Model Output): Rule 6 keeps the book's narrative out of the codex's output; this meta-rule keeps our development narrative out of the codex's input. Both keep the codex doc focused on its single job: instruct an AI to parse a gamebook.
+**Keep rule-body prose project-opaque.** Rule-body prose in `THE_CODEX_OF_ULTIMATE_WISDOM.md` should be readable by someone who has never heard of this project's iter numbering, chat numbering, session naming, or internal tracking files. The reader of that doc is an AI parsing a new gamebook against the codex — it should not need to understand our development history to apply the rules. Dev-process framing belongs in commit messages and in this file, not in rule bodies. When describing a real-world bug that motivated a rule, cite the book and section as public facts (e.g., *"LW1 section 267"*) and describe the bug in terms of its mechanical shape (e.g., *"a compound-pickup paragraph whose second item was missed because the parser's loot vocabulary didn't include container-positional phrasing"*), not in terms of its position in our iter history (e.g., not *"the section 267 bug that iter 12's sub-agent missed"*). "As of schema v1.X.Y (codex v2.Y)" parenthetical notes are also inappropriate in rule bodies — the canonical source for when-what-landed is the VERSION HISTORY (or `CHANGELOG.md` once extracted), not scattered in-rule annotations. If a rule's current wording depends on a schema or emulator capability, describe the capability as a property of the current system, not as a historical transition. This rule is a sibling to Rule 6 in the codex doc (Never Echo Book Narrative into Your Own Model Output): Rule 6 keeps the book's narrative out of the codex's output; this meta-rule keeps our development narrative out of the codex's input. Both keep the codex doc focused on its single job: instruct an AI to parse a gamebook.
 
 ## Comprehensive review via sub-agent
 
@@ -224,7 +224,7 @@ This template was iterated across the LW1 and Warlock Phase 2 migrations (round_
 ```
 ## You are the authorized comprehensive-review sub-agent. Read this first.
 
-You are being spawned by the main session of the Codex Gamebook Engine project
+You are being spawned by the main session of the Grimoire: The Universal Gamebook Engine project
 to perform a narrowly-scoped book edit. You are the production-line mechanism
 that the HARD RULE in DEV_PROCESS.md and both CLAUDE.md files explicitly
 authorizes. Your edits to the target book file are the rule working as
@@ -312,7 +312,7 @@ const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 const ajv = new Ajv({ allErrors: true, strict: false });
 addFormats(ajv);
-const schema = require('/home/user/codex-gamebook-engine/codex.schema.json');
+const schema = require('/home/user/grimoire-gamebook-engine/codex.schema.json');
 const validate = ajv.compile(schema);
 const book = require('<absolute-path-to-book>');
 validate(book);
@@ -368,7 +368,7 @@ The user DOES need to:
 
 **Wrapping up:** the remediation agent produces a final report (fixes applied, flavor-markings, skipped findings, final validator output). The user reviews the diff via `git diff books/<book>.json` and commits the result with a marker per the production-line commit-msg hook (`[sub-agent]` or iter convention — see the books repo's `hooks/commit-msg`).
 
-**Codex appendix reference:** the full vocabulary translation table, question framings per finding category, freeform-answer interpretation rules, and anti-pattern list live in `gamebook_codex_v2.md` §12 ("Two-pass remediation workflow"). The remediation agent's prompt template (below) references that appendix as required reading.
+**Codex appendix reference:** the full vocabulary translation table, question framings per finding category, freeform-answer interpretation rules, and anti-pattern list live in `THE_CODEX_OF_ULTIMATE_WISDOM.md` §12 ("Two-pass remediation workflow"). The remediation agent's prompt template (below) references that appendix as required reading.
 
 ### Remediation sub-agent prompt template
 
@@ -384,10 +384,10 @@ and apply user-confirmed fixes per codex §12 protocol."]
 
 ## Materials
 
-- Target book: /home/user/codex-engine-books/books/<book>.json
-- Codex appendix on remediation: /home/user/codex-gamebook-engine/gamebook_codex_v2.md §12
-- Schema: /home/user/codex-gamebook-engine/codex.schema.json
-- Validator: /home/user/codex-gamebook-engine/scripts/validate-book.js
+- Target book: /home/user/grimoire-engine-books/books/<book>.json
+- Codex appendix on remediation: /home/user/grimoire-gamebook-engine/THE_CODEX_OF_ULTIMATE_WISDOM.md §12
+- Schema: /home/user/grimoire-gamebook-engine/codex.schema.json
+- Validator: /home/user/grimoire-gamebook-engine/scripts/validate-book.js
 - Source text reference (if available): <path to OCR'd source or other authoritative reference>
 
 ## Procedure
@@ -441,7 +441,7 @@ The playbooks are deliberately gitignored. They're project-specific dev artifact
 
 This is a public repo. It contains:
 
-- The codex doc (`gamebook_codex_v2.md`)
+- The codex doc (`THE_CODEX_OF_ULTIMATE_WISDOM.md`)
 - The schema (`codex.schema.json`)
 - The reference emulators (`cli-emulator/`, `index.html`, `fengari-web.js`)
 - The CLI emulator's pinned dependencies (`package.json`, `package-lock.json`)
@@ -478,7 +478,7 @@ When in doubt: if it changes constantly and is project-specific, it's local-only
 
 Three independent version numbers:
 
-- **Codex version** (currently 2.7): bumped when `gamebook_codex_v2.md` changes meaningfully. Tracked in the doc's title, header, and version history block.
+- **Codex version** (currently 2.7): bumped when `THE_CODEX_OF_ULTIMATE_WISDOM.md` changes meaningfully. Tracked in the doc's title, header, and version history block.
 - **GBF format version** (currently 1.4.0): bumped when the schema changes in a way that affects output structure. Additive changes bump the minor version; breaking changes bump the major. Tracked in the schema's `title` field.
 - **Emulator versions** (currently 2.5.0 for both CLI and HTML): bumped when the emulator gains a feature or fixes a meaningful bug. Tracked in `CODEX_EMULATOR_VERSION` constants.
 

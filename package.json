@@ -1,5 +1,5 @@
 {
-  "name": "codex-gamebook-engine",
+  "name": "grimoire-gamebook-engine",
   "version": "3.27.0",
   "description": "CLI emulator and tooling for playing Gamebook Format (GBF) JSON game files",
   "license": "MIT",

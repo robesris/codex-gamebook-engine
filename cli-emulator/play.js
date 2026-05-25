@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Codex Gamebook Engine — CLI Emulator
+ * Grimoire: The Universal Gamebook Engine — CLI Emulator
  *
  * Version: 2.5.0
  * Compatible with codex doc >= 2.7 and GBF schema >= 1.4.0
@@ -1066,7 +1066,7 @@ function startCharacterCreation(state, book) {
   // when the book's character_creation.steps[] forgets to explicitly
   // set_resource provisions, or (worse) sets the wrong slot name like
   // `set_resource resource:"meals"` that doesn't route to the
-  // canonical slot. See Rule 21 in gamebook_codex_v2.md for the full
+  // canonical slot. See Rule 21 in THE_CODEX_OF_ULTIMATE_WISDOM.md for the full
   // encoding story and the known_issues.md "starting Meal not
   // surfaced" entry for the LW1 instance that motivated this.
   const startingProvisions = book?.rules?.provisions?.starting_amount;
@@ -1105,7 +1105,7 @@ function processCreationSteps(state, book) {
       // declared-stat-currency. Pause on a dedicated pause type so
       // the player or harness can provide the roll, then the 'act'
       // handler routes the rolled total into the appropriate slot.
-      // See Rule 11 in gamebook_codex_v2.md for the full story and
+      // See Rule 11 in THE_CODEX_OF_ULTIMATE_WISDOM.md for the full story and
       // the LW1 Gold Crowns worked example; this closes the pre-v1.6
       // anti-pattern of using roll_stat with a scratch stat name.
       state.pause = {

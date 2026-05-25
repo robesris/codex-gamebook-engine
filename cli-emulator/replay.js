@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Codex Gamebook Engine — CLI Replay Tool
+ * Grimoire: The Universal Gamebook Engine — CLI Replay Tool
  *
  * Version: 2.5.0
  * Compatible with codex doc >= 2.7 and GBF schema >= 1.4.0

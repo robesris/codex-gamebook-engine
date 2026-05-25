@@ -1,5 +1,7 @@
-# THE GAMEBOOK CODEX v2.42.0
-## An AI-Powered System for Parsing Gamebooks into Playable Digital Formats
+# THE CODEX OF ULTIMATE WISDOM
+## Grimoire: The Universal Gamebook Engine — Parsing Playbook
+
+The authoritative playbook the parser AI follows to convert a published gamebook into the engine's JSON interchange format. Shorthand throughout the project: "the codex." The codex's current version and the engine versions it targets are listed in **Version identifiers** near the end of this document.
 
 ---
 
@@ -11,11 +13,11 @@ This document is versioned alongside a set of canonical tools: the GBF JSON Sche
 
 | Artifact | Version | Canonical path |
 |---|---|---|
-| `codex.schema.json` (GBF format) | ≥ 1.10.0 | `github.com/robesris/codex-gamebook-engine/codex.schema.json` |
-| `cli-emulator/play.js` | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/play.js` |
-| `cli-emulator/replay.js` | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/cli-emulator/replay.js` |
-| `index.html` (browser emulator) | ≥ 3.5.0 | `github.com/robesris/codex-gamebook-engine/index.html` |
-| `dist/verify-book.bundle.js` (browser verifier) | rebuilt per release | `github.com/robesris/codex-gamebook-engine/dist/verify-book.bundle.js` |
+| `codex.schema.json` (GBF format) | ≥ 1.10.0 | `github.com/robesris/grimoire-gamebook-engine/codex.schema.json` |
+| `cli-emulator/play.js` | ≥ 3.5.0 | `github.com/robesris/grimoire-gamebook-engine/cli-emulator/play.js` |
+| `cli-emulator/replay.js` | ≥ 3.5.0 | `github.com/robesris/grimoire-gamebook-engine/cli-emulator/replay.js` |
+| `index.html` (browser emulator) | ≥ 3.5.0 | `github.com/robesris/grimoire-gamebook-engine/index.html` |
+| `dist/verify-book.bundle.js` (browser verifier) | rebuilt per release | `github.com/robesris/grimoire-gamebook-engine/dist/verify-book.bundle.js` |
 
 `dist/verify-book.bundle.js` is the no-Node.js verification gate used in Claude Chat's Analysis tool (see Section 9.6, "Running the gate without Node.js"). It is a generated artifact rebuilt from `codex.schema.json` + the shared tooling on every release, so it has no independent version constant — fetch it from the same commit as the codex doc.
 
@@ -32,7 +34,7 @@ Both pins are at the same Fengari version. The browser bundle is built by runnin
 
 Fengari is an unmaintained but stable project — no tagged releases since ~2019, but the implementation is functionally complete for Lua 5.3 and has worked reliably across all our dev-loop sessions. We're pinning rather than upgrading because upstream has no active maintenance stream to track. If a future codex session wants to migrate to a maintained Lua runtime (the main candidate is [wasmoon](https://github.com/ceifa/wasmoon), a WASM build of Lua 5.4 with active releases on npm), do it as a dedicated swap in its own session with the full regression harness, not as a drive-by change in an unrelated iteration.
 
-**How to fetch without staleness:** GitHub's raw-content CDN (`raw.githubusercontent.com/.../main/...`) caches mutable branch URLs and can return stale content silently. To avoid this, fetch canonical artifacts using **commit-pinned URLs** of the form `raw.githubusercontent.com/robesris/codex-gamebook-engine/<commit-sha>/<path>`. Content at a specific commit SHA is immutable under git's content-addressed model, so the CDN cannot serve a stale version. Commit pins for the versions above will be published in the repo's release notes.
+**How to fetch without staleness:** GitHub's raw-content CDN (`raw.githubusercontent.com/.../main/...`) caches mutable branch URLs and can return stale content silently. To avoid this, fetch canonical artifacts using **commit-pinned URLs** of the form `raw.githubusercontent.com/robesris/grimoire-gamebook-engine/<commit-sha>/<path>`. Content at a specific commit SHA is immutable under git's content-addressed model, so the CDN cannot serve a stale version. Commit pins for the versions above will be published in the repo's release notes.
 
 **If the user is uploading canonical artifacts directly**, verify each file's embedded version constant after loading. A file named `play.js` with `const CODEX_EMULATOR_VERSION = "2.0.3"` cannot be used with a codex doc that requires `≥ 2.1.0` — warn the user and offer to either: (a) load a newer version, (b) proceed with the older tool and avoid features it doesn't support, or (c) switch to a codex doc version that matches the tool.
 
@@ -145,7 +147,7 @@ Your job is the same as with any other source format: **produce a complete, corr
 Do not treat this as a light review pass. An existing JSON file may have been created manually, by an earlier version of the Codex, or by a different model — and may have significant gaps. Sections may contain narrative text that describes game mechanics (item pickups, stat changes, dice rolls, combat, conditions) without corresponding structured events. Your job is to read every section's text and ensure the events, choices, and conditions fully represent what the text describes.
 
 **Validate against the schema.** The canonical GBF JSON Schema is available at:
-`https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json`
+`https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/codex.schema.json`
 
 If the schema is provided alongside the JSON, or if you can fetch it, validate the file against it. If not, validate against the schema specification in Section 2 of this document.
 
@@ -181,7 +183,7 @@ If the schema is provided alongside the JSON, or if you can fetch it, validate t
 
 Use this mode when the user has identified one or more specific bugs or sections they want fixed, and explicitly does not want the cost of a full file audit. The principle is: **touch only what the user asked about, plus the immediate neighbors that need to change with it, plus what your test loop says is affected.** Resist the urge to fix unrelated things you happen to notice along the way — if you find them, report them at the end so the user can decide whether to schedule a follow-up, but do not edit them in this pass.
 
-**Codex maintainer note (read this if you are editing `gamebook_codex_v2.md`, the schema, or the reference emulators).** Targeted Fix mode exists primarily for end users — people running the codex on books they don't actively maintain, people with budget constraints, or people who discovered a bug mid-playthrough and want a narrow patch. If you are a codex maintainer and you find a bug in a first-party book, **do not default to Targeted Fix**. The bug is almost always a signal that a codex rule is missing or incomplete, and the right fix is to improve the rule (so the *next* book and the *next* re-run benefit) and then comprehensive-re-run the affected book against the improved codex. Hand-patching outputs through this mode is a crutch that lets the codex stay broken while the symptoms get whacked one at a time. See Rule 16 for the full statement of this principle and the recommended workflow.
+**Codex maintainer note (read this if you are editing `THE_CODEX_OF_ULTIMATE_WISDOM.md`, the schema, or the reference emulators).** Targeted Fix mode exists primarily for end users — people running the codex on books they don't actively maintain, people with budget constraints, or people who discovered a bug mid-playthrough and want a narrow patch. If you are a codex maintainer and you find a bug in a first-party book, **do not default to Targeted Fix**. The bug is almost always a signal that a codex rule is missing or incomplete, and the right fix is to improve the rule (so the *next* book and the *next* re-run benefit) and then comprehensive-re-run the affected book against the improved codex. Hand-patching outputs through this mode is a crutch that lets the codex stay broken while the symptoms get whacked one at a time. See Rule 16 for the full statement of this principle and the recommended workflow.
 
 **Step 1 — Confirm the scope.** Have the user describe each bug as concretely as possible:
 - Which section number (or section IDs) is affected?
@@ -224,7 +226,7 @@ If the user gives you a vague description ("the ferryman is broken somehow"), as
 
 ### Step 3b: Read the GBF Specification
 Before generating any JSON output, you MUST read the complete GBF JSON Schema specification (`codex.schema.json`). The schema is the authoritative definition of the output format. If the user provides it alongside the source material, read it in full. If not, the canonical version is available at:
-`https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json`
+`https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/codex.schema.json`
 
 **The schema takes precedence over examples in this document.** The inline JSON examples in this Codex are illustrative and may not reflect the latest schema. If there is any conflict between an example in this document and the schema specification, always defer to the schema.
 
@@ -2529,7 +2531,7 @@ The ability still has the chargen-pickable shape it had pre-v2.28.0 (the `name` 
 4. **`section_had_no_combat` is sensitive ONLY to resolved `combat` events.** A section that DECLARES a combat event but routes around it (because a prior choice / event navigated away before the combat dispatched) keeps the flag at false; a section whose combat event fires and resolves (win, lose, or flee) sets the flag to true via the `on_combat_end` lifecycle dispatch.
 5. **The +1 clamp from `initial_is_max: true` is automatic.** The regen modify_stat goes through the standard event handler, which honors the existing clamp. A character at maximum ENDURANCE who passes through a clean section does NOT gain +1 — they stay at the ceiling.
 
-The trigger and conditions ship in `codex-gamebook-engine` schema v1.21.0 / codex v2.28.0 / emulators v3.16.0. The LW1 Healing wire-up lands in a separate books-side sub-agent commit immediately after; `known_issues.md` in the books repo retires the Healing-discipline-unenforced entry at the same time.
+The trigger and conditions ship in `grimoire-gamebook-engine` schema v1.21.0 / codex v2.28.0 / emulators v3.16.0. The LW1 Healing wire-up lands in a separate books-side sub-agent commit immediately after; `known_issues.md` in the books repo retires the Healing-discipline-unenforced entry at the same time.
 
 ---
 
@@ -5193,13 +5195,13 @@ Treat playbook scripts as first-class deliverables alongside the book JSON. At T
 If the user opts to let you fetch canonical artifacts from the repository rather than uploading them, use commit-pinned URLs to bypass CDN caching. The URL form is:
 
 ```
-https://raw.githubusercontent.com/robesris/codex-gamebook-engine/<commit-sha>/<path>
+https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/<commit-sha>/<path>
 ```
 
 Not:
 
 ```
-https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/<path>
+https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/<path>
 ```
 
 The `main`-branch URL is mutable and subject to short-TTL CDN caching. A commit-SHA URL is immutable and never cached stale. Specific commit pins for each codex doc version will be published in the codex repo's release notes.

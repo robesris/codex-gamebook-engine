@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-This file reproduces the license notices for third-party software bundled in the Codex Gamebook Engine repository. The engine itself is released under the MIT License (see `LICENSE`).
+This file reproduces the license notices for third-party software bundled in the Grimoire: The Universal Gamebook Engine repository. The engine itself is released under the MIT License (see `LICENSE`).
 
 ---
 

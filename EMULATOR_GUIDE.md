@@ -491,7 +491,7 @@ The reference implementation provides a debug panel showing live state. Future v
 An emulator should publicly declare its compliance tier(s) and which optional features it supports. Example declaration:
 
 ```
-Codex Gamebook Engine — Reference Implementation
+Grimoire: The Universal Gamebook Engine — Reference Implementation
 - Tier: 3 (Full Auto), with optional Tier 4 strict mode
 - Lua runtime: Fengari
 - Save/Load: Yes (browser localStorage + import/export)
