@@ -95,6 +95,7 @@
       enumerate('catalog-category-vs-text-language findings', soft.categoryVsTextLanguage);
       enumerate('catalog-effect-promise-without-machinery findings', soft.catalogEffectPromise);
       enumerate('Rule 46 orphan-resume findings', soft.rule46OrphanResumes || []);
+      enumerate('Rule 49 mechanic-verbs-in-note findings', soft.mechanicVerbsInNote || []);
 
       if (scriptCheck.skipped) {
         lines.push(`  Script execution: SKIPPED — ${scriptCheck.skipped}`);

@@ -6,6 +6,30 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.45.0 / GBF v1.33.0 / CLI emulator v3.28.0 / HTML emulator v3.24.0
+
+**Rule 49 — Multi-stat `failure_penalty` + un-encoded-constraint catch-net.** Three coupled findings drove this rule: FF Warlock §155 (iron-shield trade) had a Rule 40 voluntary-trade constraint sitting in a freeform `note` because the validator's disarmament regex set didn't catch FF-dialect phrasings; FF Warlock §361 (poison-gas key) had a multi-stat failure penalty (lose 2 SKILL AND 3 STAMINA) where the schema's `failure_penalty: {stat, amount}` could only carry one, so the second penalty ended up in a `note`; and the HTML emulator's `failure_penalty` handler was checking `penalty.type === 'modify_stat'` — a shape the schema never produced — so even single-stat penalties were silently dropped in the browser. All three are addressed together.
+
+Schema additions (v1.33+, schema-additive — pre-v1.33 books validate unchanged):
+
+- **`failure_penalty` accepts either its pre-v1.33 single-object shape `{stat, amount}` or an array `[{stat, amount}, …]` (the new multi-penalty shape).** The array shape applies each penalty in order on failure via the standard `modify_stat`-style mutation path (per-stat clamps, initial-is-max, resource-slot handling all apply). Canonical worked example — FF Warlock §361's poison-gas failure encodes both penalties as a two-element array, replacing the pre-fix encoding that carried only the STAMINA half + a `note` for the orphaned SKILL half.
+
+Validator additions (`scripts/book-checks.js`):
+
+- **`checkDisarmamentWithoutEvent` regex set extended with FF-dialect triggers** — `adjust your Equipment List` (the FF voluntary-trade verb, distinct from LW's "cross off Action Chart"), `leave behind one item of …`, `in exchange (for) X`, `may take only if you exchange Y`. The existing alternation now covers FF, LW, AD&D, and Wizards-Warriors books.
+
+- **New soft check `checkMechanicVerbsInNote`** — walks every event's `note` field and matches imperative-mood mechanic verbs (`must drop`, `must give up`, `also lose`, `in addition to`, `may only take if`, `can only be taken if`, `if you take this you must`, `on failure also lose`). Shape-agnostic catch-net for un-encoded constraints regardless of source-text dialect or specific rule. Wired into `validate-book.js` and the browser verifier-driver output as `Rule 49 mechanic-verbs-in-note findings`.
+
+Emulator additions (`cli-emulator/play.js`, `index.html`):
+
+- Both `failure_penalty` handlers normalise to array form (`Array.isArray(event.failure_penalty) ? event.failure_penalty : [event.failure_penalty]`) and apply each penalty in order via the standard stat-mutation path.
+- HTML emulator: removed the broken `penalty.type === 'modify_stat'` shape check. Pre-Rule-49 this meant ALL `failure_penalty` payloads were silently dropped in the browser — single-stat OR multi-stat. Now routes through `handleModifyStat` like the CLI emulator does through `state.stats[p.stat]`.
+
+Companion docs:
+
+- Codex doc gains Rule 49 section between Rule 48 and §8 with the schema additions, validator additions, when/when-not-to-use, and the §361/§155 worked examples.
+- Pending: a comprehensive-review sub-agent run on FF Warlock to migrate §155 to Rule 40 `choose_items mode:"remove"` and §361 to the multi-stat `failure_penalty` array (Rule 49 surfaces both as soft findings; the sub-agent does the actual book edits).
+
 ## v2.44.0 / GBF v1.32.0 / CLI emulator v3.27.0 / HTML emulator v3.23.0
 
 **HTML emulator: Rule 40 wire-up (`choose_items mode:"remove"`).** Brings the browser emulator in line with the CLI emulator's player-chosen-loss support that has been in the schema since v1.25. Surfaced by FF Warlock §155, whose "iron shield trades for one item of equipment" mechanic had the constraint sitting in a freeform `note` and was silently unenforced in the browser. `handleChooseItems` now checks `event.mode === 'remove'` and: filters `state.inventory` by `event.from_category` to compute the eligible pool, no-ops on an empty pool, auto-removes when `eligible.length <= event.count`, and pauses with a clicker-grid for the multi-choice case. `event.on_success_set_flag` fires only when at least one item is actually removed (matches `cli-emulator/play.js:1565-1590` / `:2956-2968` semantics). Auto-unequips removed items via the existing `autoUnequipOnRemove` hook so an equipped slot is cleared in the same beat as the inventory removal. The grant-direction code path is unchanged — the `mode === 'remove'` branch returns early before any `add_item` semantics run. Pending: Rule 42 (`queue_combat_modifier`) wire-up and the chargen `roll_table` action fix carry forward to a later bump.

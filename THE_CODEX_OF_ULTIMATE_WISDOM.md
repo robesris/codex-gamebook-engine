@@ -4913,6 +4913,47 @@ On the `combat` event type:
 
 **Verification.** Applied first to FF Warlock §333 (the Vampire encounter). Pre-Rule-48 the encounter's "fight 6 rounds, then choose continue or attempt escape; on Unlucky escape with roll 11/12 turn to §224, otherwise resume" mechanic was inexpressible in canonical primitives — `end_after_rounds` cleared activeCombat (no resume possible) and a script-only implementation couldn't pause mid-execution for the player's choice. After migration the encounter plays end-to-end and §224 (the Vampire-catches-escape branch) is reachable.
 
+### Rule 49: Multi-stat `failure_penalty` + un-encoded-constraint catch-net
+
+Three coupled findings drove this rule into shape. First, FF Warlock §155 ("the iron-shield trade") had a Rule 40 voluntary-trade constraint sitting in a freeform `note` instead of a `choose_items mode:"remove"` event, and the validator's `checkDisarmamentWithoutEvent` regex set didn't catch the FF dialect (`leave behind one item of equipment`, `adjust your Equipment List`). Second, FF Warlock §361 ("the poison-gas key") had a multi-stat penalty on failure (lose 2 SKILL AND 3 STAMINA) where the schema's `failure_penalty: {stat, amount}` could only carry one — the second penalty ended up in a `note`. Third, the HTML emulator's `failure_penalty` handler was checking `penalty.type === 'modify_stat'`, a shape the schema never produced, so even the encoded-half of §361 was silently dropped in the browser.
+
+The bugfix and the rule together address all three in concert:
+
+**Schema additions (v1.33+, schema-additive — pre-v1.33 books validate unchanged):**
+
+- **`failure_penalty` accepts EITHER its pre-v1.33 single-object shape `{stat, amount}` OR an array `[{stat, amount}, …]` (the new multi-penalty shape).** The array shape applies each penalty in order on failure, all using the standard `modify_stat`-style mutation path (so per-stat clamps, initial-is-max, and resource-slot handling still apply). Use the array shape whenever the source text describes a failure that deducts from MORE THAN ONE stat. Canonical worked example — FF Warlock §361:
+
+```json
+{
+  "type": "stat_test",
+  "stat": "skill",
+  "success_to": 136,
+  "failure_to": 136,
+  "failure_penalty": [
+    { "stat": "skill", "amount": -2 },
+    { "stat": "stamina", "amount": -3 }
+  ]
+}
+```
+
+This replaces the pre-v1.33 shape `{stat: "stamina", amount: -3}` + the orphaned `note: "On failure, also lose 2 SKILL points (in addition to 3 STAMINA)"` — the SKILL half is now first-class in the events array.
+
+**Validator additions (`scripts/book-checks.js`):**
+
+- **`checkDisarmamentWithoutEvent` regex set extended with FF-dialect triggers.** Adds three new patterns: (1) `adjust your Equipment List` (FF Warlock's voluntary-trade verb, distinct from the LW "cross off Action Chart" pattern); (2) `leave behind one item of …` (the canonical "you must give up to take" phrasing, FF-flavored); (3) `in exchange (for) X` / `may take it only if you exchange Y` (the §307-style strict trade gate). The existing `(action chart|equipment list|character sheet|adventure sheet)` alternation now covers FF, LW, AD&D, and Wizards-Warriors books in one regex.
+
+- **New soft check: `checkMechanicVerbsInNote` (catch-net).** Walks every event's `note` field across all sections and matches against an imperative-mood mechanic-verb vocabulary: *"must drop"*, *"must give up / leave / exchange / trade"*, *"also lose / gain / deduct / reduce / restore"*, *"in addition to"*, *"may only take if"*, *"can only be taken if"*, *"if you take this, you must …"*, *"on failure, also lose …"*. This is a SHAPE-agnostic catch-net — when a sub-agent encodes a constraint in a `note` because no clean primitive existed for it (the §155 and §361 fingerprint), the note's body almost always uses one of these verbs regardless of the source-text dialect or the specific rule the un-encoded constraint should have used. The check is conservative — benign parser-commentary notes ("First word is 'Test' — confirmed from PDF", "appears in illustration", "may be unreachable from §47") do NOT use these verbs and are not flagged.
+
+**Emulator additions (`cli-emulator/play.js` + `index.html`):**
+
+Both emulators' `failure_penalty` handlers normalise to array form (`Array.isArray(event.failure_penalty) ? event.failure_penalty : [event.failure_penalty]`) and apply each penalty in order. The HTML emulator's pre-Rule-49 handler additionally fixed the broken `penalty.type === 'modify_stat'` shape check that was silently dropping ALL `failure_penalty` payloads in the browser (a v3.22.0-era bug).
+
+**When to use the array shape.** Whenever the source text describes a failure (or success-with-cost, or any branch on a stat_test) that deducts from more than one stat. Examples beyond §361: FF books often phrase compound failure costs ("Reduce your SKILL by 2 and STAMINA by 3"), LW books less so (LW failure costs are typically single-stat ENDURANCE losses). Use the single-object shape for the common single-stat case (don't wrap a single-stat penalty in a one-element array — the validator accepts both but the single-object shape is the canonical pre-existing form).
+
+**When NOT to use it.** Single-stat penalties keep the existing `{stat, amount}` shape. Penalties that apply on SUCCESS (rare) use the existing `success_bonus` field or — for compound success effects — `roll_dice` with per-range `effects[]` (Rule 12). Penalties that mutate inventory rather than stats use `remove_item` / `choose_items mode:"remove"` (Rule 40), not `failure_penalty`.
+
+**Verification.** Applied first to FF Warlock §361 (poison-gas key) for the multi-stat shape, and to FF Warlock §155 (iron-shield trade) for the disarmament-regex extension. The catch-net soft check surfaces both as `mechanic-verbs-in-note` findings before migration and goes quiet after the sub-agent re-encodes them properly. Sub-agents running a comprehensive review on any first-party book should examine every `mechanic-verbs-in-note` finding and either (a) migrate the constraint into a structured event (the common case) or (b) edit the note to remove the mechanic-verb phrasing if the note is genuinely parser commentary that the heuristic over-matched.
+
 ---
 
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
@@ -6030,7 +6071,7 @@ The resume flow turns a previously-frustrating "this book can't be parsed yet" o
 
 ## Version identifiers
 
-**Codex v2.44.0 / GBF schema v1.32.0 / CLI emulator v3.27.0 / HTML emulator v3.23.0** (Rule 48 adds `interrupt_after_rounds: {count, target}` on the `combat` event — round-cap combat interrupt that PRESERVES `state.activeCombat` via the same pauseCombat machinery as Rule 46 wound interrupts, so a downstream `mode: "resume"` event can pick the same fight back up at the same enemy STAMINA, frozen modifiers, and wound counters. Distinct from Rule 38 `end_after_rounds` (clears activeCombat — "fight broken off") and from Rule 46 wound-count interrupts. On a Rule 46 mode:resume the round counter resets to 0 in the new combat, so the Rule 48 interrupt re-arms for another `count` rounds without extra bookkeeping. Schema-additive — pre-v1.32 books validate unchanged. v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wires up Rule 40 `choose_items mode:"remove"` (player-chosen item loss with empty-pool no-op, single-eligible auto-resolve, multi-pick pause, and `on_success_set_flag`); still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
+**Codex v2.45.0 / GBF schema v1.33.0 / CLI emulator v3.28.0 / HTML emulator v3.24.0** (Rule 49 generalises `failure_penalty` to accept either the pre-v1.33 single-object `{stat, amount}` shape or an array of them, so multi-stat failure penalties — FF Warlock §361's "-2 SKILL AND -3 STAMINA poison-gas failure" canonical case — can be encoded directly instead of stashing the second penalty in a `note`. Both emulators normalise to array form. Also extends the validator's `checkDisarmamentWithoutEvent` regex set with FF-dialect triggers (`adjust your Equipment List`, `leave behind one item`, `in exchange`, `may take only if exchange`) — the §155-shape Rule 40 gap — and adds a new soft check `checkMechanicVerbsInNote` that flags ANY event whose `note` field uses imperative-mood mechanic verbs (`must drop`, `also lose`, `in addition to`, etc.) as a shape-agnostic catch-net for un-encoded constraints. Also fixes a pre-Rule-49 HTML-emulator bug where `failure_penalty` was gated on a non-existent `penalty.type === 'modify_stat'` shape — single-stat penalties were silently dropped in the browser. Schema-additive — pre-v1.33 books validate unchanged. v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt with preserved active state; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

@@ -27,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.27.0';
+const CODEX_EMULATOR_VERSION = '3.28.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -2742,9 +2742,15 @@ function applyAction(state, book, action, args) {
         state.stats[ds] = Math.max(0, (state.stats[ds] || 0) - da);
       }
       if (!success && event.failure_penalty) {
-        const p = event.failure_penalty;
-        if (p.stat) {
-          state.stats[p.stat] = (state.stats[p.stat] || 0) + (p.amount || 0);
+        // Schema v1.33+ (Rule 49): failure_penalty accepts either a single
+        // {stat, amount} object (pre-v1.33 shape) or an array of them
+        // (multi-penalty shape, e.g. Warlock §361's -2 SKILL AND -3 STAMINA
+        // poison-gas failure). Normalize to array then apply each in order.
+        const penalties = Array.isArray(event.failure_penalty) ? event.failure_penalty : [event.failure_penalty];
+        for (const p of penalties) {
+          if (p && p.stat) {
+            state.stats[p.stat] = (state.stats[p.stat] || 0) + (p.amount || 0);
+          }
         }
       }
       state.log.push(`Test ${stat}: rolled ${result.rolls.join(',')}=${result.total} vs ${statVal} → ${success ? 'SUCCESS' : 'FAILURE'}`);

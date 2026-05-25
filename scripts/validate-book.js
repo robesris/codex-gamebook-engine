@@ -113,6 +113,7 @@ function printSoftChecks(book) {
   enumerate('catalog-category-vs-text-language findings', f.categoryVsTextLanguage);
   enumerate('catalog-effect-promise-without-machinery findings', f.catalogEffectPromise);
   enumerate('Rule 46 orphan-resume findings', f.rule46OrphanResumes || []);
+  enumerate('Rule 49 mechanic-verbs-in-note findings', f.mechanicVerbsInNote || []);
 }
 
 const bookText = fs.readFileSync(bookPath, 'utf8');

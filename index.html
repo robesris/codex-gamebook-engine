@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.23.0';
+const CODEX_EMULATOR_VERSION = '3.24.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -4443,11 +4443,23 @@ function handleStatTest(event) {
       ${event.deduct_after ? `<p style="font-size:0.85em;color:var(--text-dim)">${(event.deduct_stat || stat).toUpperCase()} reduced by ${event.deduct_amount || 1}</p>` : ''}
     `;
 
-    // Apply failure_penalty if present and failed
+    // Apply failure_penalty if present and failed. The schema-defined
+    // shape is {stat, amount} (pre-v1.33) or an array of them (Schema
+    // v1.33+ / Rule 49: multi-penalty for failures that deduct from
+    // more than one stat — e.g. Warlock §361's poison-gas failure
+    // applying -2 SKILL AND -3 STAMINA). Pre-fix this handler was
+    // gated on `penalty.type === 'modify_stat'`, a shape the schema
+    // never produced, so even single-stat failure_penalty payloads
+    // were silently dropped in the browser emulator. Now: normalize
+    // to array and apply each via handleModifyStat (which routes
+    // through the standard stat-modification path including initial-
+    // is-max clamps and resource-slot handling).
     if (!success && event.failure_penalty) {
-      const penalty = event.failure_penalty;
-      if (penalty.type === 'modify_stat') {
-        handleModifyStat(penalty);
+      const penalties = Array.isArray(event.failure_penalty) ? event.failure_penalty : [event.failure_penalty];
+      for (const p of penalties) {
+        if (p && p.stat) {
+          handleModifyStat({ type: 'modify_stat', stat: p.stat, amount: p.amount || 0 });
+        }
       }
     }
 

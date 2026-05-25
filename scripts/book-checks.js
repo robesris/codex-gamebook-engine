@@ -126,12 +126,32 @@
       /\byou\s+(?:\w+\s+){0,3}(?:lost|lose)\s+(?:your\s+|all\s+(?:your\s+)?)?(?:backpack|weapons?|equipment)/i,
       // "X is stolen from your Backpack/pouch" — theft pattern (§144 fallback)
       /(?:is|are)\s+stolen\s+from\s+(?:your\s+)?(?:backpack|pouch)/i,
-      // "erase ... from your Action Chart" / "take this off your Action Chart" / "cross off" — explicit cross-off instruction (allows intermediate text up to 100 chars)
-      /(?:erase|cross\s+off|remove|take(?:\s+this|\s+that|\s+it)?\s+off)[^.]{0,100}action\s+chart/i,
+      // "erase ... from your Action Chart / Equipment List" — explicit
+      // cross-off instruction (allows intermediate text up to 100 chars).
+      // Action Chart is LW vocab, Equipment List is FF vocab; some books
+      // use "character sheet" / "adventure sheet" generically.
+      /(?:erase|cross\s+off|remove|take(?:\s+this|\s+that|\s+it)?\s+off)[^.]{0,100}(?:action\s+chart|equipment\s+list|character\s+sheet|adventure\s+sheet)/i,
+      // "adjust your Equipment List" (FF Warlock §155 phrasing — the
+      // standalone canonical FF trigger for player-chosen loss; the
+      // erase/cross-off pattern above doesn't cover this verb).
+      /\badjust\s+your\s+(?:equipment\s+list|action\s+chart|character\s+sheet|adventure\s+sheet)/i,
       // "Weapon is broken in two" / "Backpack is destroyed" — gear damage
       /(?:your\s+)?(?:weapons?|backpack)\s+(?:is|are)\s+(?:broken|destroyed|shattered|smashed)/i,
       // "you no longer have your Backpack"
       /(?:no\s+longer\s+have|no\s+longer\s+carry)\s+(?:your\s+|any\s+)?(?:backpack|weapons?|equipment)/i,
+      // "leave behind one item / one of your X" — voluntary-trade
+      // phrasing (FF Warlock §155 canonical: "you will have to leave
+      // behind one item of equipment").
+      /\bleave\s+behind\s+(?:one|an|a|any|some)\s+(?:of\s+your\s+)?(?:item|piece|weapon|object)/i,
+      // "in exchange (for) X" / "exchange ... for X" — barter trades
+      // where a take must be paired with a give (LW1 §307 Warhammer,
+      // any "give X to keep Y" wizard-trade phrasing).
+      /\b(?:in\s+exchange(?:\s+for)?|exchange\s+(?:one\s+of\s+)?(?:your\s+)?(?:weapons?|items?|possessions?)\s+for)/i,
+      // "may take it only if you (exchange|give|leave|trade)" — the
+      // strict §307-style trade gate. Anchors on the imperative
+      // conditional so it doesn't fire on permissive "you may take it"
+      // pickups.
+      /\bmay\s+take\s+(?:it|this|the\s+\w+)\s+only\s+if\s+you\s+(?:exchange|give|leave|trade|drop)/i,
     ];
     // Negation guard: skip if any matched phrase is within 30 chars after
     // "do not"/"don't"/"will not"/"won't"/"cannot"/"never" — those are negated.
@@ -341,6 +361,50 @@
     return [];
   }
 
+  // Check G (Rule 49 catch-net): flag events whose freeform `note` field
+  // contains imperative-mood mechanic verbs ("must drop", "also lose",
+  // "in addition to", "may only take if", "must give up"). When a
+  // sub-agent encodes a constraint in a `note` instead of as a structured
+  // event, the note's body almost always uses one of these verbs. Catches
+  // the §155 and §361 fingerprint regardless of the source-text dialect
+  // or the specific rule the un-encoded constraint should have used. The
+  // check is shape-agnostic — it walks every event in every section
+  // (flattened across roll_dice/stat_test/choose_items sub-effects) and
+  // matches the note body. Counts as a soft finding, not an error.
+  function checkMechanicVerbsInNote(book) {
+    const findings = [];
+    // Phrases that indicate a `note` is restating a mechanic the events
+    // array doesn't enforce. Tuned to be conservative — a `note` saying
+    // "First word is 'Test' - confirmed from PDF" is parser commentary
+    // and not a mechanic; the verbs below all describe player obligations
+    // or stat/inventory deltas that should be in the events array.
+    const verbs = [
+      /\bmust\s+drop\b/i,
+      /\bmust\s+(?:give\s+up|leave|exchange|trade)\b/i,
+      /\balso\s+(?:lose|gain|deduct|reduce|restore)\b/i,
+      /\bin\s+addition\s+to\b/i,
+      /\bmay\s+(?:only|not)\s+(?:take|keep|use)\s+if\b/i,
+      /\bcan\s+only\s+be\s+(?:taken|kept|used)\s+if\b/i,
+      /\bif\s+you\s+take\s+(?:this|it)\s*[,;]?\s*(?:you\s+)?(?:must|will\s+have\s+to)\b/i,
+      /\b(?:on|upon)\s+(?:success|failure)[,:;]?\s*(?:also|additionally)\s+(?:lose|gain|deduct)\b/i,
+    ];
+    for (const [secId, s] of Object.entries(book.sections || {})) {
+      if (!s) continue;
+      for (const ev of flattenSectionEvents(s)) {
+        if (!ev || typeof ev.note !== 'string') continue;
+        const note = ev.note;
+        let matched = null;
+        for (const re of verbs) {
+          const m = note.match(re);
+          if (m) { matched = m[0]; break; }
+        }
+        if (!matched) continue;
+        findings.push(`§${secId} ${ev.type} event: note describes un-encoded mechanic ("${matched}") — full note: "${note.slice(0, 120)}${note.length > 120 ? '...' : ''}"`);
+      }
+    }
+    return findings;
+  }
+
   function checkStructural(book) {
     const catalogIds = Object.keys(book.items_catalog || {});
     const granted = collectGrantedItemIds(book);
@@ -370,6 +434,7 @@
       categoryVsTextLanguage: checkCategoryVsTextLanguage(book),
       catalogEffectPromise: checkCatalogEffectPromise(book),
       rule46OrphanResumes: checkRule46OrphanResumes(book),
+      mechanicVerbsInNote: checkMechanicVerbsInNote(book),
     };
   }
 

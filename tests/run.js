@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title at v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title at v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title bumped to v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title bumped to v1.33.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title at v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title at v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title at v1.33.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title bumped to v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title bumped to v1.33.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,7 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -3677,7 +3677,7 @@ test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -3851,7 +3851,7 @@ test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.28 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -4258,7 +4258,7 @@ test('Rule 46 v2.42.0: schema-additive — pre-v1.30 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.30 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.32.0', 'schema title is v1.32.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
 });
 
 // ============================================================
@@ -4329,6 +4329,205 @@ test('Rule 47 v2.43.0: schema declares schema_version as an accepted top-level f
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
   assertTrue('schema_version' in schema.properties, 'schema.properties.schema_version is declared');
   assertEqual(schema.properties.schema_version.type, 'string', 'schema_version is a string field');
+});
+
+// ============================================================
+// Rule 49 v2.45.0 — Multi-stat failure_penalty + note-heuristic catch-net
+// ============================================================
+
+test('Rule 49 v2.45.0: failure_penalty array applies each penalty in order on failure', () => {
+  const book = buildBook({
+    rules: {
+      stats: [
+        { name: 'skill', initial: 12 },
+        { name: 'stamina', initial: 20 },
+      ],
+    },
+    sections: {
+      '1': {
+        text: 'Roll vs SKILL; on failure lose 2 SKILL AND 3 STAMINA',
+        events: [{
+          type: 'stat_test',
+          stat: 'skill',
+          failure_to: '2',
+          // Deterministically force a failure by setting current skill
+          // unreachably low against a 2d6 roll — handled below by stat
+          // mutation before navigate. The penalty SHAPE under test is
+          // the array form (Schema v1.33+ / Rule 49).
+          failure_penalty: [
+            { stat: 'skill', amount: -2 },
+            { stat: 'stamina', amount: -3 },
+          ],
+        }],
+        choices: [],
+        is_ending: false,
+      },
+      '2': { text: 'failed', events: [], choices: [], is_ending: false },
+    },
+  });
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.stats.skill = 2;     // 2d6 always >= 2, force failure
+  state.stats.stamina = 20;
+  state = play.navigateTo(state, book, 1);
+  // The stat_test pauses; apply the player's roll.
+  assertEqual(state.pause?.type, 'stat_test', 'stat_test paused as expected');
+  state = play.applyAction(state, book, 'roll');
+  assertEqual(state.stats.skill, 0, 'skill deducted by 2 (2 - 2)');
+  assertEqual(state.stats.stamina, 17, 'stamina deducted by 3 (20 - 3)');
+  assertEqual(String(state.currentSection), '2', 'navigated to failure_to');
+});
+
+test('Rule 49 v2.45.0: failure_penalty single-object shape still works (back-compat)', () => {
+  const book = buildBook({
+    rules: { stats: [{ name: 'skill', initial: 12 }, { name: 'stamina', initial: 20 }] },
+    sections: {
+      '1': {
+        text: 'old shape',
+        events: [{
+          type: 'stat_test',
+          stat: 'skill',
+          failure_to: '2',
+          failure_penalty: { stat: 'stamina', amount: -3 }, // pre-v1.33 single-object
+        }],
+        choices: [],
+      },
+      '2': { text: '', events: [], choices: [] },
+    },
+  });
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.stats.skill = 2;     // force failure
+  state.stats.stamina = 20;
+  state = play.navigateTo(state, book, 1);
+  state = play.applyAction(state, book, 'roll');
+  assertEqual(state.stats.skill, 2, 'skill unchanged (not in the single-object penalty)');
+  assertEqual(state.stats.stamina, 17, 'stamina -3 from the single-object penalty');
+});
+
+test('Rule 49 v2.45.0: schema accepts both failure_penalty shapes', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+
+  const baseBook = (penalty) => ({
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      '1': {
+        text: 't',
+        events: [{ type: 'stat_test', stat: 'SKILL', failure_to: '1', failure_penalty: penalty }],
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  });
+
+  assertTrue(validate(baseBook({ stat: 'SKILL', amount: -1 })), 'single-object shape validates');
+  assertTrue(validate(baseBook([{ stat: 'SKILL', amount: -1 }, { stat: 'SKILL', amount: -2 }])), 'array shape validates');
+  assertTrue(!validate(baseBook('bogus')), 'string penalty rejected');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.33.0', 'schema title is v1.33.0');
+});
+
+test('Rule 49 v2.45.0: schema-additive — pre-v1.33 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A v1.32-era book using the single-object failure_penalty shape.
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: {
+      '1': {
+        text: 't',
+        events: [{ type: 'stat_test', stat: 'SKILL', failure_to: '1', failure_penalty: { stat: 'SKILL', amount: -2 } }],
+        choices: [{ text: 'end', target: '1', condition: null }],
+        is_ending: false,
+      },
+    },
+  };
+  assertTrue(validate(book), `pre-v1.33 book should validate clean: ${JSON.stringify(validate.errors)}`);
+});
+
+test('Rule 49 v2.45.0: mechanic-verbs-in-note soft check flags un-encoded constraints', () => {
+  const BookChecks = require('../scripts/book-checks.js');
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 3 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }] },
+    character_creation: { steps: [] },
+    items_catalog: { shield: { name: 'Shield' } },
+    enemies_catalog: {},
+    sections: {
+      // §155-shape: add_item with mechanic in note
+      '155': {
+        text: '...',
+        events: [{ type: 'add_item', item: 'shield', optional: true, note: 'Must drop one item to take.' }],
+        choices: [],
+        is_ending: false,
+      },
+      // §361-shape: stat_test with second-penalty in note
+      '361': {
+        text: '...',
+        events: [{
+          type: 'stat_test', stat: 'SKILL', failure_to: '1',
+          failure_penalty: { stat: 'STAMINA', amount: -3 },
+          note: 'On failure, also lose 2 SKILL points (in addition to 3 STAMINA)',
+        }],
+        choices: [],
+        is_ending: false,
+      },
+      // Negative: a benign parser-commentary note should NOT trip the check
+      '1': {
+        text: '...',
+        events: [{ type: 'add_item', item: 'shield', note: 'Item appears in illustration, first word confirmed from PDF' }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  };
+  const findings = BookChecks.collectSoftFindings(book).mechanicVerbsInNote;
+  assertTrue(findings.length >= 2, `expected ≥2 findings, got ${findings.length}: ${JSON.stringify(findings)}`);
+  assertTrue(findings.some(f => f.includes('§155')), '§155 add_item note flagged');
+  assertTrue(findings.some(f => f.includes('§361')), '§361 stat_test note flagged');
+  assertTrue(!findings.some(f => f.includes('§1 ')), '§1 benign parser note not flagged');
+});
+
+test('Rule 49 v2.45.0: disarmament regex now catches FF-dialect "leave behind" / "adjust your Equipment List"', () => {
+  const BookChecks = require('../scripts/book-checks.js');
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }] },
+    character_creation: { steps: [] },
+    items_catalog: { shield: { name: 'Shield' } },
+    enemies_catalog: {},
+    sections: {
+      // §155-flavoured: voluntary trade with no remove event
+      '155': {
+        text: 'However, the shield is heavy and you will have to leave behind one item of equipment (adjust your Equipment List) to be able to carry it.',
+        events: [{ type: 'add_item', item: 'shield', optional: true }],
+        choices: [],
+        is_ending: false,
+      },
+    },
+  };
+  const findings = BookChecks.collectSoftFindings(book).disarmamentWithoutEvent;
+  assertTrue(findings.some(f => f.includes('§155')), `§155 should be flagged: ${JSON.stringify(findings)}`);
 });
 
 // ============================================================

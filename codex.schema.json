@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.32.0",
+  "title": "Gamebook Format (GBF) v1.33.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -873,12 +873,27 @@
         "deduct_stat": { "type": "string", "description": "stat_test: which stat to deduct from." },
         "deduct_amount": { "type": "integer", "description": "stat_test: how much to deduct." },
         "failure_penalty": {
-          "type": "object",
-          "description": "stat_test: additional penalty on failure (e.g., stat loss).",
-          "properties": {
-            "stat": { "type": "string" },
-            "amount": { "type": "number" }
-          }
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "stat": { "type": "string" },
+                "amount": { "type": "number" }
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["stat", "amount"],
+                "properties": {
+                  "stat": { "type": "string" },
+                  "amount": { "type": "number" }
+                }
+              }
+            }
+          ],
+          "description": "stat_test: additional penalty on failure. Two accepted shapes: (a) a single `{stat, amount}` object — the pre-v1.33 shape; (b) Schema v1.33+ (Rule 49): an array of `{stat, amount}` objects, applied in order on failure. Use the array shape when the source text describes a failure that deducts from MORE THAN ONE stat (e.g. Warlock §361's poison-gas failure: -2 SKILL AND -3 STAMINA). Schema-additive — pre-v1.33 single-object encodings validate unchanged."
         },
         "success_bonus": {
           "type": "object",
