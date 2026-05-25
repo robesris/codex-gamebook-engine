@@ -5946,6 +5946,20 @@ For LW1 specifically (10 abilities, pick 5, 6 distinct gating abilities): the ma
 
 **The same pattern generalizes** to other mutually-exclusive chargen choices when they exist: a `choose_one` chargen step with N options whose downstream gates reference each option separately needs N variant runs. A `distribute_points` step with multiple stat-gated sections may need variants that allocate points to different stats. The driver detects the pattern (unreached sections gated on a chargen-determined state value the main pass didn't cover) and constructs additional variants accordingly. The bound is the number of distinct chargen-determined gates, NOT the combinatorial explosion of all possible chargen choices — most chargen choices don't affect downstream reachability and the driver doesn't need to enumerate them.
 
+##### Round-cap interrupt simulation
+
+Rule 48 `interrupt_after_rounds` combats (the "win-by-deadline" idiom — FF Warlock §333 Vampire 6-round fight, LW1 §231/§339 robber 4-round fights) pose a coverage problem the main combat-mode fanout (win / lose / flee) doesn't solve. Win mode kills the enemy in round 1 (player attack stat boosted to 99) so it never reaches the interrupt threshold. Lose mode dies before reaching it. A balanced "stall" mode that aims for an even fight is fragile on combat systems with steep damage curves — LW's ratio-table and FF's 2d6+SKILL both tend to produce a clean kill or a clean loss within 2-3 rounds, rarely the 4-6 the interrupt needs. Tuning per-section is intractable.
+
+The reproducible solution: for any combat event carrying `interrupt_after_rounds: { count, target }`, the driver adds a direct **interrupt-simulation** path. It navigates straight to the interrupt target as if the timer had fired, in two variants:
+
+1. **High-stat variant.** Clear `state.combat`, set `state.lastCombatRoundCount = count`, restore the player's health stat to its post-chargen value (the maximum the player legitimately could have had if they reached this section without prior damage), then `navigateTo(target)`. Reaches any post-interrupt branch gated on the high side of a stat fork.
+
+2. **Low-stat variant.** Same teleport, but halve the player's health stat first (representing the damage they took during the interrupted combat). Reaches the low-side branch of the same fork.
+
+Both states are reachable in real play. The fudge is the same kind the fix-point replay teleport uses: navigation between two halves the DFS couldn't naturally connect, not state the player couldn't have. Combine with the existing combat-mode fanout: win mode still reaches the kill-within-N path, the interrupt-simulation reaches the timer-fired path, and the fix-point replay handles any further state-gated subgraphs.
+
+This pattern subsumes the older "stall mode" attempt. Stall (balanced rolls + matched attack stats) is still useful for the narrower case of a `combat_round_count_gte` post-combat choice without an `interrupt_after_rounds` event — when the section's combat needs to actually play out to the threshold so the round counter reads the right value — but should be gated on that condition existing on the section, otherwise it produces "did not converge" warnings on combat systems where it can't stall.
+
 ##### What's reproducible from this spec alone
 
 A competent AI reading §12.14 + §12.14.1 should produce a driver that:
