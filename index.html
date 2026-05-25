@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.22.0';
+const CODEX_EMULATOR_VERSION = '3.23.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -3086,6 +3086,96 @@ function handleChooseItems(event) {
   content.appendChild(area);
 
   const catalog = gameData.items_catalog || {};
+
+  // Schema v1.25+ (Rule 40): mode:"remove" — player-chosen LOSS variant.
+  // Pool comes from state.inventory filtered by event.from_category;
+  // empty pool no-ops, single-eligible auto-resolves, multi pauses for
+  // selection. on_success_set_flag fires only when ≥1 item is actually
+  // removed. Mirrors cli-emulator/play.js choose_items mode:remove.
+  if (event.mode === 'remove') {
+    const cat = event.from_category;
+    const want = event.count || 1;
+    const eligible = state.inventory.filter(id => {
+      if (cat == null) return true;
+      const item = catalog[id];
+      return item && item.inventory_category === cat;
+    });
+
+    const fireSuccessFlag = () => {
+      if (event.on_success_set_flag && !state.flags.includes(event.on_success_set_flag)) {
+        state.flags.push(event.on_success_set_flag);
+      }
+    };
+    const removeIds = (ids) => {
+      for (const id of ids) {
+        const idx = state.inventory.indexOf(id);
+        if (idx >= 0) state.inventory.splice(idx, 1);
+        autoUnequipOnRemove(id);
+      }
+    };
+
+    if (eligible.length === 0) {
+      area.innerHTML = `<div class="event-msg">${event.description || 'Nothing eligible to drop.'} (no-op)</div>`;
+      processNextEvent();
+      return;
+    }
+    if (eligible.length <= want) {
+      removeIds(eligible);
+      fireSuccessFlag();
+      const names = eligible.map(getItemName).join(', ');
+      area.innerHTML = `<div class="event-msg loss">Removed (forced): ${names}</div>`;
+      updateInventory();
+      updateStatBar();
+      renderEquipmentPanel();
+      processNextEvent();
+      return;
+    }
+
+    // Multi-choice: pause for selection from the eligible inventory pool.
+    const selectedRm = new Set();
+    function renderRemove() {
+      let html = `<h3>${event.description || 'Choose item(s) to lose'}</h3>`;
+      html += `<div class="choose-items-count">Selected: ${selectedRm.size} / ${want}</div>`;
+      html += `<div class="choose-items-grid">`;
+      for (const id of eligible) {
+        const item = catalog[id] || { name: id };
+        const isSel = selectedRm.has(id);
+        html += `<div class="choose-item-btn ${isSel ? 'selected' : ''}" data-item-id="${id}">
+          <strong>${item.name || id}</strong>
+          ${item.description ? `<div class="item-desc">${item.description}</div>` : ''}
+        </div>`;
+      }
+      html += `</div>`;
+      if (selectedRm.size === want) {
+        html += `<div class="center mt-1"><button class="btn" id="confirm-remove-btn">Confirm</button></div>`;
+      }
+      area.innerHTML = html;
+      area.querySelectorAll('.choose-item-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.itemId;
+          if (selectedRm.has(id)) selectedRm.delete(id);
+          else if (selectedRm.size < want) selectedRm.add(id);
+          renderRemove();
+        });
+      });
+      const confirmBtn = area.querySelector('#confirm-remove-btn');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+          const picks = [...selectedRm];
+          removeIds(picks);
+          fireSuccessFlag();
+          area.innerHTML = `<div class="event-msg loss">Lost: ${picks.map(getItemName).join(', ')}</div>`;
+          updateInventory();
+          updateStatBar();
+          renderEquipmentPanel();
+          processNextEvent();
+        });
+      }
+    }
+    renderRemove();
+    return;
+  }
+
   const filter = event.catalog_filter || {};
   const excludeSet = new Set(event.exclude || []);
   const count = event.count || 1;

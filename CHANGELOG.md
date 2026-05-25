@@ -6,6 +6,10 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.44.0 / GBF v1.32.0 / CLI emulator v3.27.0 / HTML emulator v3.23.0
+
+**HTML emulator: Rule 40 wire-up (`choose_items mode:"remove"`).** Brings the browser emulator in line with the CLI emulator's player-chosen-loss support that has been in the schema since v1.25. Surfaced by FF Warlock §155, whose "iron shield trades for one item of equipment" mechanic had the constraint sitting in a freeform `note` and was silently unenforced in the browser. `handleChooseItems` now checks `event.mode === 'remove'` and: filters `state.inventory` by `event.from_category` to compute the eligible pool, no-ops on an empty pool, auto-removes when `eligible.length <= event.count`, and pauses with a clicker-grid for the multi-choice case. `event.on_success_set_flag` fires only when at least one item is actually removed (matches `cli-emulator/play.js:1565-1590` / `:2956-2968` semantics). Auto-unequips removed items via the existing `autoUnequipOnRemove` hook so an equipped slot is cleared in the same beat as the inventory removal. The grant-direction code path is unchanged — the `mode === 'remove'` branch returns early before any `add_item` semantics run. Pending: Rule 42 (`queue_combat_modifier`) wire-up and the chargen `roll_table` action fix carry forward to a later bump.
+
 ## v2.44.0 / GBF v1.32.0 / CLI emulator v3.27.0 / HTML emulator v3.22.0
 
 **Rule 48 — Round-cap combat interrupt with preserved active state (`interrupt_after_rounds`).** Schema-additive ship that pushes the chat-40 Warlock fresh-parse coverage from 99.5% (413/415) to **100% (418/418)**.
