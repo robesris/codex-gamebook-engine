@@ -5682,6 +5682,35 @@ Starting remediation pass. <M> findings to triage.
 
 The total count is honest: it's the CURRENT estimate, not a contract. Findings the user defers (`n` or `flavor`) still count toward the denominator — they were triaged, just not fixed. The denominator only grows if the pass surfaces work the agent hadn't seen at the start.
 
+### 12.14 The play-execution gate — the remediation pass IS NOT complete until the book actually plays
+
+The schema validator, reachability tool, and script-execution check are all STATIC checks — they look at the JSON structure, the section graph, and isolated script crashes, but NONE OF THEM actually runs the book end-to-end. A book that passes all three can still be unplayable: chargen field names off-by-case, combat `round_script` missing, synthetic sub-sections never materialised, enemy stats casing mismatched against the engine, etc. Every one of these has happened on a real fresh parse and was missed by every static check.
+
+**The remediation pass MUST include a DFS playthrough gate** as its final step before "complete" is declared. Specifically:
+
+1. Drive the CLI emulator (`cli-emulator/play.js` exported `applyAction` / `initialState`) from `§1` through chargen and DFS-traverse the game graph, snapshotting state at each branch point.
+2. Track every reachable section and every error.
+3. Compare reachable count against the static reachability tool's count.
+4. **Any non-trivial gap is itself a remediation finding** — either a parse-side encoding gap (the gate surfaces it), an engine-side limitation (already logged), or a source-side artefact (vestigial section / unreachable-by-design).
+
+The reference implementation is `claude_session/dfs_playthrough.js` in the books repo. It drives chargen with deterministic max-favored rolls, fans out `choose_items` selections (every C(from, count) combination), tries both success and failure branches at every `stat_test` (by temporarily clamping the test stat to force outcome), tries win / lose / flee at every `combat`, and runs a fix-point replay pass: for each conditional choice that no DFS path satisfied, it searches the saved snapshot pool for a state that legitimately satisfies the gate, teleports that state to the blocked source-section, and forces the gated choice. The teleport (via `manual_set currentSection`) skips in-between play the DFS couldn't enumerate, but the items / flags in the seed state are ALL legitimately acquired on some main-DFS branch — no fake state is ever manufactured.
+
+**The cardinal constraint on the gate's "fudging":** dice rolls and stat values may be set to whatever the gate needs (the DFS just wants to *reach* every branch). But the gate MUST NOT inject items, flags, gold, or any state the player couldn't legitimately have at this point in play. If a gate cannot be reached without manufactured state, that means the source-text gate is structurally unreachable in the current encoding — which is itself a finding to surface.
+
+**The remediation→DFS loop.** Findings the gate surfaces are themselves entries in the remediation queue. The loop runs: (a) apply user-confirmed fixes, (b) re-run the DFS gate, (c) if new gaps appear, surface them as new findings, (d) repeat until either reachability matches the static tool's count OR the remaining gaps are accepted (engine limitations / vestigial sections). The loop typically converges in 2–4 iterations on a fresh parse.
+
+**Discoveries the gate catches that the static checks miss** (all from the chat-40 Warlock pass, all play-blocking before the gate):
+
+- **D1**: chargen step field-name mismatch (`stat_name`/`dice` vs canonical `stat`/`formula`). Schema validator passed because the schema permits additional properties. Static check passed. Player gets stuck at the first roll prompt.
+- **D2**: combat `round_script` missing entirely from the book's `combat_rules_detail`. Combats hit "ERROR: no round_script defined" on round 1 and never advance.
+- **D3**: synthetic sub-section ids referenced from events / choices but never created (`161_goblin` / `198_retry` / `159_escape_test` etc.). Engine throws "Section X not found" on navigation.
+- **D4**: stat name casing mismatch between chargen-step writes (`SKILL`) and event reads (`skill`). Every `stat_test` evaluates the stat as 0.
+- **D5**: cascade — script_code strings reference `game_state.LUCK`-style uppercase after D4 lowercased the state slot.
+- **D6**: same shape for enemy catalog (`SKILL`/`STAMINA` uppercase). Crocodile dies in one round because its `stamina` field is undefined → defaults to 0 → any damage kills.
+- **D7**: `choose_items` shape mismatches (parser used `options` instead of `from`, or nested `parameters: {items, count}` instead of flat fields). Engine no-ops the event; player skips item acquisition entirely.
+
+Each is a JSON-structural bug that would obviously break first-attempted play, that ALL THREE static checks pass cleanly on, and that the play-execution gate immediately surfaces. None should have been declared "remediation complete" without the gate catching them.
+
 ---
 
 ## Version identifiers
