@@ -4867,7 +4867,7 @@ Each caller sets its own flag before navigating to §161:
 
 **When NOT to use.** When the player's intended destination after the subroutine IS the source section (the standard "pop the stack" case) — `return_to_caller` with `is_subroutine_entry: true` on the entry section is simpler. Mix both freely: a subroutine can have a `return_to_caller` event AND a `route_by_flag` event in sequence; the first to fire wins.
 
-**Verification statement.** First parse using Rule 47: chat-40 Warlock fresh-parse remediation pass. Unlocked §43 (wandering monster from §234), §117 (post-§14 wandering monster choice) — both previously unreachable despite valid encoding via the pre-Rule-47 `set_flag` + `return_to_caller` workaround.
+**Verification.** Applied first to FF Warlock §161 (the wandering-monster table) and its four callers (§12 / §14 / §234 / §295). Pre-Rule-47, §43 (the wandering monster's intended return target from §234) and §117 (the post-wandering-monster choice on §14) were unreachable in play despite valid encoding via `set_flag` + `return_to_caller` — the engine's stack-pop semantics returned the player to the source section, not the source's per-caller intended downstream destination. After migration to `route_by_flag` both sections become reachable and the wandering-monster mechanic plays as the source describes.
 
 ---
 
@@ -4909,7 +4909,7 @@ On the `combat` event type:
 
 **When NOT to use.** When the round-count interrupt is the END of the fight (no resume possible — the player either wins, dies, or the encounter terminates) — use `end_after_rounds` (Rule 38) instead. When the source's pause-condition is wound-driven rather than round-driven, use Rule 46's `interrupt_after_player_wounds` / `interrupt_after_enemy_wounds`.
 
-**Verification statement.** First parse using Rule 48: chat-40 Warlock fresh-parse remediation pass. Unlocked §224 (the Vampire 11/12-on-Unlucky special-flee sub-branch) — the last remaining unreachable section before this rule shipped. Final coverage 418/418 (100%) on the Warlock fresh-parse output.
+**Verification.** Applied first to FF Warlock §333 (the Vampire encounter). Pre-Rule-48 the encounter's "fight 6 rounds, then choose continue or attempt escape; on Unlucky escape with roll 11/12 turn to §224, otherwise resume" mechanic was inexpressible in canonical primitives — `end_after_rounds` cleared activeCombat (no resume possible) and a script-only implementation couldn't pause mid-execution for the player's choice. After migration the encounter plays end-to-end and §224 (the Vampire-catches-escape branch) is reachable.
 
 ---
 
@@ -5794,17 +5794,17 @@ The reference implementation is `claude_session/dfs_playthrough.js` in the books
 
 **The remediation→DFS loop.** Findings the gate surfaces are themselves entries in the remediation queue. The loop runs: (a) apply user-confirmed fixes, (b) re-run the DFS gate, (c) if new gaps appear, surface them as new findings, (d) repeat until either reachability matches the static tool's count OR the remaining gaps are accepted (engine limitations / vestigial sections). The loop typically converges in 2–4 iterations on a fresh parse.
 
-**Discoveries the gate catches that the static checks miss** (all from the chat-40 Warlock pass, all play-blocking before the gate):
+**Categories of discovery the gate catches that the static checks miss** (with concrete play-blocking examples — every one is a JSON-structural bug that the schema validator, reachability tool, and script-crash check all pass cleanly on, and that the play-execution gate immediately surfaces on first attempted play):
 
-- **D1**: chargen step field-name mismatch (`stat_name`/`dice` vs canonical `stat`/`formula`). Schema validator passed because the schema permits additional properties. Static check passed. Player gets stuck at the first roll prompt.
-- **D2**: combat `round_script` missing entirely from the book's `combat_rules_detail`. Combats hit "ERROR: no round_script defined" on round 1 and never advance.
-- **D3**: synthetic sub-section ids referenced from events / choices but never created (`161_goblin` / `198_retry` / `159_escape_test` etc.). Engine throws "Section X not found" on navigation.
-- **D4**: stat name casing mismatch between chargen-step writes (`SKILL`) and event reads (`skill`). Every `stat_test` evaluates the stat as 0.
-- **D5**: cascade — script_code strings reference `game_state.LUCK`-style uppercase after D4 lowercased the state slot.
-- **D6**: same shape for enemy catalog (`SKILL`/`STAMINA` uppercase). Crocodile dies in one round because its `stamina` field is undefined → defaults to 0 → any damage kills.
-- **D7**: `choose_items` shape mismatches (parser used `options` instead of `from`, or nested `parameters: {items, count}` instead of flat fields). Engine no-ops the event; player skips item acquisition entirely.
+- **Chargen step field-name mismatch.** Parser used `stat_name`/`dice` instead of canonical `stat`/`formula`. Schema validator passed because the schema permits additional properties. Player gets stuck at the first roll prompt because the engine reads `step.formula` and finds undefined.
+- **Combat `round_script` missing.** The book's `combat_rules_detail` had attack_stat / attack_formula / loss_damage but no `round_script`. Combats hit "ERROR: no round_script defined" on round 1 and never advance. The static checks don't verify that declared combat rules can actually resolve a round.
+- **Synthetic sub-section ids referenced but never created.** A `roll_dice.results[1].target` or a `stat_test.success_to` points at a string id like `"161_goblin"` or `"198_retry"`, but no section with that id exists in `sections{}`. The reachability tool's static walker treats the string as an "off the digit-id grid" target and ignores it; the engine throws "Section X not found" on navigation at play time.
+- **Stat name casing mismatch across writes vs reads.** Chargen step writes `state.stats.SKILL` (uppercase) but every `stat_test` and `modify_stat` event reads `state.stats.skill` (lowercase). Every test evaluates the stat as 0. The schema accepts both casings as valid strings; static checks don't compare casing across event payloads.
+- **Cascading casing in script_code strings.** Lua scripts written against state slot names that no longer match after a casing-correction pass (e.g. `game_state.LUCK` survives in a script after `state.stats.luck` is the real slot). Scripts crash with "attempt to compare number with nil" — not caught by the script-crash gate because the script crash is conditioned on a particular state path the gate doesn't drive.
+- **Enemy catalog stat casing.** Same pattern as the player stat casing but on `enemies_catalog[id].SKILL` / `.STAMINA`. The engine reads enemy stats as `enemy.stamina` (lowercase); uppercase in the catalog means the engine sees `undefined → 0` and every enemy dies in one round of any combat. Static schema validation accepts both casings.
+- **`choose_items` shape variants.** Parser used non-canonical field names (`options` instead of `from`, or nested `parameters: {items, count}` instead of flat top-level `from` / `count`). The engine no-ops events with the wrong shape; the player skips item acquisition entirely at those sections. Downstream `has_item` gates fail; player can't progress through item-gated branches.
 
-Each is a JSON-structural bug that would obviously break first-attempted play, that ALL THREE static checks pass cleanly on, and that the play-execution gate immediately surfaces. None should have been declared "remediation complete" without the gate catching them.
+Each example is a JSON-structural bug that would obviously break first-attempted play, that all three static checks pass cleanly on, and that the play-execution gate immediately surfaces. None should have been declared "remediation complete" without the gate catching them.
 
 ### 12.15 When the gate hits a genuine engine limitation — the resume-after-engine-update flow
 
