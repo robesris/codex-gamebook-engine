@@ -5790,7 +5790,7 @@ The schema validator, reachability tool, and script-execution check are all STAT
 3. Compare reachable count against the static reachability tool's count.
 4. **Any non-trivial gap is itself a remediation finding** — either a parse-side encoding gap (the gate surfaces it), an engine-side limitation (already logged), or a source-side artefact (vestigial section / unreachable-by-design).
 
-The reference implementation is `claude_session/dfs_playthrough.js` in the books repo. It drives chargen with deterministic max-favored rolls, fans out `choose_items` selections (every C(from, count) combination), tries both success and failure branches at every `stat_test` (by temporarily clamping the test stat to force outcome), tries win / lose / flee at every `combat`, and runs a fix-point replay pass: for each conditional choice that no DFS path satisfied, it searches the saved snapshot pool for a state that legitimately satisfies the gate, teleports that state to the blocked source-section, and forces the gated choice. The teleport (via `manual_set currentSection`) skips in-between play the DFS couldn't enumerate, but the items / flags in the seed state are ALL legitimately acquired on some main-DFS branch — no fake state is ever manufactured.
+The DFS gate is **workflow tooling, not engine API.** It is a script the parser AI builds in the user's chat each remediation pass, not a separately-versioned engine component the user uploads. The algorithm-level specification — exhaustive enough that a competent AI can produce the driver from this codex alone — is **§12.14.1 below.** The driver drives chargen with max-favoured rolls, fans out `choose_items` and `roll_dice` per defined branch, forces both success and failure outcomes at every `stat_test` (via temporary stat-clamping), runs three modes — win / lose / stall — at every `combat`, and concludes with a fix-point replay pass: for each conditional choice that no main-pass DFS path satisfied, the driver searches its saved snapshot pool for a state that legitimately satisfies the gate, teleports that state to the blocked source-section, and forces the gated choice. The teleport (via `manual_set currentSection`) fudges only the navigation between two halves the DFS couldn't directly connect — the items, flags, and stats in the seed state are all legitimately acquired by some real DFS branch.
 
 **The cardinal constraint on the gate's "fudging":** dice rolls and stat values may be set to whatever the gate needs (the DFS just wants to *reach* every branch). But the gate MUST NOT inject items, flags, gold, or any state the player couldn't legitimately have at this point in play. If a gate cannot be reached without manufactured state, that means the source-text gate is structurally unreachable in the current encoding — which is itself a finding to surface.
 
@@ -5807,6 +5807,137 @@ The reference implementation is `claude_session/dfs_playthrough.js` in the books
 - **`choose_items` shape variants.** Parser used non-canonical field names (`options` instead of `from`, or nested `parameters: {items, count}` instead of flat top-level `from` / `count`). The engine no-ops events with the wrong shape; the player skips item acquisition entirely at those sections. Downstream `has_item` gates fail; player can't progress through item-gated branches.
 
 Each example is a JSON-structural bug that would obviously break first-attempted play, that all three static checks pass cleanly on, and that the play-execution gate immediately surfaces. None should have been declared "remediation complete" without the gate catching them.
+
+#### 12.14.1 Algorithm spec — how to build the gate from scratch
+
+The DFS gate is **workflow tooling, not engine API.** It is a script the parser AI builds in the user's chat each remediation pass, not a separately-versioned engine component the user has to upload. The codex's job is to specify the algorithm precisely enough that the AI can produce a competent driver from this section alone. The driver is mostly generic (most of the logic is engine-pause-type dispatch) with a few dice-notation specializations.
+
+**Imports the AI needs.** The driver requires `cli-emulator/play.js` and `cli-emulator/script-runtime.js` — these are two of the four files the user uploads per the README Quick Start. The driver uses three exports: `initialState`, `startCharacterCreation`, `applyAction`, plus `navigateTo` and `evalCondition` as helpers. Snapshots are `JSON.parse(JSON.stringify(state))` — state is a plain-object tree, safe to serialize.
+
+**Top-level shape.**
+
+```
+load book
+state = initialState(book)
+state = startCharacterCreation(state, book)
+state = runChargen(state)
+explore(state, depth=0)
+runFixPointReplay()
+report visited / unreachable / errors
+```
+
+**`explore(state, depth)` dispatch table.** Looks at `state.pause.type`. For each type, fan out the actions the engine offers; snapshot before each action; recurse into the resulting state; restore from snapshot for the next iteration.
+
+| Pause type | DFS handler |
+|---|---|
+| `frontmatter` | `applyAction(state, book, 'skip_frontmatter', [])` then continue |
+| `character_creation_*` | Handled by `runChargen` before `explore` — see chargen section below |
+| `section` | Iterate `state.pendingChoices`; for each `c` whose `evalCondition(c.condition, state, book)` is true, snapshot, `applyAction(state, book, 'choose_section', [String(i)])`, recurse, restore |
+| `stat_test` | Force success and failure branches separately (see stat_test section below) |
+| `roll_dice` | Fan out one sample per defined result range (see roll_dice section below) |
+| `combat` | Try three modes — win, lose, stall — plus flee if available (see combat section below) |
+| `eat_meal` | If provisions/meals > 0 try `eat`; if `event.required` is false also try `skip`; otherwise log and bail |
+| `input_number` | Collect candidate destinations from the section's static `choices[*].target` list; submit each via `applyAction(state, book, 'submit_number', [n])` |
+| `input_text` | Submit a placeholder string (the engine usually treats input_text as a generic continue surface) |
+| `choose_items` | Fan out every C(from, count) combination (see choose_items section below) |
+| `error` | Record the message and bail; this is a runtime error in the book |
+
+**Bounds.** Hard caps the AI sets to prevent runaway exploration: `MAX_STEPS = 200_000` (total `applyAction` calls); `MAX_DEPTH = 300` (recursion depth); `COMBAT_ROUND_CAP = 200` (single-combat rounds before abort). These are upper bounds — well-shaped books converge in 1-5K steps total.
+
+**Visited-tracking.** Every call to `explore` records `state.currentSection` to a Set of visited section ids. ALSO record every id in `state.visitedSections` (the engine's per-navigation history) — that captures transient sections the player passed through via auto-navigating script events that never become a "resting" pause section. Mark visit BEFORE any early-return guards (depth, step budget) so destinations reached at the boundary still count.
+
+**Edge memoization.** A global `Set<string>` keyed by `"<section>|<choice-index>"` (or `"<section>|<edge-tag>"` for non-choice edges like `combat_win` / `stat_test_succ`). Skip an edge if its key is in the set. For sections that carry at least one *conditional* choice, key edges by an additional inventory+flags signature so the same edge may fire again with different state-sigs: `"<section>|<choice-index>|inv:<items.sorted>|flg:<flags.sorted>"`. This lets the same choice be re-explored when a later DFS branch arrives at the section with different state. Skipping the state-sig for purely-unconditional sections bounds the exploration space.
+
+##### Chargen handlers (`runChargen`)
+
+Loop while `state.pause.type` starts with `character_creation_`. Each pause type and the action to apply:
+
+- `character_creation_roll` / `_roll_resource` / `_roll_table`: read the step's `formula` from `book.character_creation.steps[state.pause.step_index]`. Parse `NdX` (or `R10`). Provide forced rolls at the max face (`face` for NdX; `9` for R10) — max-favoured rolls give the player the best opening stats, which helps downstream combats and stat_tests resolve cleanly. Action: `applyAction(state, book, 'provide_roll', Array(dice).fill(String(maxFace)))`.
+- `character_creation_choose_one`: pick the first option. `applyAction(state, book, 'choose', ['0'])`.
+- `character_creation_choose_abilities`: rank `state.pause.available` by the number of `has_ability` conditions in the book that reference each ability (walk `book.sections` recursively, count occurrences of `{type: 'has_ability', ability: <name>}`). Pick the top-`count` most-referenced. The deterministic first-N pick happens to leave heavily-referenced abilities unpicked when they appear late in `available[]`, which leaks coverage on books with many ability-gated branches.
+- `character_creation_choose_talents`: same shape as choose_abilities but rank by `has_talent` references.
+- `character_creation_distribute`: for each declared stat, allocate its minimum value; let the remaining points fall on the last stat. (Single-pass — distribute-point fan-outs are rarely needed for coverage.)
+
+##### Combat handler
+
+For each `combat` pause, fan out THREE modes (`win`, `lose`, `stall`) plus `flee` if `state.combat.fleeTo` is set. Each mode is its own memoized edge (`<section>|combat_win`, etc.).
+
+For each mode, the driver:
+
+1. Snapshot.
+2. If `book.rules.attack_stat` is set: write `state.stats[attack_stat] = 99` for `win`, `= 0` for `lose`. Leave alone for `stall`. The boost forces FF-style `2d6+SKILL` and LW-style ratio-table combat into predictable outcomes regardless of the book's combat-math shape.
+3. Loop: while `state.pause.type === 'combat'` and a per-combat round cap (`COMBAT_ROUND_CAP = 200`) hasn't fired:
+   - If `state.combat.awaitingPostRound` is true, call `applyAction(state, book, 'skip_post_round', [])`.
+   - Otherwise call `applyAction(state, book, 'attack', forcedRolls)` where `forcedRolls` depends on mode:
+     - `win`: `['6,6','1,1','6,6','1,1']` — player rolls high, enemy rolls low (FF: player attack strength beats enemy; LW: with player attack-stat = 99 the ratio is overwhelming regardless of roll)
+     - `lose`: `['1,1','6,6','1,1','6,6']` — inverse
+     - `stall`: `['4,4','4,4','4,4','4,4']` — medium rolls; aims for ties / low-damage rounds so the fight runs many rounds without resolving via win or loss (necessary for `combat_round_count_gte` gates and `interrupt_after_rounds` to surface)
+   - Each comma-separated arg is one full `roll()` call. The engine's round_script typically calls `roll('2d6')` twice (FF) or `roll('R10')` once (LW); extras are ignored. The four-arg set covers both shapes plus post-round-script rolls.
+4. After the loop, if `state.pause.type !== 'combat'`, recurse into the resulting state via `explore(state, depth+1)`. If still combat (abort), record a "combat did not resolve" error.
+5. Restore from snapshot before the next mode.
+6. After all three modes (plus flee), proceed.
+
+##### Stat_test handler
+
+Force both branches independently. For each branch, snapshot, clamp the test stat to the extreme value, provide forced rolls, restore.
+
+- `stat_test_succ`: write `state.stats[event.stat] = 99` (or whatever the local "high" is for this book's stat range). Forced rolls `['1','1']` (total 2). Any stat-comparison test method (`2d6_under`, `2d6_lte`, `test_your_luck`, etc.) will succeed.
+- `stat_test_fail`: write `state.stats[event.stat] = 0`. Forced rolls `['6','6']` (total 12). Any test method will fail.
+
+`applyAction(state, book, 'provide_roll', rolls)` then `explore` then restore.
+
+##### Roll_dice handler
+
+Sample one roll per defined result range. For each key in `event.results` (e.g. `"7-9"`, `"0-4"`, single values like `"5"`):
+
+- If the key is a single value, sample that value.
+- If the key is a range `"a-b"`, sample `a` (the low end — any value in the range targets the same destination by design).
+
+For each sample, convert to forced rolls via dice-notation handling:
+
+- `R10`: single roll, value 0-9. Forced roll string is `String(sample)`.
+- `NdX`: distribute `sample` across `N` dice, clamped to `[1, X]` (or `[0, X-1]` for R10-like notations). For most cases the trivial allocation (one die gets sample, others get min) works; for cases requiring sums, use `Math.round(sample / N)` per die with rounding adjustment.
+
+Apply: `applyAction(state, book, 'provide_roll', forcedRollsArgs)`. Each combo is its own memoized edge keyed on the sample value.
+
+##### Choose_items handler
+
+Fan out every C(from, count) combination. For `event.from = ['A','B','C']`, `event.count = 1`: try `['A']`, `['B']`, `['C']` (3 combinations). For `count = 2`: try `['A','B']`, `['A','C']`, `['B','C']` (3 combinations). Each combination is its own memoized edge keyed on the sorted item-id list.
+
+For each combination, `applyAction(state, book, 'select_items', combination)` then `explore` then restore.
+
+##### Fix-point replay
+
+Some choices' conditions can ONLY be satisfied by state the DFS's main pass doesn't visit while at the gating section. (Example: §279's `has_item: wooden_stake` choice only opens after the player has visited §273 to pick up the stake — but the DFS may reach §279 first via a different path, find the gate failed, and never re-visit §279 with the stake in inventory.)
+
+The fix-point replay closes this. During the main pass:
+
+1. **Save snapshots.** At every `section`-pause visit, store a deep copy of `state` keyed by `<section>|<state-sig>` (deduped to keep the pool diverse). Cap the snapshot pool size at a few thousand for memory bounds.
+2. **Track blocked conditions.** When a section's choice's condition evaluates to false, store `(source-section, choice-index, condition)` in a global map. Each blocked-edge entry holds the condition object verbatim (used for re-evaluation against future snapshots).
+
+After the main pass, run up to ~6 replay iterations. Each iteration:
+
+For every blocked-edge entry:
+1. Walk the saved-snapshot pool, find one whose state satisfies the condition (`evalCondition(condition, snapshot, book) === true`).
+2. If found, teleport the snapshot's state to the source-section: `applyAction(snapshot, book, 'manual_set', ['currentSection', sourceSection])`, then call `navigateTo(snapshot.state, book, sourceSection)` to re-fire the section's on-entry events. (The teleport's `manual_set` records a TIER 3 PARTIAL marker in the engine's run log — that's expected for the replay; the marker indicates the snapshot path was a constructed reproduction of a legitimate state, not a fresh in-game traversal.)
+3. If the section's pause is now `section` and the gated choice is unblocked, force it: `applyAction(state, book, 'choose_section', [String(choiceIdx)])`.
+4. If the section's pause is something else (combat, stat_test, roll_dice, eat_meal, choose_items), resolve it manually using a "go forward by any path" mini-driver — same forced-rolls and select-first-item approach as the main driver, but bypassing edge memoization since the goal is to expose the downstream choice.
+5. Recurse into the resulting state via `explore`.
+
+The replay loop terminates when an iteration produces no new visited sections.
+
+**Cardinal constraint on the teleport.** The snapshot used MUST be a state the DFS legitimately reached during its main pass. Items, flags, gold, and equipment in the snapshot are all legitimately acquired by some real DFS branch — the teleport only fudges the navigation between two halves the DFS couldn't directly connect, not the state itself. This is the same constraint that governs dice-roll forcing throughout the driver: fudge HOW the player got somewhere, never WHAT they have when they arrived.
+
+##### What's reproducible from this spec alone
+
+A competent AI reading §12.14 + §12.14.1 should produce a driver that:
+
+- Handles every pause type the engine emits (the dispatch table is exhaustive against the engine's `getAvailableActions` switch in `cli-emulator/play.js`).
+- Reaches 95%+ of book sections on first run for any well-shaped fresh parse.
+- Surfaces the remaining 5% as concrete remediation findings (specific blocked gates, specific unreachable sections, with the source-section + condition the AI can name in plain English to the user).
+- Adapts the dice-notation and combat-math handling to the book at hand (FF 2d6+stat, LW R10 + ratio-table, AD&D dN, or anything else expressible in `formula` strings).
+
+If a book introduces a wholly new combat shape the spec doesn't anticipate (e.g. a card-draw mechanic, a dice-pool system), the AI extends the driver in-chat — same way it would extend the §12 remediation findings to a new book-specific shape. The driver is workflow tooling, not engine API: its job is to evolve with the codex's understanding of play-testing.
 
 ### 12.15 When the gate hits a genuine engine limitation — the resume-after-engine-update flow
 
