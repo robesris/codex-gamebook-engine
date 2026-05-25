@@ -5928,6 +5928,24 @@ The replay loop terminates when an iteration produces no new visited sections.
 
 **Cardinal constraint on the teleport.** The snapshot used MUST be a state the DFS legitimately reached during its main pass. Items, flags, gold, and equipment in the snapshot are all legitimately acquired by some real DFS branch — the teleport only fudges the navigation between two halves the DFS couldn't directly connect, not the state itself. This is the same constraint that governs dice-roll forcing throughout the driver: fudge HOW the player got somewhere, never WHAT they have when they arrived.
 
+##### Multi-chargen-variant pass
+
+Some chargen choices are mutually exclusive in ways the main-pass DFS can't resolve. The canonical case is **ability picks**: when a book lets the player pick `count` abilities from a list of size `available.length > count`, AND the book has more than `count` distinct `has_ability`-gated sections referencing different abilities, NO single chargen variant can satisfy every gate. The ranked-by-references pick picks the most-leveraged set, but any ability that didn't make the cut leaves its gates blocked, and the fix-point replay can't help because its saved-snapshot pool was generated from one chargen variant — every snapshot has the same `state.abilities`.
+
+The reproducible fix: after the main DFS pass + fix-point replay converge, the AI:
+
+1. **Identifies remaining ability gaps.** For every unreached section, check its `inbound` references. If the section is reached only via choices conditioned on `has_ability: X` (or composite conditions naming X) and X is NOT in `state.abilities` from the main pass, X is a candidate ability.
+
+2. **Designs a variant chargen set.** Take the union of candidate abilities (the ones the main pass missed). If `|candidates| + |fillers| ≤ count`, the variant picks all candidates plus enough fillers (drawn from the main pass's top-ranked picks) to reach `count`. If `|candidates| > count`, partition candidates across multiple variants — each variant covers some subset, and the variants together cover the full union.
+
+3. **Runs a fresh DFS** for each variant. Each run starts from `initialState` with the variant's chargen picks instead of the main pass's. Each run saves its own snapshots into the shared replay pool. The visited-sections set accumulates across runs.
+
+4. **Re-runs the fix-point replay** with the now-expanded snapshot pool. Snapshots from variant 2 carry variant 2's abilities into the teleport — gates that variant 2 can satisfy now fire, unlocking transitively-blocked sections.
+
+For LW1 specifically (10 abilities, pick 5, 6 distinct gating abilities): the main pass picks the top 5 by reference count, leaving the 6th unpicked. One additional variant that includes the unpicked one (swap a low-priority filler) covers the remaining gates. For books with `|gating abilities| ≤ count`, the main pass alone suffices and no extra variants are needed.
+
+**The same pattern generalizes** to other mutually-exclusive chargen choices when they exist: a `choose_one` chargen step with N options whose downstream gates reference each option separately needs N variant runs. A `distribute_points` step with multiple stat-gated sections may need variants that allocate points to different stats. The driver detects the pattern (unreached sections gated on a chargen-determined state value the main pass didn't cover) and constructs additional variants accordingly. The bound is the number of distinct chargen-determined gates, NOT the combinatorial explosion of all possible chargen choices — most chargen choices don't affect downstream reachability and the driver doesn't need to enumerate them.
+
 ##### What's reproducible from this spec alone
 
 A competent AI reading §12.14 + §12.14.1 should produce a driver that:
