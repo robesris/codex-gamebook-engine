@@ -34,7 +34,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const NAV_KEYS = new Set(['target', 'win_to', 'flee_to', 'lose_to', 'end_to', 'goto', 'navigate_to', 'to_section', 'return_to']);
+const NAV_KEYS = new Set(['target', 'win_to', 'flee_to', 'lose_to', 'end_to', 'goto', 'navigate_to', 'to_section', 'return_to', 'fallback']);
 
 function loadBook(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }

@@ -1,13 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.30.0",
+  "title": "Gamebook Format (GBF) v1.31.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
   "additionalProperties": false,
   "properties": {
 
+    "schema_version": {
+      "type": "string",
+      "description": "Schema v1.31+ (Rule 47). Optional GBF schema version this book targets, in semver form (e.g. '1.31.0'). Lets the engine validate that the book was authored against a compatible schema. When absent, the engine treats the book as schema-pre-v1.31 — backwards-compatible behaviour. When present, the engine MAY refuse to load books whose schema_version is newer than what the engine supports. Authoritative form is the engine repo's `codex.schema.json` title field; book authors should set this to the engine's current schema version at parse time, and bump it on any schema-additive remediation pass."
+    },
     "metadata": {
       "type": "object",
       "description": "Bibliographic information and parsing confidence report.",
@@ -757,6 +761,7 @@
             "choose_items",
             "script",
             "return_to_caller",
+            "route_by_flag",
             "custom"
           ]
         },
@@ -909,6 +914,24 @@
         "post_combat": { "type": "boolean", "description": "roll_dice: if true, this roll occurs after a combat in the same section." },
 
         "prompt": { "type": "string", "description": "input_number, input_text, return_to_caller: prompt text shown to the player. For return_to_caller this text is displayed by 'purist' emulators asking the player to type the reference they noted, and by 'reference' emulators as a graceful-degradation surface when the return stack is empty (e.g. the player arrived via a debug jump with no caller recorded). Always write a real, readable prompt — never a placeholder." },
+        "routes": {
+          "type": "array",
+          "description": "route_by_flag: Schema v1.31+ (Rule 47). Ordered list of flag-keyed navigation entries. When the event fires, the emulator walks the routes in order, picks the FIRST entry whose `flag` is set on `state.flags` (or whose `not_flag` is NOT set), and navigates to that entry's `target`. The remaining entries are ignored. If no entry matches and `fallback` is set, the emulator navigates to `fallback`; otherwise it logs a no-match warning and falls through to the section's choices (or the next event in the queue, mirroring how `roll_dice` with no matching range and no `target` behaves). Canonical use is the wandering-monster subroutine pattern (codex Rule 7.6.8): the caller section sets a `next_after_<caller>` flag and navigates to the subroutine-entry section; the subroutine's exit section (typically named `<entry>_return`) carries a `route_by_flag` event with one route per known caller-flag, so the player is returned to the correct downstream section after the subroutine completes. Replaces the `return_to_caller` + caller-side `set_flag` workaround pattern for books where the caller's intended return-target is DIFFERENT from the section the player came from (the standard return_to_caller pops the returnStack, which equals the source section — wrong when the source set a flag indicating a different downstream destination).",
+          "items": {
+            "type": "object",
+            "required": ["target"],
+            "properties": {
+              "flag": { "type": "string", "description": "If set, this entry matches when `state.flags` contains this flag. Mutually exclusive with `not_flag`." },
+              "not_flag": { "type": "string", "description": "If set, this entry matches when `state.flags` does NOT contain this flag. Mutually exclusive with `flag`. Use for fallback-after-other-flags-matched semantics where you want a default arm without an unconditional `fallback`." },
+              "target": { "type": ["integer", "string"], "description": "Section id to navigate to when this route's flag check matches. Integer or string sub-section id." },
+              "clear_flag_on_match": { "type": "boolean", "description": "Optional. When true, the matched route's `flag` is removed from `state.flags` AFTER navigation (so a single use of a one-shot caller flag doesn't cause every subsequent subroutine call to also match). Default false (preserve flag). Set true for transient route-flags (the common case for wandering-monster callers); set false for sticky completion flags that downstream sections also gate on." }
+            }
+          }
+        },
+        "fallback": {
+          "type": ["integer", "string", "null"],
+          "description": "route_by_flag: Schema v1.31+ (Rule 47). Optional default target when no `routes` entry matches. Null or absent means 'fall through to the section's choices', mirroring `roll_dice.results` with no-match-and-no-target semantics. Use a real section id when the subroutine has a sensible default return (e.g. the original calling-stack pop fallback for return_to_caller-compatible emulation)."
+        },
         "target": {
           "description": "input_number: 'computed' means navigate to the entered number. The static reachability tool has partial heuristic coverage for this shape (it enumerates plausible sums when `from_inventory_category` is set to a known category like 'keys') but does not generally trace computed-target navigation. When a computed-target destination is genuinely reachable in play but reads as STRANDED, see the `section.choices` description for the mirror-choice workaround — typically a single fallback choice per plausible destination, marked with a `text` prefix like `\"(reachability: key-sum 321)\"`.",
           "type": "string",

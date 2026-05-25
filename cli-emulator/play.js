@@ -1597,6 +1597,36 @@ function handleEvent(event, state, book) {
     }
     case 'script':
       return runScriptEvent(event, state, book);
+    case 'route_by_flag': {
+      // Schema v1.31+ (Rule 47) — flag-driven static-routing event.
+      // Walk routes in order, take the first whose flag predicate
+      // matches state.flags, navigate to that route's target. If no
+      // route matches and event.fallback is set, navigate there
+      // instead. If neither matches, fall through to the next event
+      // in the queue (mirrors roll_dice no-match-no-target).
+      const flags = state.flags || [];
+      const routes = Array.isArray(event.routes) ? event.routes : [];
+      for (const route of routes) {
+        const flagMatch = route.flag && flags.includes(route.flag);
+        const notFlagMatch = route.not_flag && !flags.includes(route.not_flag);
+        if (flagMatch || notFlagMatch) {
+          state.log.push(`route_by_flag: ${route.flag ? 'flag=' + route.flag : 'not_flag=' + route.not_flag} matched → ${route.target}`);
+          if (route.clear_flag_on_match && route.flag) {
+            const idx = state.flags.indexOf(route.flag);
+            if (idx >= 0) state.flags.splice(idx, 1);
+          }
+          navigateTo(state, book, route.target);
+          return 'navigate';
+        }
+      }
+      if (event.fallback !== undefined && event.fallback !== null) {
+        state.log.push(`route_by_flag: no route matched → fallback ${event.fallback}`);
+        navigateTo(state, book, event.fallback);
+        return 'navigate';
+      }
+      state.log.push(`route_by_flag: no route matched and no fallback — falling through`);
+      return 'continue';
+    }
     case 'return_to_caller': {
       // Codex 7.6.8 return_to_caller handling (reference / auto-return
       // implementation). If the returnStack has a caller on top, pop it

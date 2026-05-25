@@ -6,6 +6,26 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.43.0 / GBF v1.31.0 / CLI emulator v3.25.0 / HTML emulator v3.22.0
+
+**Rule 47 — Flag-routed subroutine return (`route_by_flag` event), §12.14 play-execution gate, §12.15 resume-after-engine-update flow, top-level `schema_version` field, README quick-start.** A combined ship surfaced by the chat-40 Warlock fresh-parse remediation pass.
+
+- **`route_by_flag` event type** (schema-additive). Replaces the `set_flag` + `return_to_caller` workaround for the canonical wandering-monster subroutine pattern (FF Warlock §161 + callers §14 / §234 / §295 / §12 — each caller's intended return target is DIFFERENT from the source section, so `return_to_caller` (stack-pop) lands the player in the wrong place). The event's `routes[]` carries one `{flag, target, clear_flag_on_match?}` entry per caller; the engine walks them in order, navigates to the first match, optionally clears the matched transient flag. Optional `fallback` for a default target. Unlocks §43 (wandering monster from §234) and §117 (post-§14 wandering monster) — previously unreachable in play despite parsing cleanly.
+
+- **`scripts/check-reachability.js` extended** to follow `fallback` and each `routes[].target` as live navigation edges (the recursive `harvest` already walks objects so `target` is picked up; `fallback` added to `NAV_KEYS`).
+
+- **`schema_version` top-level field** (additive). Optional semver string identifying the GBF schema version a book targets. Lets the engine validate compatibility and enables the §12.15 resume protocol to diff the book's version against the current engine.
+
+- **Codex doc §12.14 — the play-execution gate.** Formalizes the DFS playthrough as the FINAL required step of the §12 remediation workflow. Static checks (schema validator, reachability tool, script-crash check) all pass on books that are completely unplayable; the chat-40 Warlock pass surfaced 7 distinct play-blocking bugs (D1-D7: chargen field-name casing, missing combat round_script, 9 unmaterialized synthetic sub-sections, stat name casing across 4 sites, `choose_items` shape variants) that ALL THREE static checks missed and that the DFS gate immediately surfaced. Reference implementation: `claude_session/dfs_playthrough.js` in the books repo (chargen with deterministic max rolls; `choose_items` full fan-out; both `stat_test` branches forced via temporary stat-clamping; `combat` win/lose/flee modes; fix-point replay that teleports saved snapshots to the source section of blocked conditional choices and force-takes the gated edge — never manufacturing state, only seeding from legitimately-acquired snapshots).
+
+- **Codex doc §12.15 — resume-after-engine-update flow.** Documents the user-facing protocol for when the gate hits a genuine engine limit: name the limit in plain English, show what's reachable, offer ship-as-is vs file-feature-request vs both, provide a copyable issue template. The companion resume protocol: when the user returns with the updated engine, the agent diffs the book's `schema_version` against the engine's current version, decides re-parse-fresh vs continue-with-existing-JSON, migrates blocking workarounds to canonical shapes, re-runs §12 + §12.14, bumps `schema_version` on completion.
+
+- **README Quick Start section.** A four-step minimal flow: upload four files from this repo (`gamebook_codex_v2.md`, `codex.schema.json`, `cli-emulator/play.js`, `cli-emulator/script-runtime.js`) plus the user's gamebook source, paste a single-paragraph opener, answer plain-English questions, download the JSON. The codex doc drives everything else — the user doesn't learn the schema or the engine internals.
+
+5 new tests covering route_by_flag (matched-flag navigation, fallback, clear_flag_on_match, event-type enum declaration, schema_version field declaration).
+
+Chat-40 Warlock fresh-parse final coverage with this ship landed: 413/415 (99.5%). The 2 unreached are §192 (vestigial source artefact — `"Turn to 169."` relay with no inbound; no fix possible) and §224 (FF Vampire 11/12-on-Unlucky special-flee sub-branch — a 3-way branch on flee attempt based on Test-Your-Luck outcome + specific roll value; a future engine extension would add a `flee_gate` primitive).
+
 ## v2.42.0 / GBF v1.30.0 / CLI emulator v3.24.0 / HTML emulator v3.22.0
 
 **Rule 46 — Pausable / Resumable Combat as Active State.** Adds first-class support for the source-text shape where a combat can be paused mid-fight by an Nth-wound interrupt and resumed at a later section with the enemy's STAMINA, frozen modifiers, and round + wound counters preserved. Surfaced by the FF Warlock chat-40 fresh parse against codex v2.41.0 — §173's Wight pauses to §24 after the player's third wound and §24's continue path resumes the SAME fight at the SAME enemy's remaining STAMINA, with a new "every third wound costs 1 SKILL" modifier introduced by the interlude. The pre-Rule-46 engine had no way to model this; the only workaround was a narrative-only "if you were wounded a third time" choice on §173 that asked the player to honest-self-count. FF Warlock §41's first-wound exit (Wight reveals immunity after the first wound dealt; player navigates to §310 to learn they need a silver weapon) is the companion case, addressed by the same machinery in the enemy-wounds direction.

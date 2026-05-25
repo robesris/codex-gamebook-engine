@@ -4,6 +4,26 @@ A universal web-based engine that plays gamebooks (Fighting Fantasy, Choose Your
 
 **Play now:** [robesris.github.io/codex-gamebook-engine](https://robesris.github.io/codex-gamebook-engine/)
 
+## Quick Start (minimal prompt + uploads)
+
+Want to parse a gamebook into a playable JSON? Open a new AI chat that supports file uploads, then:
+
+1. **Upload these four files from this repo** alongside **your gamebook source** (PDF or text — bring your own; no copyrighted content ships here):
+   - `gamebook_codex_v2.md` — the parser's playbook
+   - `codex.schema.json` — the JSON shape the engine expects
+   - `cli-emulator/play.js` — the engine (the AI uses this to play-test the parse)
+   - `cli-emulator/script-runtime.js` — the Lua sandbox the engine uses to execute script events
+
+2. **Paste this opener** (or something close):
+
+   > I want to parse the attached gamebook into the JSON format this engine consumes. Follow the codex doc end-to-end: do the fresh parse, run the §12 two-pass remediation workflow with me as the human-in-the-loop, then run the §12.14 play-execution gate until coverage is at or near 100%. Ask me questions in plain English. Tell me when the book is ready to download.
+
+3. **Answer questions in plain English** as the AI walks you through the workflow. The codex handles the heavy lifting — vocabulary translation, question framing, progress tracking, the DFS play-test, the remediation→DFS loop. You don't need to learn the schema or the engine internals.
+
+4. **Download the resulting JSON** when the AI says it's ready, then load it at the play link above.
+
+**If the AI hits a genuine engine limitation** (something the current engine can't model — rare, but possible), it will tell you which limitation, point you to the engine's [issue tracker](https://github.com/robesris/codex-gamebook-engine/issues), and stop. Submit a feature request. When the engine ships an update, come back to the AI chat with the new versions of the four uploaded files (and the updated `gamebook_codex_v2.md`) and tell it to resume — it can either re-parse fresh from source or continue with the partially-completed JSON via another remediation→DFS loop. See the codex doc's **§12.15 Resuming after an engine update** section for the exact resume protocol the AI will walk you through.
+
 ## How It Works
 
 1. **Create a game data file** from a gamebook you own (see below)

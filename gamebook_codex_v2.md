@@ -4818,6 +4818,59 @@ The first event decrements the meal/provisions counter (or fires the named-consu
 
 ---
 
+### Rule 47: Flag-routed subroutine return (`route_by_flag` event)
+
+**One-line summary.** A subroutine's exit section can dispatch back to one of several caller destinations by reading flags the callers set before navigating in — replacing the `return_to_caller` workaround for books where the intended return target is NOT the source section.
+
+**The source-text shape this addresses.** The wandering-monster pattern from FF Warlock (§161 + callers §14 / §234 / §295 / §12) and its analogues across other gamebook series: a single subroutine entry (the table that rolls the random monster) is called from many sites, each with a DIFFERENT post-encounter destination encoded in the source narrative ("turn to 43 after defeating the monster" vs "return to 14" etc.). The standard `return_to_caller` semantics — pop the returnStack — would put the player back at the source section, but the source says they should land elsewhere downstream.
+
+Pre-Rule 47 the workaround was to combine `set_flag` on each caller with a chain of conditional choices on the subroutine's exit section. Schema-clean but verbose and not actually executed by the engine (the gating choices never render because `return_to_caller` consumes the pause first), so the subroutine's downstream subgraph stayed unreachable in play even though it parsed cleanly.
+
+**Schema additions (v1.31+).**
+
+New event type on `definitions/event` enum:
+
+- `route_by_flag` — non-pausing dispatch event.
+
+New fields on the event shape (shared with other events; engine reads them only when `type === 'route_by_flag'`):
+
+- `routes` — array of `{flag | not_flag, target, clear_flag_on_match?}` entries. The engine walks them in order, picks the FIRST whose flag predicate matches, navigates to that entry's `target`. Optionally clears the flag after navigation (set `clear_flag_on_match: true` for transient route-flags — the common case for wandering-monster callers).
+- `fallback` — optional default target when no route matches. Null/absent = fall through to the section's choices.
+
+**Canonical encoding.** §161_return:
+
+```json
+{
+  "type": "route_by_flag",
+  "routes": [
+    {"flag": "return_from_161_to_14", "target": 14, "clear_flag_on_match": true},
+    {"flag": "next_after_wandering_43", "target": 43, "clear_flag_on_match": true},
+    ...
+  ],
+  "fallback": null
+}
+```
+
+Each caller sets its own flag before navigating to §161:
+
+```json
+// §234 events
+[{ "type": "set_flag", "flag": "next_after_wandering_43" }]
+// §234 choices: [{ "target": 161 }]
+```
+
+**Reachability tool support.** `scripts/check-reachability.js` (NAV_KEYS extended to include `fallback`) follows each route's `target` and the event's `fallback` as live navigation edges. No more reachability mirror choices needed for the wandering-monster pattern.
+
+**Engine behavior.** `cli-emulator/play.js` handles `route_by_flag` by reading `state.flags`, walking routes in order, calling `navigateTo(route.target)` on the first match (and optionally splicing out the matched flag from `state.flags` if `clear_flag_on_match` is true). No-match-and-no-fallback falls through to the section's next event or choices (mirrors `roll_dice` with no matching range and no `target`).
+
+**When to use.** Whenever a section is reached from multiple callers AND the downstream-from-here destination depends on which caller routed in. The classic case is wandering-monster subroutines; the same shape applies to any "shared content followed by per-caller continuation" pattern (return after item-shop, return after rest, return after side-encounter).
+
+**When NOT to use.** When the player's intended destination after the subroutine IS the source section (the standard "pop the stack" case) — `return_to_caller` with `is_subroutine_entry: true` on the entry section is simpler. Mix both freely: a subroutine can have a `return_to_caller` event AND a `route_by_flag` event in sequence; the first to fire wins.
+
+**Verification statement.** First parse using Rule 47: chat-40 Warlock fresh-parse remediation pass. Unlocked §43 (wandering monster from §234), §117 (post-§14 wandering monster choice) — both previously unreachable despite valid encoding via the pre-Rule-47 `set_flag` + `return_to_caller` workaround.
+
+---
+
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
 
 ### 8.1 Computed Navigation
@@ -5710,6 +5763,61 @@ The reference implementation is `claude_session/dfs_playthrough.js` in the books
 - **D7**: `choose_items` shape mismatches (parser used `options` instead of `from`, or nested `parameters: {items, count}` instead of flat fields). Engine no-ops the event; player skips item acquisition entirely.
 
 Each is a JSON-structural bug that would obviously break first-attempted play, that ALL THREE static checks pass cleanly on, and that the play-execution gate immediately surfaces. None should have been declared "remediation complete" without the gate catching them.
+
+### 12.15 When the gate hits a genuine engine limitation — the resume-after-engine-update flow
+
+Some unreachable sections cannot be fixed at the book level — the source describes a mechanic the current engine has no shape for (e.g. a stat-tested flee with a special-roll sub-branch; a category-absence condition; a per-fight wager primitive). The §12.14 DFS gate will surface these and the remediation agent has no in-book fix to offer. The right outcome is NOT to declare the pass "good enough" and ship a partially-playable book — it's to PAUSE the pass, file a feature request against the engine, and resume once the engine ships the missing shape.
+
+**The agent's user-facing protocol when the gate hits an engine limit:**
+
+1. **Name the limit in plain English.** *"The source says the player can test their luck to flee, and on an Unlucky 11 or 12 specifically routes to §224. The current engine has flee gating (round-count) and Test-your-Luck (as its own event), but no shape that combines them with a special-roll-value sub-branch. This is a real engine gap — not a parse problem."*
+
+2. **Show what's reachable and what isn't.** *"Coverage right now: 412/415 sections playable. The 3 unreached are §192 (vestigial — no inbound; source artefact), §224 (the Vampire flee mechanic above — engine limit), and §284 (related downstream)."*
+
+3. **Offer the user three honest options:**
+   - **a) Ship the book at the current coverage**, documenting the unreachable sections in `parser_notes` or a companion file. The book plays correctly except for the gated edges.
+   - **b) Submit a feature request to the engine** (linking the issue tracker) and stop the pass here. The user comes back when the engine ships.
+   - **c) Both** — ship now AND file the issue. Re-run remediation on the updated engine later.
+
+4. **If the user picks (b) or (c), surface the issue template** (copyable into the engine's issue tracker):
+   ```
+   Title: <one-line summary of the missing shape, e.g. "Flee gated on stat_test with special-roll-value sub-branch">
+
+   Source-text shape this addresses:
+     <quote the source paragraph; cite section number and book>
+
+   Current encoding workaround (if any):
+     <what the parse currently does — e.g. "encoded as flee_available_after_round + reachability mirror choice;
+     the special-roll sub-branch has no machinery">
+
+   Why it's a real gap, not a parse miss:
+     <why no combination of existing primitives produces correct play>
+
+   Suggested shape (if you have one):
+     <e.g. "flee_gate: { type: stat_test, ..., on_special_roll: { value: 11..12, target: <sec> } }">
+
+   Affected books: <list any books that need this; pattern frequency cue>
+   ```
+
+**The resume protocol — when the user returns with an updated engine.** The user opens a fresh AI chat with the new versions of the four upload files (the codex doc, the schema, `cli-emulator/play.js`, `cli-emulator/script-runtime.js`) and their previous partially-completed book JSON. They paste an opener like:
+
+> Resuming a previously-blocked remediation. I have the updated engine files plus my in-progress book JSON from a prior pass. Detect the schema version mismatch (if any) and tell me whether we should re-parse fresh from the source text or continue remediation on the existing JSON. The engine update should have closed [list of follow-ups from the prior pass].
+
+**The agent's resume steps:**
+
+1. **Schema-version diff.** Read `schema_version` from the user's book JSON; read the new schema's title-version. If the book's version is older, identify any newly-required schema fields the book lacks, any deprecated shapes the book still uses, and any newly-available primitives the prior workarounds should migrate to. Surface this as a plain-English summary.
+
+2. **Decide the resume mode** with the user:
+   - **Re-parse fresh from source.** Cleanest. Use this when the schema change is invasive (renamed required fields, restructured top-level shape, new metadata requirements). Run §9 processing strategy against the source text from scratch.
+   - **Continue with existing JSON via another remediation→DFS loop.** Faster. Use this when the schema change is additive (new optional primitives, new event types, new condition predicates). Migrate the previously-blocking workaround shapes to the new canonical shape, bump `schema_version` to the engine's current version, then re-run §12 remediation followed by the §12.14 DFS gate. The loop should converge in 1-2 iterations.
+
+3. **`schema_version` bookkeeping.** ALWAYS bump the book's `schema_version` field to the engine's current title-version at the end of the resume pass, even in continue mode. The next time the user returns, the diff against the THEN-current schema is meaningful.
+
+4. **Verify the previously-blocked sections are now reachable.** The follow-up issue described which sections / mechanics were blocked. After the migration, the DFS gate should hit each of them. If any remain unreachable, the engine update didn't actually close the gap — surface that as a regression for the user to escalate.
+
+5. **Re-declare the pass complete** with the new coverage number, and tell the user the book is ready to download.
+
+The resume flow turns a previously-frustrating "this book can't be parsed yet" outcome into a known-state pause: the book sits at its current best coverage, the user has a concrete feature request to file, and the next chat can pick up exactly where this one left off — no re-learning, no re-doing the questions the user already answered.
 
 ---
 
