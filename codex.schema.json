@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/codex-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.31.0",
+  "title": "Gamebook Format (GBF) v1.32.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -852,6 +852,15 @@
           "properties": {
             "count": { "type": "integer", "minimum": 1 },
             "target": { "type": ["integer", "string"], "description": "Section id to navigate to when the interrupt fires. Integer or string sub-section id." }
+          },
+          "required": ["count", "target"]
+        },
+        "interrupt_after_rounds": {
+          "type": "object",
+          "description": "combat: Schema v1.32+ (Rule 48). After `count` rounds of combat have completed, pause the combat (PRESERVING `state.activeCombat` via the same save mechanism as Rule 46's interrupt_after_player_wounds / _enemy_wounds) and navigate to `target` without firing `win_to` / `lose_to` / `flee_to`. A downstream combat event with `mode: 'resume'` will pick the same fight back up at the preserved enemy STAMINA, round counter, frozen modifiers, etc. Distinct from `end_after_rounds` (Rule 38), which CLEARS activeCombat on completion — `interrupt_after_rounds` is the 'pause for a player decision, maybe resume' shape; `end_after_rounds` is the 'the fight is broken off' shape. Use for source-text mechanics like FF Warlock §333's Vampire flee rule ('you may only attempt to escape after 6 full Attack Rounds, and only if you Test your Luck and are Lucky; otherwise fight 6 more rounds') — the §333 combat carries `interrupt_after_rounds: {count: 6, target: 333_decide}`, the §333_decide section presents continue/flee choices, the flee path runs a script that tests luck and either navigates to the flee destination (clean exit) or back to a `mode: 'resume'` combat (resume the fight). The same combat event may also carry interrupt_after_player_wounds / _enemy_wounds; when multiple thresholds fire on the same round, wound-interrupts take priority over round-interrupts.",
+          "properties": {
+            "count": { "type": "integer", "minimum": 1 },
+            "target": { "type": ["integer", "string"], "description": "Section id to navigate to when the round threshold is reached. Integer or string sub-section id." }
           },
           "required": ["count", "target"]
         },

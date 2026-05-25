@@ -2008,6 +2008,7 @@ function startCombat(event, state, book) {
     woundsTaken: 0,
     interruptAfterPlayerWounds: event.interrupt_after_player_wounds || null,
     interruptAfterEnemyWounds: event.interrupt_after_enemy_wounds || null,
+    interruptAfterRounds: event.interrupt_after_rounds || null,
     // Rule 46 lifecycle context — preserved on combat so checkCombatEnd
     // can know whether a 'mode: resume' continuation that subsequently
     // completes normally should still produce on_combat_end dispatches
@@ -3647,6 +3648,22 @@ function checkCombatEnd(state, book) {
     return pauseCombat(`interrupt_after_enemy_wounds (${combat.woundsDealt}/${iae.count})`, iae.target);
   }
 
+  // Schema v1.32+ / Rule 48: interrupt_after_rounds. Like end_after_rounds
+  // but PRESERVES state.activeCombat (via pauseCombat) so a downstream
+  // section with `mode: "resume"` can pick the fight back up at the same
+  // enemy STAMINA. Use this for the "pause for a decision, maybe resume"
+  // pattern (FF Warlock §333 Vampire flee mechanic, where after 6 rounds
+  // the player can Test their Luck to flee or continue).
+  //
+  // Distinct from end_after_rounds (Rule 38, "the fight is broken off"
+  // semantic — clears activeCombat). On a Rule 46 mode:resume the round
+  // counter resets to 0 in the new combat (existing engine behaviour),
+  // so this interrupt naturally re-arms for another `count` rounds in
+  // the resumed fight without any extra bookkeeping.
+  const iar = combat.interruptAfterRounds;
+  if (iar && typeof iar.count === 'number' && combat.round >= iar.count && iar.target !== undefined && iar.target !== null) {
+    return pauseCombat(`interrupt_after_rounds (${combat.round}/${iar.count})`, iar.target);
+  }
   // Schema v1.13+ / Rule 31: survive-N-rounds win condition. If the
   // combat carries win_after_rounds, the player wins once combat.round
   // reaches the threshold (i.e. that many rounds have completed with

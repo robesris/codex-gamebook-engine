@@ -4871,6 +4871,48 @@ Each caller sets its own flag before navigating to §161:
 
 ---
 
+### Rule 48: Round-cap combat interrupt with preserved active state (`interrupt_after_rounds`)
+
+**One-line summary.** Pause a combat after N rounds without ending it — `state.activeCombat` is preserved so a downstream `mode: "resume"` event can pick the same fight back up at the same enemy STAMINA and counters.
+
+**The source-text shape this addresses.** FF Warlock §333's Vampire flee mechanic: *"You may only attempt to Escape after 6 full Attack Rounds, and only if you Test your Luck and are Lucky; otherwise fight 6 more rounds. If you roll an 11 or 12 on the Luck test and are Unlucky, turn to 224."* The fight pauses every 6 rounds for a player decision (continue or attempt escape). On Lucky-flee the player exits; on Unlucky-non-special the SAME fight resumes for another 6 rounds. The Vampire's STAMINA from the prior pause is preserved across the resume so the player isn't fighting a fresh enemy every time.
+
+Distinct from Rule 38 `end_after_rounds` (which CLEARS activeCombat — "the fight is broken off" semantic). Distinct from Rule 46 `interrupt_after_player_wounds` / `interrupt_after_enemy_wounds` (which trigger on wound counts, not round counts). Rule 48 fills the round-count interrupt slot while keeping the activeCombat-preserve behaviour of Rule 46 interrupts.
+
+**Schema additions (v1.32+).**
+
+On the `combat` event type:
+
+- `interrupt_after_rounds: {count, target}` — after `count` rounds have completed, pause the combat (via the same `pauseCombat` machinery as Rule 46 interrupts) and navigate to `target`. The combat event may carry this alongside `interrupt_after_player_wounds` / `_enemy_wounds`; when multiple thresholds fire on the same round, wound-interrupts take priority (more specific source-text instruction).
+
+**Re-arming on resume.** When a downstream `mode: "resume"` combat continues the paused fight, the new combat's `combat.round` starts at 0 (existing engine behaviour per Rule 46 — round counter is not preserved across resumes; only enemy STAMINA + frozen modifiers are). So the Rule 48 interrupt naturally re-arms for another `count` rounds in the resumed fight. The Vampire mechanic uses this directly: every §333_decide → §333_resume → §333_decide cycle is another 6 rounds of fighting.
+
+**Canonical encoding.** §333:
+
+```json
+{
+  "type": "combat",
+  "enemy_ref": "vampire_s333",
+  "interrupt_after_rounds": {"count": 6, "target": "333_decide"},
+  "win_to": 327,
+  "flee_to": null
+}
+```
+
+§333_decide presents the player's two choices (continue / try to escape); §333_resume carries the same combat event with `mode: "resume"`; §333_flee_test runs a `stat_test` for Test-Your-Luck whose failure branch routes to §333_flee_unlucky (a `roll_dice 2d6` event whose per-result targets handle the "rolled 11 or 12 → §224 / else → §333_resume" sub-branch).
+
+**Engine behavior.** `cli-emulator/play.js` checks `combat.interruptAfterRounds` in `checkCombatEnd` after the wound-interrupt checks and before the `end_after_rounds` check. When `combat.round >= count`, calls `pauseCombat(target)` — same code path Rule 46 interrupts use. `state.activeCombat` carries `enemy_ref`, `enemy_snapshot`, `currentHealth`, frozen modifiers, and wound counters; on resume the combat event with `mode: "resume"` reads these.
+
+**Reachability tool support.** `scripts/check-reachability.js` follows `interrupt_after_rounds.target` via the existing recursive harvest (the field is a section id; the recursion walks all nested objects looking for NAV_KEYS). No additional NAV_KEYS entry needed because `target` is already a known navigation key.
+
+**When to use.** Whenever a combat needs to pause for player choice (or narrative) after N rounds AND the player may want to re-enter the same fight. The classic case is "fight for N rounds, then offer continue / try-to-flee / try-some-special-action" — the FF Warlock §333 pattern, but the shape recurs in any gamebook with "endurance contest with pause-points" mechanics.
+
+**When NOT to use.** When the round-count interrupt is the END of the fight (no resume possible — the player either wins, dies, or the encounter terminates) — use `end_after_rounds` (Rule 38) instead. When the source's pause-condition is wound-driven rather than round-driven, use Rule 46's `interrupt_after_player_wounds` / `interrupt_after_enemy_wounds`.
+
+**Verification statement.** First parse using Rule 48: chat-40 Warlock fresh-parse remediation pass. Unlocked §224 (the Vampire 11/12-on-Unlucky special-flee sub-branch) — the last remaining unreachable section before this rule shipped. Final coverage 418/418 (100%) on the Warlock fresh-parse output.
+
+---
+
 ## 8. HANDLING EXCEPTIONS AND EDGE CASES
 
 ### 8.1 Computed Navigation

@@ -6,6 +6,34 @@ For the current version identifiers, see `gamebook_codex_v2.md` → "Version ide
 
 ---
 
+## v2.44.0 / GBF v1.32.0 / CLI emulator v3.26.0 / HTML emulator v3.22.0
+
+**Rule 48 — Round-cap combat interrupt with preserved active state (`interrupt_after_rounds`).** Schema-additive ship that pushes the chat-40 Warlock fresh-parse coverage from 99.5% (413/415) to **100% (418/418)**.
+
+Schema additions (schema-additive — pre-v1.32 books validate unchanged):
+
+- **`interrupt_after_rounds: {count, target}`** on the `combat` event type. Like Rule 38's `end_after_rounds` but PRESERVES `state.activeCombat` (via the same `pauseCombat` machinery as Rule 46 interrupts) so a downstream `mode: "resume"` event can pick the same fight back up at the same enemy STAMINA, frozen modifiers, and wound counters. Distinct from Rule 38 `end_after_rounds` (clears activeCombat — "fight broken off" semantic) and from Rule 46 `interrupt_after_player_wounds` / `_enemy_wounds` (wound-count gated, not round-count gated). On a Rule 46 mode:resume the round counter resets to 0 in the new combat (existing engine behaviour), so the Rule 48 interrupt naturally re-arms for another `count` rounds without any extra bookkeeping.
+
+Surfaced by FF Warlock §333's Vampire flee mechanic: *"You may only attempt to Escape after 6 full Attack Rounds, and only if you Test your Luck and are Lucky; otherwise fight 6 more rounds. If you roll an 11 or 12 on the Luck test and are Unlucky, turn to 224."* The combat pauses every 6 rounds for the player decision (continue or attempt escape). The Unlucky-non-special branch resumes the SAME fight (same Vampire STAMINA, same modifiers) for another 6 rounds. Pre-Rule-48 the encounter couldn't be expressed cleanly — `end_after_rounds` cleared activeCombat (no resume possible) and a script-only implementation couldn't pause mid-execution for the player's choice.
+
+Companion book-side encoding pattern (no additional engine work — uses existing primitives):
+
+- `§333_decide` — section with continue/escape choices.
+- `§333_resume` — combat event with `mode: "resume"` + `interrupt_after_rounds` (loops back to §333_decide).
+- `§333_flee_test` — `stat_test` for Test-Your-Luck whose failure branch routes to `§333_flee_unlucky`.
+- `§333_flee_unlucky` — `roll_dice 2d6` with per-result targets handling the "rolled 11 or 12 → §224 / else → §333_resume" sub-branch.
+
+The §224 section (Vampire-catches-escape) was the single remaining unreachable section before this ship — chat-40 Warlock now reaches **418/418 sections (100%)** with 0 schema errors, 96 combats resolved cleanly across the DFS playthrough, and 1 cosmetic driver-side error (§173 win-mode probe stall against silver-immune Wight — §173 IS visited via Rule 46 interrupt in lose-mode).
+
+Engine + tool updates:
+
+- `cli-emulator/play.js`: `interrupt_after_rounds` check in `checkCombatEnd`, after the Rule 46 wound interrupts and before the Rule 38 `end_after_rounds` check.
+- `scripts/check-reachability.js`: no change needed — the recursive harvest already follows `interrupt_after_rounds.target` via the existing `target` NAV_KEY.
+
+Codex doc updates:
+
+- Rule 48 worked specification (canonical encoding, schema additions, re-arming semantics, engine behaviour, reachability tool support, when-to-use vs when-not-to-use, verification statement).
+
 ## v2.43.0 / GBF v1.31.0 / CLI emulator v3.25.0 / HTML emulator v3.22.0
 
 **Rule 47 — Flag-routed subroutine return (`route_by_flag` event), §12.14 play-execution gate, §12.15 resume-after-engine-update flow, top-level `schema_version` field, README quick-start.** A combined ship surfaced by the chat-40 Warlock fresh-parse remediation pass.
