@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title bumped to v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title bumped to v1.35.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title at v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title bumped to v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title bumped to v1.35.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,7 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -3677,7 +3677,7 @@ test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -3851,7 +3851,7 @@ test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.28 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -4258,7 +4258,7 @@ test('Rule 46 v2.42.0: schema-additive — pre-v1.30 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.30 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 // ============================================================
@@ -4434,7 +4434,7 @@ test('Rule 49 v2.45.0: schema accepts both failure_penalty shapes', () => {
   assertTrue(validate(baseBook({ stat: 'SKILL', amount: -1 })), 'single-object shape validates');
   assertTrue(validate(baseBook([{ stat: 'SKILL', amount: -1 }, { stat: 'SKILL', amount: -2 }])), 'array shape validates');
   assertTrue(!validate(baseBook('bogus')), 'string penalty rejected');
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.34.0', 'schema title is v1.34.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
 });
 
 test('Rule 49 v2.45.0: schema-additive — pre-v1.33 books validate unchanged', () => {
@@ -4782,6 +4782,238 @@ test('Rule 50 v2.46.0: schema-additive — pre-v1.34 books validate unchanged', 
     },
   };
   assertTrue(validate(book), `pre-v1.34 book should validate clean: ${JSON.stringify(validate.errors)}`);
+});
+
+// ============================================================
+// Rule 36 extension v2.50.0 (schema v1.35) — applies_on "double" + instant_death
+// Closes CoH gaps 1 & 2 from the engine-feedback handoff.
+// ============================================================
+
+function buildR36Book(triggered_effects) {
+  return {
+    metadata: { title: 'B', author: 'a', total_sections: 2 },
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      abilities: { available: [] },
+      combat_system: { round_script: 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 4' },
+    },
+    character_creation: { steps: [] },
+    items_catalog: {
+      test_ring: {
+        name: 'Test Ring', type: 'misc', equippable: true, slot: 'ring',
+        equip_timing: 'out_of_combat', auto_equip: true,
+        triggered_effects: triggered_effects.map(te => ({
+          ...te,
+          condition: te.condition || { type: 'is_equipped', item: 'test_ring' },
+        })),
+      },
+    },
+    enemies_catalog: { test_orc: { name: 'Test Orc', HEALTH: 50 } },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_orc', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+  };
+}
+
+test('Rule 36 v2.50.0: applies_on "double" fires when 2d6 shows a pair', () => {
+  const book = buildR36Book([{
+    trigger: 'on_combat_round',
+    gate_roll: { dice: '2d6', applies_on: 'double' },
+    effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+    reason: 'Doubles → -1 incoming damage',
+  }]);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+  // Force gate_roll 2d6 = [3,3] (a double) → effect fires → damage reduced by 1
+  // Then player and enemy attack rolls also need forced entries — supply 6s.
+  state.forcedRolls = [3, 3, 6, 6, 6, 6];
+  play.navigateTo(state, book, '1');
+  const hpBefore = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(!!state.log.find(l => /gate_roll fire/.test(l)), `gate_roll fire should log; log: ${state.log.slice(-8).join(' | ')}`);
+  assertTrue(!!state.log.find(l => /damage_delta/.test(l)), 'damage_delta application logged');
+});
+
+test('Rule 36 v2.50.0: applies_on "double" does NOT fire on a non-pair 2d6', () => {
+  const book = buildR36Book([{
+    trigger: 'on_combat_round',
+    gate_roll: { dice: '2d6', applies_on: 'double' },
+    effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+  }]);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+  // 2d6 = [3,4] is NOT a double → gate skips
+  state.forcedRolls = [3, 4, 6, 6, 6, 6];
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(!!state.log.find(l => /gate_roll skip/.test(l)), 'gate_roll skip should log');
+  assertTrue(!state.log.find(l => /R36 damage_delta/.test(l)), 'damage_delta should NOT fire');
+});
+
+test('Rule 36 v2.50.0: applies_on "double:6" fires only on 6-6, NOT on 3-3', () => {
+  const book = buildR36Book([{
+    trigger: 'on_combat_round',
+    gate_roll: { dice: '2d6', applies_on: 'double:6' },
+    effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+  }]);
+  // 6-6 → fires
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+    state.forcedRolls = [6, 6, 6, 6, 6, 6];
+    play.navigateTo(state, book, '1');
+    play.applyAction(state, book, 'attack', []);
+    assertTrue(!!state.log.find(l => /gate_roll fire/.test(l)), '6-6 → gate fires');
+  }
+  // 3-3 (a double but NOT 6-6) → skips
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+    state.forcedRolls = [3, 3, 6, 6, 6, 6];
+    play.navigateTo(state, book, '1');
+    play.applyAction(state, book, 'attack', []);
+    assertTrue(!!state.log.find(l => /gate_roll skip/.test(l)), '3-3 → gate skips (right face required)');
+  }
+});
+
+test('Rule 36 v2.50.0: applies_on existing forms ("6", "1-2") unchanged by extension', () => {
+  // Regression check: extending matchAppliesOn must not break existing book
+  // shapes. Confirm the "6" single-face and "1-2" range forms still fire as
+  // before (these are heavily exercised at items_catalog.iron_shield_crescent
+  // and enemies_catalog.dog_249 in the maintained Warlock book).
+  for (const [applies_on, roll, expectedFire] of [['6', 6, true], ['6', 3, false], ['1-2', 1, true], ['1-2', 2, true], ['1-2', 3, false]]) {
+    const book = buildR36Book([{
+      trigger: 'on_combat_round',
+      gate_roll: { dice: '1d6', applies_on },
+      effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+    }]);
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100 };
+    state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+    state.forcedRolls = [roll, 6, 6, 6, 6];
+    play.navigateTo(state, book, '1');
+    play.applyAction(state, book, 'attack', []);
+    const fired = !!state.log.find(l => /gate_roll fire/.test(l));
+    assertEqual(fired, expectedFire, `applies_on="${applies_on}" rolled=${roll} expected fire=${expectedFire}`);
+  }
+});
+
+test('Rule 36 v2.50.0: instant_death damage-flow op kills the player', () => {
+  const book = buildR36Book([{
+    trigger: 'on_combat_round',
+    gate_roll: { dice: '1d6', applies_on: '6' },
+    effect: { type: 'instant_death', direction: 'outgoing' },
+    reason: 'Test trigger: 1d6 on 6 → player dies',
+  }]);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+  // gate_roll 1d6 = 6 → fires → instant_death sets outgoing damage to MAX_SAFE_INTEGER
+  state.forcedRolls = [6, 6, 6, 6, 6];
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(!!state.log.find(l => /instant_death/.test(l)), `instant_death should log; got: ${state.log.slice(-8).join(' | ')}`);
+  assertEqual(state.stats.HEALTH, 0, 'player HEALTH should be 0 after instant_death (clamped from MAX_SAFE_INTEGER damage)');
+});
+
+test('Rule 36 v2.50.0: instant_death incoming kills the enemy this round', () => {
+  const book = buildR36Book([{
+    trigger: 'on_combat_round',
+    gate_roll: { dice: '1d6', applies_on: '6' },
+    effect: { type: 'instant_death', direction: 'incoming' },
+    reason: 'Vorpal ring: 1d6 on 6 → enemy dies',
+  }]);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+  state.forcedRolls = [6, 6, 6, 6, 6];
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(!!state.log.find(l => /instant_death.*incoming/.test(l)), 'incoming instant_death logged');
+  // Enemy died → combat resolves → section navigates to win_to='2'
+  assertEqual(state.currentSection, '2', 'combat ends with enemy dead → win_to navigates');
+});
+
+test('Rule 36 v2.50.0: instant_death + applies_on:"double" composes (CoH Hornet shape)', () => {
+  // The canonical Creature of Havoc Giant Hornet rule: enemy rolls a double
+  // → player dies. Encoded declaratively as a single triggered_effect on the
+  // enemy: gate_roll 2d6 applies_on "double" → instant_death outgoing.
+  // (Gap 3 — UNLESS-player-also-rolled-double — still requires a script;
+  // this test exercises only the doubles + instant_death composition.)
+  const book = buildR36Book([{
+    trigger: 'on_combat_round',
+    gate_roll: { dice: '2d6', applies_on: 'double' },
+    effect: { type: 'instant_death', direction: 'outgoing' },
+    reason: 'Hornet sting on doubles',
+  }]);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  state.inventory = ['test_ring']; state.equipment = { ring: 'test_ring' };
+  // 2d6 → [4,4] is a double → Hornet sting fires → player dies
+  state.forcedRolls = [4, 4, 6, 6, 6, 6];
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.stats.HEALTH, 0, 'Hornet-on-doubles → player dies');
+});
+
+test('Rule 36 v2.50.0: instant_death in event-type enum', () => {
+  const fs = require('fs');
+  const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
+  const enums = [];
+  function walk(node) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.enum) && node.enum.some(v => typeof v === 'string' && /damage_/.test(v))) enums.push(node.enum);
+    for (const k of Object.keys(node)) walk(node[k]);
+  }
+  walk(schema);
+  const found = enums.some(arr => arr.includes('instant_death'));
+  assertTrue(found, `instant_death should appear in at least one schema enum that also has damage_set; enums seen: ${JSON.stringify(enums)}`);
+});
+
+test('Rule 36 v2.50.0: schema v1.35 — schema-additive, pre-v1.35 books validate', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title bumped to v1.35.0');
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A pre-v1.35 book using only existing damage-flow ops (no instant_death,
+  // no doubles-form applies_on) must validate unchanged.
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {
+      shield: {
+        name: 'Shield', type: 'armor', equippable: true, slot: 'shield',
+        triggered_effects: [{
+          trigger: 'on_combat_round',
+          gate_roll: { dice: '1d6', applies_on: '6' },
+          effect: { type: 'damage_delta', direction: 'outgoing', delta: -1 },
+        }],
+      },
+    },
+    enemies_catalog: {},
+    sections: { '1': { text: 't', events: [], choices: [{ text: 'end', target: '1', condition: null }], is_ending: false } },
+  };
+  assertTrue(validate(book), `pre-v1.35 book should validate clean: ${JSON.stringify(validate.errors)}`);
 });
 
 // ============================================================

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.34.0",
+  "title": "Gamebook Format (GBF) v1.35.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -1288,7 +1288,7 @@
             "dice": { "type": "string", "description": "Dice expression in the same syntax as `roll_dice.dice` (e.g. '1d6', '2d6', '1d10')." },
             "applies_on": {
               "type": "string",
-              "description": "Inclusive numeric range or single face value as a string. Examples: '6' (single face), '1-2' (inclusive range), '1-5' (inclusive range), '10' (single face on 1d10). Same syntax as `roll_dice.results` keys. The effect fires when the rolled total falls within this expression."
+              "description": "Inclusive numeric range, single face value, or 'doubles' keyword as a string. Single-face / range forms match against the SUMMED total. Examples: '6' (single face), '1-2' (inclusive range), '1-5' (inclusive range), '10' (single face on 1d10). The 'doubles' forms match against the PER-DIE rolls array (schema v1.35+, Rule 36 extension): 'double' fires when all dice show the same face; 'double:N' fires when all dice show face N (e.g. 'double:6' = 'two 6s'). Cross-book frequency for the doubles idiom is high in Fighting Fantasy-family books (instant-kill on doubles, fixed-damage on doubles, etc.). The effect fires when the expression matches; single-int and range forms are unchanged from v1.34 and earlier."
             }
           }
         },
@@ -1313,11 +1313,11 @@
         {
           "type": "object",
           "required": ["type", "direction"],
-          "description": "Schema v1.20+ (Rule 36). Damage-flow operation in the per-round damage pipeline. Pipeline ordering: Rule 17 combat_modifiers → Rule 18 damage_interactions → Rule 32 frozen damage_caps → Rule 36 shift/multiply/set (damage_delta, damage_multiplier, damage_set) → Rule 36 triggered caps (damage_cap) → apply to state. Multiple Rule 36 caps from different items compose by taking the smallest (extends the Rule 32 v1.15 tightest-cap-wins semantic across both cap layers). All four require `direction` (incoming = damage to enemy, outgoing = damage to player; the player's perspective is canonical).",
+          "description": "Schema v1.20+ (Rule 36). Damage-flow operation in the per-round damage pipeline. Pipeline ordering: Rule 17 combat_modifiers → Rule 18 damage_interactions → Rule 32 frozen damage_caps → Rule 36 shift/multiply/set (damage_delta, damage_multiplier, damage_set, instant_death) → Rule 36 triggered caps (damage_cap) → apply to state. Multiple Rule 36 caps from different items compose by taking the smallest (extends the Rule 32 v1.15 tightest-cap-wins semantic across both cap layers). All five require `direction` (incoming = damage to enemy, outgoing = damage to player; the player's perspective is canonical). Schema v1.35+ added `instant_death` as a semantic alias for 'set per-round damage to lethal' — see the `damage_set` description for when to prefer the dedicated verb over the over-large-value hack.",
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["damage_cap", "damage_multiplier", "damage_delta", "damage_set"]
+              "enum": ["damage_cap", "damage_multiplier", "damage_delta", "damage_set", "instant_death"]
             },
             "direction": {
               "type": "string",
@@ -1342,7 +1342,7 @@
                 { "type": "number" },
                 { "type": "string", "description": "Symbolic expression evaluated at firing time. Currently 'enemy.max_health' is supported (writes the enemy's full health as the damage total, for vorpal-sword-style insta-kills). Future expressions may be added; books should not invent their own." }
               ],
-              "description": "damage_set: absolute value to write as the per-round damage total in the direction, replacing whatever the upstream pipeline produced. Use for insta-kill mechanics (`{type: damage_set, direction: incoming, value: \"enemy.max_health\"}` on a vorpal sword 1d6-on-6) and similar source-text 'sets the damage to N' shapes. Rule 36 triggered caps applied AFTER this operation may still clamp it down."
+              "description": "damage_set: absolute value to write as the per-round damage total in the direction, replacing whatever the upstream pipeline produced. Use for 'sets the damage to N' shapes. Rule 36 triggered caps applied AFTER this operation may still clamp it down. Prefer `instant_death` (schema v1.35+) for plain 'you die' / 'instantly killed' source text — `damage_set` with an over-large value works but lacks the semantic clarity the dedicated verb provides (and the log message reads as `damage_set: outgoing 0 → 9999` rather than `instant_death: outgoing → lethal`)."
             }
           }
         },

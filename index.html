@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.25.0';
+const CODEX_EMULATOR_VERSION = '3.26.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -5198,9 +5198,20 @@ function describeCondition(cond) {
 // commentary; this implementation is intentionally a near-line-by-line
 // mirror so behavior matches across both emulators.
 
-function r36_matchAppliesOn(rolled, applies_on) {
+// Schema v1.35+ — "double" / "double:N" added to the gate_roll.applies_on
+// syntax. The doubles forms read the per-die rolls array (not the summed
+// total). See cli-emulator/play.js matchAppliesOn for the canonical doc.
+function r36_matchAppliesOn(rolled, applies_on, rolls) {
   if (typeof applies_on !== 'string') return false;
   const trimmed = applies_on.trim();
+  if (/^double(?::-?\d+)?$/.test(trimmed)) {
+    if (!Array.isArray(rolls) || rolls.length < 2) return false;
+    const all_same = rolls.every(r => r === rolls[0]);
+    if (!all_same) return false;
+    const m = trimmed.match(/^double:(-?\d+)$/);
+    if (m) return rolls[0] === parseInt(m[1], 10);
+    return true;
+  }
   if (/^-?\d+$/.test(trimmed)) return rolled === parseInt(trimmed, 10);
   const m = trimmed.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
   if (m) return rolled >= parseInt(m[1], 10) && rolled <= parseInt(m[2], 10);
@@ -5212,7 +5223,7 @@ function r36_evalGateRoll(gateRoll, log) {
   const { dice, applies_on } = gateRoll;
   if (!dice || !applies_on) return { fired: false, rolled: null };
   const r = rollDice(dice);
-  return { fired: r36_matchAppliesOn(r.total, applies_on), rolled: r.total };
+  return { fired: r36_matchAppliesOn(r.total, applies_on, r.rolls), rolled: r.total };
 }
 
 function r36_resolveAmount(amount, log, label) {
@@ -5318,6 +5329,12 @@ function r36_applyDamageFlowEffect(effect, ctx, source) {
       ctx.log.push(`R36 damage_set (${source}): ${dir} ${before} → ${ctx[key]}`);
       return true;
     }
+    case 'instant_death': {
+      // Schema v1.35+ — see cli-emulator/play.js for the canonical doc.
+      ctx[key] = Number.MAX_SAFE_INTEGER;
+      ctx.log.push(`R36 instant_death (${source}): ${dir} → lethal`);
+      return true;
+    }
     case 'damage_cap': {
       const cap = typeof effect.max === 'number' ? effect.max : Infinity;
       if (ctx[key] > cap) {
@@ -5332,7 +5349,7 @@ function r36_applyDamageFlowEffect(effect, ctx, source) {
 
 function r36_dispatchCombatRoundTriggers(ctx) {
   const entries = r36_collectTriggeredEffects('on_combat_round', true);
-  const SHIFT_OPS = new Set(['damage_delta', 'damage_multiplier', 'damage_set']);
+  const SHIFT_OPS = new Set(['damage_delta', 'damage_multiplier', 'damage_set', 'instant_death']);
   const passes = [
     e => SHIFT_OPS.has(e.entry.effect?.type),
     e => e.entry.effect?.type === 'damage_cap',
@@ -5421,7 +5438,7 @@ function r36_useItem(itemId) {
         fledTo = eff.target_section;
         if (log) log.push(`R36 flee_combat (item:${itemId}): fleeing to §${eff.target_section}`);
       }
-    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'instant_death', 'damage_cap'].includes(eff.type)) {
       if (log) log.push(`R36 ${eff.type} (item:${itemId}): damage-flow effects only fire on on_combat_round; skipping`);
     } else {
       r36_dispatchTriggeredEvent(eff, `item:${itemId}`, log);
@@ -5493,7 +5510,7 @@ function r36_dispatchLifecycleTriggers(trigger, options) {
         fledTo = eff.target_section;
         if (log) log.push(`R36 flee_combat (${r36_describeSource(e)}): fleeing to §${eff.target_section}`);
       }
-    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'instant_death', 'damage_cap'].includes(eff.type)) {
       if (log) log.push(`R36 ${eff.type} (${r36_describeSource(e)}): damage-flow effects only fire on on_combat_round; skipping`);
     } else {
       r36_dispatchTriggeredEvent(eff, r36_describeSource(e), log);

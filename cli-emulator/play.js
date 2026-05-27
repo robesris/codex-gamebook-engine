@@ -27,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.29.0';
+const CODEX_EMULATOR_VERSION = '3.30.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -370,12 +370,26 @@ function describeCondition(cond) {
 //               → Rule 36 damage_cap (tightest-cap-wins, extends Rule 32 v1.15 semantic)
 //                 → apply to state.
 
-// Parse a gate_roll.applies_on expression ("6", "1-2", "1-5") against a
-// rolled total. Returns true on match, false otherwise. Same syntax as
-// roll_dice.results keys.
-function matchAppliesOn(rolled, applies_on) {
+// Parse a gate_roll.applies_on expression against a rolled total. Returns
+// true on match, false otherwise. Accepted syntax (schema v1.35+):
+//   "6"        — single face on the SUMMED total
+//   "1-2"      — inclusive range on the SUMMED total
+//   "double"   — any double (all dice show the same face); requires `rolls`
+//   "double:N" — specific double (all dice show face N); requires `rolls`
+// The "double" forms are evaluated against the PER-DIE rolls array, not the
+// summed total. Cross-book frequency for the doubles idiom is ~18 textual
+// hits across 4 of 6 first-party books (FF/CoH/Grailquest/WWY).
+function matchAppliesOn(rolled, applies_on, rolls) {
   if (typeof applies_on !== 'string') return false;
   const trimmed = applies_on.trim();
+  if (/^double(?::-?\d+)?$/.test(trimmed)) {
+    if (!Array.isArray(rolls) || rolls.length < 2) return false;
+    const all_same = rolls.every(r => r === rolls[0]);
+    if (!all_same) return false;
+    const m = trimmed.match(/^double:(-?\d+)$/);
+    if (m) return rolls[0] === parseInt(m[1], 10);
+    return true;
+  }
   if (/^-?\d+$/.test(trimmed)) return rolled === parseInt(trimmed, 10);
   const m = trimmed.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
   if (m) return rolled >= parseInt(m[1], 10) && rolled <= parseInt(m[2], 10);
@@ -398,7 +412,7 @@ function evalGateRoll(gateRoll, state) {
     // run_dice handlers shifts off the queue manually. Mirror that:
     forced.splice(0, result.rolls.length);
   }
-  return { fired: matchAppliesOn(result.total, applies_on), rolled: result.total };
+  return { fired: matchAppliesOn(result.total, applies_on, result.rolls), rolled: result.total };
 }
 
 // Resolve a modify_stat-style amount field that may be either a numeric
@@ -514,6 +528,17 @@ function applyDamageFlowEffect(effect, ctx, source) {
       ctx.log.push(`R36 damage_set (${source}): ${dir} ${before} → ${ctx[key]}`);
       return true;
     }
+    case 'instant_death': {
+      // Schema v1.35+ — semantic alias for "deal enough damage to kill the
+      // target this round". Cleaner than `damage_set: { value: 9999 }` for
+      // sources whose text says "you die" / "instantly killed". Operates in
+      // the same SHIFT_OPS pipeline pass as damage_set; subsequent triggered
+      // damage_caps may still clamp the value (consistent with damage_set
+      // semantics — no current use case for an uncappable lethal).
+      ctx[key] = Number.MAX_SAFE_INTEGER;
+      ctx.log.push(`R36 instant_death (${source}): ${dir} → lethal`);
+      return true;
+    }
     case 'damage_cap': {
       const cap = typeof effect.max === 'number' ? effect.max : Infinity;
       if (ctx[key] > cap) {
@@ -534,7 +559,7 @@ function dispatchCombatRoundTriggers(state, book, ctx) {
   // Two-pass: first apply delta/multiplier/set (shift/scale/replace), THEN apply
   // damage_cap (tightest-cap-wins). Within each pass, iterate in collection
   // order so item-then-ability-then-talent-then-enemy is the canonical order.
-  const SHIFT_OPS = new Set(['damage_delta', 'damage_multiplier', 'damage_set']);
+  const SHIFT_OPS = new Set(['damage_delta', 'damage_multiplier', 'damage_set', 'instant_death']);
   const passes = [
     e => SHIFT_OPS.has(e.entry.effect?.type),
     e => e.entry.effect?.type === 'damage_cap',
@@ -630,7 +655,7 @@ function dispatchLifecycleTriggers(state, book, trigger, options) {
         fledTo = eff.target_section;
         state.log.push(`R36 flee_combat (${describeSource(e)}): fleeing to §${eff.target_section}`);
       }
-    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'instant_death', 'damage_cap'].includes(eff.type)) {
       // damage-flow effects only meaningful on on_combat_round; warn elsewhere
       state.log.push(`R36 ${eff.type} (${describeSource(e)}): damage-flow effects only fire on on_combat_round trigger; skipping`);
     } else {
@@ -3601,7 +3626,7 @@ function runUserUse(state, book, itemId) {
         fledTo = eff.target_section;
         state.log.push(`R36 flee_combat (item:${itemId}): fleeing to §${eff.target_section}`);
       }
-    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'damage_cap'].includes(eff.type)) {
+    } else if (['damage_delta', 'damage_multiplier', 'damage_set', 'instant_death', 'damage_cap'].includes(eff.type)) {
       state.log.push(`R36 ${eff.type} (item:${itemId}): damage-flow effects only fire on on_combat_round; skipping`);
     } else {
       dispatchTriggeredEvent(eff, state, book, `item:${itemId}`);

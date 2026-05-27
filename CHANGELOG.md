@@ -6,6 +6,46 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.50.0 / GBF v1.35.0 / CLI emulator v3.30.0 / HTML emulator v3.26.0
+
+**Rule 36 extension — `applies_on: "double"` keyword + `instant_death` effect verb.** Surfaced during a Creature of Havoc (FF#24) fresh-parse in an incognito chat. The CoH parser hit three enemies (Giant Hornet, Manic Beast, Ophidiotaur) with per-round stateful combat rules that the declarative `triggered_effects` layer couldn't express, forcing custom `round_script`s. The parser filed five gaps; the cross-book triage shipped two of them in this bump and filed the remaining three for follow-up.
+
+Schema additions (v1.35+, schema-additive — pre-v1.35 books validate unchanged):
+
+- **`applies_on: "double"` / `"double:N"` keyword on `gate_roll`** (Gap 1). Before v1.35, `gate_roll.applies_on` accepted a single int (`"6"`) or an inclusive range (`"1-2"`), both matched against the summed total. It couldn't express *"the two dice showed the same face"*, an extremely common FF idiom (instant-kill on doubles, fixed-damage on doubles, etc.). The two new forms evaluate against the per-die `rolls` array (not the summed total): `"double"` fires when all dice in `gate_roll.dice` show the same face; `"double:N"` fires when all dice show face N specifically. Cross-book frequency: 18 textual hits across 4 of 6 first-party books (COA 9, Grailquest 4, WWY 4, Warlock 1). Existing books need no migration; single-int and range forms are unchanged.
+
+- **`instant_death` effect verb in the Rule 36 damage-flow op enum** (Gap 2). Before v1.35, lethal triggers had to be encoded as `damage_set: { direction: outgoing, value: 9999 }` — capability was fine but semantic clarity was poor. New shape: `{ "type": "instant_death", "direction": "outgoing" }` (kills player) or `"direction": "incoming"` (kills enemy). Sets the per-round damage in the named direction to `Number.MAX_SAFE_INTEGER`; operates in the same SHIFT_OPS pipeline pass as `damage_set`; cappable by later triggered `damage_cap` ops; no `value` field required. Symmetric across directions. Distinguished from `damage_set: { value: 9999 }` purely by semantic clarity (the event type and log message both name the intent). Cross-book frequency: 13 textual hits across 2 of 6 first-party books (COA 12, LW1 1).
+
+Emulator wiring:
+
+- CLI emulator (`cli-emulator/play.js`): `matchAppliesOn` signature gained an optional `rolls` parameter; `evalGateRoll` now passes `result.rolls` from `rollDice`. New case in `applyDamageFlowEffect` for `instant_death`; `SHIFT_OPS` set and the damage-flow type whitelist both updated to include the new op.
+- HTML emulator (`index.html`): parallel changes to `r36_matchAppliesOn`, `r36_evalGateRoll`, the damage-flow dispatch, and the SHIFT_OPS / whitelist sets.
+
+Canonical encoding for the CoH Hornet sting half (the "enemy rolls doubles → player dies" half; the "UNLESS player also rolled doubles" half is Gap 3, filed for follow-up):
+
+```json
+{ "trigger": "on_combat_round",
+  "gate_roll": { "dice": "2d6", "applies_on": "double" },
+  "effect": { "type": "instant_death", "direction": "outgoing" } }
+```
+
+Gaps 3 / 4 / 5 (not shipped — filed in `grimoire-engine-books/known_issues.md` under "Creature of Havoc (FF#24) parse — engine follow-ups to file as GitHub issues"):
+- Gap 3 — cross-component same-round predicates (e.g. `player_double` available to enemy effects). Single known site; re-evaluate on recurrence.
+- Gap 4 — cross-round running state via `combat.vars` + `on_round_start` trigger. Single known site; round_script is faithful.
+- Gap 5 — optional mid-combat player choice (player-initiated yes/no pause with stat-test consequence). ≥3 known sites (CoH + Warlock §63 / §282); flagged as design-priority candidate for the next time the pattern surfaces — recurrence in Warlock makes this the likely-next implementation among the three deferred gaps.
+
+Tests: 104/104 → 113/113. Nine new Rule 36 v2.50.0 tests cover both new shapes plus their composition (CoH Hornet) and a regression check of the pre-v1.35 single-int / range forms.
+
+Versions:
+- Codex v2.49.0 → v2.50.0
+- GBF schema v1.34.0 → v1.35.0
+- CLI emulator v3.29.0 → v3.30.0
+- HTML emulator v3.25.0 → v3.26.0
+
+Dist bundle rebuilt.
+
+---
+
 ## v2.49.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
 
 **Interactive flow: spoiler level (Step 2d) + remediation-side re-confirmation (§12.0).** Surfaced during the same fresh-parse session that motivated v2.48.0. A user who hasn't played the book before may want the parser to avoid surfacing plot, encounters, items, and endings during parsing AND remediation. Three levels added as a session-opening preference (Step 2d), orthogonal to the verbosity mode introduced in v2.48.0:
