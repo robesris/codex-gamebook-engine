@@ -6,6 +6,26 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.49.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
+
+**Interactive flow: spoiler level (Step 2d) + remediation-side re-confirmation (§12.0).** Surfaced during the same fresh-parse session that motivated v2.48.0. A user who hasn't played the book before may want the parser to avoid surfacing plot, encounters, items, and endings during parsing AND remediation. Three levels added as a session-opening preference (Step 2d), orthogonal to the verbosity mode introduced in v2.48.0:
+
+- **No spoilers.** Agent restricts output to rules + front matter + section numbers + shape-only mechanical descriptions. Acceptable: book title, author, ruleset, chargen-issued items, *"section 47 has a roll-based event with three branches"*. NOT acceptable: section text quotation, enemy/item/NPC names from mid-game, plot points, endings, walkthrough-derived routes. For questions that are inherently spoilery (cannot be asked without revealing book content), the agent makes a best-judgment call based on source-text grammar and codex shape-matching, then logs the decision to `known_issues.md` for post-play review — explicitly NOT in a freeform event `note` field (which would trigger the Rule 49 catch-net AND bury the decision).
+
+- **Reduce spoilers.** Agent uses general categorical language. Mechanical specifics and section numbers are fair game; story specifics (names, narrative, plot) are not. Three-option menu for inherently-spoilery questions: (1) substitute an equivalent fictional situation that preserves the structural question, (2) surface only the mechanical shape, (3) defer to best-judgment with a logged note. The agent never lies about the mechanic — substitution replaces specifics, not shape.
+
+- **Spoilers OK.** Pre-Step-2d behavior. The spoiler-aware modes only ADD constraints; this level changes nothing.
+
+Spoiler level and verbosity mode are orthogonal — nine combinations valid. *"Basics + no spoilers"* is tersest; *"verbose + spoilers OK"* is most communicative.
+
+Mode is sticky for the session and switchable any time by typing `no spoilers`, `reduce spoilers`, or `spoilers ok`.
+
+**§12.0 Re-confirm session preferences at pass start.** New sub-section in the remediation chapter. Remediation may happen days or weeks after the original parse (and possibly in a different chat session entirely), so the agent has no durable memory of the initial Step 2c / Step 2d choices. Before surfacing the first finding the remediation pass re-confirms BOTH preferences in one short paragraph. The new sub-section also carries a per-finding-category framings table showing how the same finding (dangling catalog item, missing eat_meal, loss-in-choice-text, disarmament-without-event, condition-text mismatch) looks at each spoiler level — the spoilers-OK column matches the existing §12.4 framings, the reduce-spoilers column substitutes specifics for shape, the no-spoilers column documents the best-judgment-with-log default.
+
+Documentation-only — no schema, validator, or emulator change. Codex doc bumped to v2.49.0; schema and emulators unchanged.
+
+---
+
 ## v2.48.0 / GBF v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0
 
 **Interactive flow: output verbosity mode + visual question affordance.** Surfaced during a fresh-parse session on a new gamebook in an incognito chat — the user noted the volume of technical monologue could be overwhelming, and that questions requiring a user response weren't visually distinguished from the surrounding running commentary. Two new guidelines added to the codex's `INTERACTIVE FLOW` section:

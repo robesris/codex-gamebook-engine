@@ -189,6 +189,45 @@ Independent of verbosity mode, every question that requires a user response must
 
 **When the answer is implicit, don't ask.** Basics mode users in particular will be annoyed by a question whose answer is obvious from the preceding instruction ("Apply and commit?" after the user said "go ahead with the fix"). When the user has already authorised the action, just do it and report the result. Use questions for genuine forks, not procedural confirmations.
 
+### Step 2d: Spoiler Level
+
+Right after Step 2c (and before parsing begins), ask the user which **spoiler level** they'd like for the session. Parsing a gamebook can reveal plot, encounters, items, and endings the user may not have seen yet — a user who hasn't played the book before may want the parser to avoid surfacing those details. Like Step 2c, the spoiler level changes ONLY what the agent says to the user; internal parsing fidelity (which sections get read, what events get encoded, how the validator runs) is identical across all three levels.
+
+**No spoilers.** The agent avoids surfacing anything about the book beyond the rules and front matter. Acceptable to mention:
+- Book title, author, series, total section count, ruleset name and reference book (e.g. "Fighting Fantasy rules from the introduction").
+- Front-matter content (introduction, rules pages, character-creation steps, starting-equipment lists from the chargen pages).
+- Item-catalog entries that the front matter explicitly issues (chargen-granted gear).
+- Schema and encoding mechanics in shape-only terms: *"this section has a roll-based event with three branches"* — yes; *"this section has a roll-based combat against the Black Knight"* — no.
+
+NOT acceptable in no-spoilers mode:
+- Section text quotation, paraphrase, or narrative summary beyond §1 of the front matter.
+- Names of enemies, items, NPCs, or locations encountered mid-game.
+- Plot points, endings, branch outcomes, walkthrough-derived canonical routes.
+- Cross-referencing a walkthrough during a question unless the user explicitly opts in for that question.
+
+Progress reports may identify sections by number (*"parsing section 47 of 200"*, *"encoding combat events in section 47"*) but NOT by content (*"section 47 is the Black Knight encounter"*). Catalog items with descriptive names (`wooden_stake`, `cursed_amulet`) may be surfaced when necessary but with no explanation of why they matter or where they're used.
+
+**Reduce spoilers.** The agent uses general categorical language and avoids specific story details, but mechanical specifics and section numbers are fair game. Acceptable: *"Section 47 has a combat with a hidden modifier — based on the surrounding rules text I think it's a SKILL modifier; can you confirm?"* — surfaces the shape and the mechanical question, hides the antagonist's identity. NOT acceptable: *"Section 47 has you fight the Black Knight, who has a hidden +2 SKILL modifier from his cursed sword."* When a question is inherently spoilery, the agent has three options in preference order:
+
+1. **Substitute an equivalent fictional situation.** *"Imagine a choice between two paths where one requires a key item — should the gated path test for the item by name or by category?"* — preserves the structural question, replaces the source's specifics with generic ones.
+2. **Surface only the mechanical shape.** *"There's a choice where one branch requires a single item — which catalog item should the condition match?"* — keeps the question concrete enough to answer, hides the surrounding narrative.
+3. **Defer to best-judgment with a logged note** if neither (1) nor (2) works without giving the answer away. (See "Handling inherently spoilery questions" below.)
+
+**Spoilers OK.** Normal mode — free to mention specifics. Use this when the user has already played the book, when they're reviewing their own parse and want full detail, or when they explicitly don't care. This mode is the pre-Step-2d behavior; spoiler-aware modes only ADD constraints, they don't change behavior at this level.
+
+**Mode persistence and switching.** The level the user picks at Step 2d persists for the rest of the session unless they explicitly switch. The agent recognises `no spoilers`, `reduce spoilers`, and `spoilers ok` / `spoilers fine` / `spoilers are ok` (case-insensitive). The agent acknowledges the switch with one brief confirmation line.
+
+**Orthogonality with verbosity.** Spoiler level and verbosity mode are independent — any of the nine combinations is valid. *"Basics + no spoilers"* is the tersest possible mode (questions only, no specifics surfaced); *"verbose + spoilers OK"* is the most communicative. The user picks each independently.
+
+**Handling inherently spoilery questions (no-spoilers mode).** Some questions during parsing or remediation cannot be answered safely without revealing book content the user hasn't yet seen — e.g. *"is the §47 dragon immune to fire?"* cannot be asked without revealing that there's a dragon in §47. In no-spoilers mode the agent should:
+
+1. Make a best-judgment call based on the surrounding source-text grammar, the codex rule that matches the shape, and any cross-book conventions from the same series profile.
+2. Encode the chosen interpretation.
+3. **Log the decision visibly so the user can review it LATER** — append a structured entry to `known_issues.md` (or, if that file doesn't exist yet, create it) describing the section number, the shape of the ambiguity, the chosen interpretation, and a one-line reason. Do NOT stash the rationale in a freeform event `note` field — that would trigger the Rule 49 mechanic-verbs catch-net AND silently bury the decision where the user won't find it post-play.
+4. Continue the pass without asking.
+
+The user playing the book may notice an encoded interpretation is wrong; they can return for a targeted remediation under "spoilers OK" once they've seen the section. This is a deliberate trade: the user accepts a small risk of mis-encoded edge cases in exchange for an un-spoiled first playthrough.
+
 ### Step 3: Assess Source Quality
 Once the source is available, evaluate it:
 - If it's a PDF, check whether it has a usable text layer or is image-only
@@ -5645,6 +5684,32 @@ The remedy is a **second pass** by a different sub-agent — the **remediation a
 
 This section documents the remediation agent's protocol: how it talks to the user, what vocabulary it uses, what answer formats it accepts, and how it handles ambiguity.
 
+### 12.0 Re-confirm session preferences at pass start
+
+The remediation pass MAY happen in a different session than the initial parse — the user finishes a parse, plays the book for a while (or doesn't), comes back days or weeks later for the remediation pass. Before surfacing the first finding, **re-confirm both Step 2c (verbosity mode) and Step 2d (spoiler level)** in one short paragraph. The remediation agent has no durable memory of the initial-parse session's choices, and a user's preferences may genuinely have changed (a user who picked "no spoilers" for the parse may have since finished the book and now prefers "spoilers OK" for remediation).
+
+The re-confirm should:
+- Surface both preferences in one paragraph, not two separate questions.
+- Default to **verbose + spoilers OK** if the user doesn't answer or explicitly takes "default" — this is the most communicative combination, appropriate when no preference is recorded.
+- Use `AskUserQuestion` if the harness supports it (two questions, four options each: verbose/basics/default for verbosity; no-spoilers/reduce-spoilers/spoilers-OK/default for spoilers).
+- Be brief — the re-confirm is a procedural prelude, not a feature pitch. The user has seen the explanations in the parsing-session codex; don't re-explain unless they ask.
+
+**Why the re-confirmation matters specifically for remediation.** The remediation pass surfaces validator findings — soft checks that flag un-encoded constraints, missing eat_meals, dangling items, condition-text mismatches, etc. Many of these findings name a specific section, a specific item, or a specific enemy by ID. Asking *"§82 has `warhorse` in the items catalog but no section grants it — where should it come from?"* surfaces three spoilers at once (a warhorse exists; it's grant-source-ambiguous; the issue is at §82). Under "no spoilers" that question is unaskable as-stated; under "reduce spoilers" it can be rephrased as *"there's a catalog item with no grant source — should I infer one from the surrounding rules, drop it from the catalog, or surface for explicit attention?"*. The agent needs the spoiler level set before it starts framing findings.
+
+**Spoiler-aware remediation framings per finding category.**
+
+| Finding category | Spoilers OK framing | Reduce-spoilers framing | No-spoilers behavior |
+|---|---|---|---|
+| Dangling catalog item | *"`warhorse` is in the catalog but no section grants it. Should §82's stable-master grant it, drop from catalog, or surface elsewhere?"* | *"A catalog item has no grant source — I see a candidate section in the front-third of the book. Add the grant there, drop the entry, or surface for explicit decision?"* | Best-judgment: add the grant at the most likely section based on the source-text grammar (the agent reads the section but does not quote it to the user); log the decision in `known_issues.md`. |
+| Missing eat_meal in rest section | *"§47 is the inn-room rest scene but has no eat_meal event. Add one?"* | *"A section has rest-scene grammar but no eat_meal event. Add one?"* | Best-judgment: add `eat_meal required: false` at the section; log. |
+| Loss-in-choice-text | *"§213's choice text says `Lose 1 ENDURANCE and turn to 47` but the §213 events array doesn't encode the loss. Move the modify_stat to the section body, or keep it tied to the choice via `on_choose_effects`?"* | *"A choice's text describes a stat loss the events array doesn't enforce — section-body event, or choice-tied effect?"* | Best-judgment: prefer `on_choose_effects` (the loss is choice-specific by source-text construction); log. |
+| Disarmament-without-event | *"§155 narrates `they take your Backpack and Weapon` but no `clear_inventory` event fires. Add one?"* | *"A section narrates inventory loss the events array doesn't enforce. Add a disarmament event?"* | Best-judgment: add `clear_inventory` matching the source-text scope (everything / categories named / specific items named); log the chosen scope. |
+| Condition-text mismatch (§12.6 LLM pass) | *"§82's choice text says `If you have a horse and a sword, turn to 47` but the condition only checks the horse. Add `sword_check` to the AND?"* | *"A choice text describes a multi-item gate but the encoded condition only checks one. Expand to match?"* | Best-judgment: expand the condition to match all items named in the choice text; log. |
+
+**The "reduce-spoilers" substitution principle.** When framing a question in reduce-spoilers mode, the agent should never lie about the mechanical shape — that defeats the purpose of asking. It substitutes the SPECIFICS (item names, section narrative, enemy identity) but preserves the MECHANIC (it's a condition, it's an inventory item, it's a stat loss, etc.). A user can answer correctly because the mechanic is faithful; the user just doesn't learn what's in the source-text passage.
+
+**Idempotency.** The pass-start re-confirm runs once per pass. A user who runs remediation, fixes findings, re-runs remediation, gets re-asked. That's intentional — the re-runs may be days or weeks apart and the user's preferences may shift between them.
+
 ### 12.1 The cardinal rule: no schema vocabulary in user-facing text
 
 The remediation agent NEVER surfaces schema field names, event type identifiers, codex rule references, or any implementation vocabulary to the user. The user is presumed familiar with the book's narrative and rules — not with JSON Schema, this codex's event taxonomy, or the emulator's internals.
@@ -6232,7 +6297,7 @@ The resume flow turns a previously-frustrating "this book can't be parsed yet" o
 
 ## Version identifiers
 
-**Codex v2.48.0 / GBF schema v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0** (Step 2c "Output Verbosity Mode" — verbose (default) vs just-the-basics, a session-opening preference that controls how the agent presents progress to the user. Verbose narrates reasoning, surfaces tool calls and file references, gives running updates; basics suppresses the monologue and shows only questions, bottom-line conclusions, and just enough context to inform a decision. Mode is sticky for the session, switchable any time by typing "verbose" or "basics". Internal tool calls and parsing quality are identical between modes. Companion sub-section "Visual question affordance" mandates that every user-facing question be either an `AskUserQuestion` tool call (preferred for choices with discrete options — renders as selectable chips) or **bold markdown** (for free-form answers), so users never have to scan paragraphs of monologue to find the question. Both guidelines apply during interactive parsing sessions; documentation-only — no schema or emulator change. v2.47.0 added Rule 49.1's stat-name-in-note catch-net. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
+**Codex v2.49.0 / GBF schema v1.34.0 / CLI emulator v3.29.0 / HTML emulator v3.25.0** (Step 2d "Spoiler Level" — no-spoilers / reduce-spoilers / spoilers-OK, a session-opening preference orthogonal to verbosity that controls how much story content the agent surfaces to the user. No-spoilers restricts agent output to rules + front matter + section numbers + shape-only mechanical descriptions; reduce-spoilers uses general categorical language and offers a substitution-or-deferral menu for inherently spoilery questions; spoilers-OK is the pre-Step-2d behavior. The agent logs no-spoilers best-judgment calls to `known_issues.md` so the user can review them post-play. Companion §12.0 sub-section in the remediation chapter re-confirms BOTH preferences at pass start (remediation may happen in a different session than the initial parse, so a refresh is mandatory) and gives a per-finding-category framings table showing how the same finding looks at each spoiler level. Documentation-only — no schema, validator, or emulator change. v2.48.0 added Step 2c "Output Verbosity Mode" — verbose (default) vs just-the-basics, a session-opening preference that controls how the agent presents progress to the user. Verbose narrates reasoning, surfaces tool calls and file references, gives running updates; basics suppresses the monologue and shows only questions, bottom-line conclusions, and just enough context to inform a decision. Mode is sticky for the session, switchable any time by typing "verbose" or "basics". Internal tool calls and parsing quality are identical between modes. Companion sub-section "Visual question affordance" mandates that every user-facing question be either an `AskUserQuestion` tool call (preferred for choices with discrete options — renders as selectable chips) or **bold markdown** (for free-form answers), so users never have to scan paragraphs of monologue to find the question. Both guidelines apply during interactive parsing sessions; documentation-only — no schema or emulator change. v2.47.0 added Rule 49.1's stat-name-in-note catch-net. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 
