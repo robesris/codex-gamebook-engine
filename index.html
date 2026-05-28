@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.29.0';
+const CODEX_EMULATOR_VERSION = '3.30.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2469,7 +2469,7 @@ function navigateTo(sectionId) {
     if (Number.isFinite(numericSid)) {
       for (const t of navTransforms) {
         if (!t || typeof t !== 'object') continue;
-        if (!t.while_flag || !state.flags.includes(t.while_flag)) continue;
+        if (!t.while_flag || !state.flags.has(t.while_flag)) continue;
         const m = t.match;
         if (!m || typeof m !== 'object') continue;
         let matched = false;
@@ -3165,8 +3165,10 @@ function handleChooseItems(event) {
     });
 
     const fireSuccessFlag = () => {
-      if (event.on_success_set_flag && !state.flags.includes(event.on_success_set_flag)) {
-        state.flags.push(event.on_success_set_flag);
+      // state.flags is a Set in the browser emulator (not an Array as in the
+      // CLI). Set.add is idempotent, so the has-check + push pattern simplifies.
+      if (event.on_success_set_flag) {
+        state.flags.add(event.on_success_set_flag);
       }
     };
     const removeIds = (ids) => {
@@ -5050,7 +5052,7 @@ function handlePromptChoice(event) {
 
   const resolve = (accepted) => {
     const flag = accepted ? event.accept_set_flag : event.decline_set_flag;
-    if (flag && !state.flags.includes(flag)) state.flags.push(flag);
+    if (flag) state.flags.add(flag);  // state.flags is a Set in the browser emulator
     area.innerHTML = `<div class="event-msg">${accepted ? acceptLabel : declineLabel}</div>`;
     processNextEvent();
   };

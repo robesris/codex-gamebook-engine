@@ -6,6 +6,34 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.56.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.30.0
+
+**HTML emulator bugfix: `state.flags` is a `Set`, not an `Array` — three sites used Array methods on it.** Surfaced live by the Creature of Havoc parsing session: the §439 Grognag navigation rewrite (Rule 51) produced a blank screen on first play in the browser, while the CLI emulator played the same book fine. Root cause: the HTML emulator stores `state.flags` as a `Set`, the CLI emulator stores it as an `Array`. Three recently-added Rule sites in the HTML code called `state.flags.includes(...)` / `state.flags.push(...)` (Array methods) on the Set, which crashed silently and rendered nothing.
+
+The three broken sites, all introduced in recent rule additions:
+
+- **Rule 51 navigation_transform check** (`index.html:2472`, the user's smoking gun): `state.flags.includes(t.while_flag)` — never matched any flag because `Set.includes` is undefined. The check threw a TypeError on the first navigation attempt for any book carrying a `navigation_transforms` entry, crashing the browser emulator. The CLI used `Array.includes` correctly so the bug was browser-only.
+- **Rule 40 choose_items `on_success_set_flag`** (`index.html:3168-3169`): `state.flags.includes(...)` guard + `state.flags.push(...)` action. Would have crashed any book with `choose_items mode: "remove"` + `on_success_set_flag` (the canonical voluntary-trade pattern from Rule 50's §155-style encoding) the moment the player completed the drop.
+- **Rule 50 prompt_choice flag set** (`index.html:5053`): `state.flags.includes(...)` guard + `state.flags.push(...)` action. Would have crashed any prompt_choice with `accept_set_flag` or `decline_set_flag`.
+
+The Rule 40 and Rule 50 sites would have surfaced eventually but hadn't because no first-party maintained book exercises those exact HTML-emulator code paths yet. Rule 51 surfaced immediately because CoH §439 is the first real navigation_transform deployment.
+
+Fix: all three sites now use `Set.has()` for membership check and `Set.add()` for write. Since `Set.add` is idempotent, the has-check-then-push pattern simplifies to a single `Set.add` call at Rule 40 and Rule 50 sites.
+
+No schema change; CLI emulator unchanged (it stores flags as an Array and the Array methods are correct there). Codex doc bumped only for the version-identifier block + this CHANGELOG entry.
+
+Versions:
+- Codex v2.55.0 → v2.56.0
+- GBF schema: unchanged (v1.36.0)
+- CLI emulator: unchanged (v3.33.0)
+- HTML emulator v3.29.0 → v3.30.0
+
+Dist bundle rebuilt.
+
+**Followup audit candidate:** the broader pattern (HTML uses `Set` for flags, CLI uses `Array`) is a latent footgun. Future rule additions touching `state.flags` will face the same trap unless someone unifies the storage. A focused engine session could either (a) migrate HTML to Array-storage (matches CLI, but loses Set's O(1) membership) or (b) migrate CLI to Set-storage (matches HTML, requires touching every CLI `state.flags.push` / `state.flags.includes` call site — there are ~20+). Either choice is a clean follow-up; meanwhile, anyone adding new Rule N code that touches `state.flags` in the HTML emulator MUST use `Set.has` / `Set.add` / `Set.delete`, not the Array methods.
+
+---
+
 ## v2.55.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.29.0
 
 **Rule 36 extension — `round_script` mid-round player-choice pause (closes CoH Gap 5).** Surfaced live at CoH §238 (Ophidiotaur). Source-text: when the Ophidiotaur rolls a double for its attack-strength dice, the player MAY opt to Test their Luck to avoid the resulting tail sting — but they don't have to. The faithful encoding requires the engine to pause mid-round and surface a yes/no choice. Pre-v2.55, no such hook existed: the `round_script` ran start-to-finish on its own each round, so the parser was forced to hard-code an auto-resolve rule ("test when LUCK is healthy") that wasn't in the source. Same limitation also covered Warlock §63 / §282 instinct-roll overlays and analogous "Test your Luck to avoid" idioms across the FF family.

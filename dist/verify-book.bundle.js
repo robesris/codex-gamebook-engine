@@ -4,7 +4,7 @@
  * (fengari-web.js, cli-emulator/script-runtime.js, scripts/book-checks.js,
  * scripts/verifier-driver.js) + a standalone validator compiled from
  * codex.schema.json. Rebuild: node scripts/build-browser-verifier.js
- * Built: 2026-05-28T14:04:24.228Z
+ * Built: 2026-05-28T16:52:39.295Z
  * Schema: Gamebook Format (GBF) v1.36.0
  *
  * Usage in the Analysis tool:
