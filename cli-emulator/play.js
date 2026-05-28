@@ -27,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.32.0';
+const CODEX_EMULATOR_VERSION = '3.33.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -2289,6 +2289,15 @@ function getAvailableActions(state, book) {
       break;
     }
 
+    case 'combat_choice': {
+      // Rule 36 extension v2.55.0 — mid-combat-round optional player choice.
+      // The round_script signaled a pause via `combat.pause_for_choice`; the
+      // player's accept/decline answer feeds back into the re-running script.
+      actions.push({ name: 'accept', description: state.pause.accept_label || 'Accept' });
+      actions.push({ name: 'decline', description: state.pause.decline_label || 'Decline' });
+      break;
+    }
+
     case 'choose_items':
       actions.push({ name: 'select_items', description: `Choose ${state.pause.event.count} items: select_items <id1> <id2> ...` });
       break;
@@ -3061,6 +3070,29 @@ function applyAction(state, book, action, args) {
       return processNextEvent(state, book);
     }
 
+    case 'combat_choice': {
+      // Rule 36 extension v2.55.0 (closes CoH Gap 5). On accept/decline,
+      // stash the answer + the captured-phase-1 rolls onto state.combat as
+      // pendingPlayerChoice, clear the pause, and re-invoke runCombatRound.
+      // runCombatRound detects pendingPlayerChoice at its top and routes
+      // into the resume path: same round (no combat.round++), captured
+      // rolls replayed as forcedRolls so phase 2's dice match phase 1's
+      // exactly, combatData.player_choice carries the answer to the
+      // re-running script.
+      if (action !== 'accept' && action !== 'decline') {
+        state.log.push(`combat_choice: unknown action "${action}" — expected accept or decline`);
+        return state;
+      }
+      const pause = state.pause;
+      state.combat.pendingPlayerChoice = {
+        action,
+        capturedRolls: pause.captured_rolls || [],
+      };
+      state.log.push(`combat_choice: ${action} (${pause.prompt})`);
+      state.pause = null;
+      return runCombatRound(null, state, book);
+    }
+
     case 'input_text': {
       const event = state.pause.event;
       const text = args.join(' ').trim();
@@ -3242,7 +3274,17 @@ function runCombatRound(forcedRollsArg, state, book) {
   const cs = (typeof book.rules?.combat_system === 'object' ? book.rules.combat_system : null) || book.rules?.combat_rules_detail || {};
   const roundScript = cs.round_script;
 
-  combat.round++;
+  // Rule 36 extension v2.55.0 (closes CoH Gap 5). Resume-from-mid-round-pause
+  // path. `pendingPlayerChoice`, set by applyAction's 'combat_choice' case
+  // when the player resolves an accept/decline, tells this function that
+  // we're re-invoking the round_script after a pause. In that case we do
+  // NOT increment combat.round (we're continuing the SAME round), we use
+  // the captured rolls so phase 2's dice match phase 1's exactly, and we
+  // surface the player's answer to the script via combat.player_choice.
+  const resume = combat.pendingPlayerChoice;
+  if (!resume) {
+    combat.round++;
+  }
 
   if (!roundScript) {
     state.log.push('ERROR: no round_script defined');
@@ -3379,6 +3421,15 @@ function runCombatRound(forcedRollsArg, state, book) {
     vars: combat.vars || {},
     wounds_dealt: combat.woundsDealt || 0,
     wounds_taken: combat.woundsTaken || 0,
+    // Rule 36 extension v2.55.0 (closes CoH Gap 5). When the script
+    // returned `combat.pause_for_choice` last invocation and the player
+    // resolved the choice via 'accept' or 'decline', this field surfaces
+    // the answer to the re-running script. `null` on the initial round
+    // call; `'accept'` or `'decline'` on the resumed re-run. Scripts
+    // structure their pause logic as: detect the condition, check
+    // `combat.player_choice`; if nil, set `combat.pause_for_choice` and
+    // return; if set, branch on accept/decline and return final damage.
+    player_choice: resume?.action || null,
   };
 
   const context = {
@@ -3401,17 +3452,49 @@ function runCombatRound(forcedRollsArg, state, book) {
     if (k !== 'standard_damage') context[k] = v;
   }
 
-  // Forced rolls from CLI
+  // Forced rolls source priority: when resuming from a mid-round pause,
+  // replay the rolls phase 1 made so phase 2's dice exactly match (Rule 36
+  // v2.55.0). Otherwise use the CLI's --forced-rolls (test fixtures).
   let forcedRolls = null;
-  if (forcedRollsArg && forcedRollsArg.length > 0) {
-    // Each provide_roll arg is a comma-separated set for one roll() call
+  if (resume) {
+    forcedRolls = (resume.capturedRolls || []).map(r => r.slice());
+    combat.pendingPlayerChoice = null;
+  } else if (forcedRollsArg && forcedRollsArg.length > 0) {
     forcedRolls = forcedRollsArg.map(s => s.split(',').map(Number));
   }
 
-  const result = runScript(roundScript, context, forcedRolls);
+  // Rule 36 extension v2.55.0 — capture each roll() call's per-die array so
+  // we can replay them on resume if the script signals a mid-round pause.
+  const capturedRolls = [];
+
+  const result = runScript(roundScript, context, forcedRolls, undefined, capturedRolls);
   if (result.error) {
     state.log.push(`Lua error: ${result.error}`);
     state.pause = { type: 'error', message: result.error };
+    return state;
+  }
+
+  // Rule 36 extension v2.55.0 — mid-round pause for player choice. If the
+  // round_script signaled a pause via `combat.pause_for_choice`, capture
+  // the rolls phase 1 made, persist any combat.vars writeback (consistent
+  // with v2.51.0), set state.pause, and bail BEFORE damage application.
+  // No wounds counter increment, no last_result update, no on_combat_round
+  // bookkeeping — the round hasn't resolved yet. applyAction's
+  // 'combat_choice' case will re-invoke runCombatRound after the player
+  // answers.
+  const pfc = result.combat?.pause_for_choice;
+  if (pfc && typeof pfc === 'object') {
+    if (result.combat && result.combat.vars && typeof result.combat.vars === 'object') {
+      combat.vars = result.combat.vars;
+    }
+    state.pause = {
+      type: 'combat_choice',
+      prompt: typeof pfc.prompt === 'string' ? pfc.prompt : 'Make a choice',
+      accept_label: typeof pfc.accept_label === 'string' ? pfc.accept_label : 'Accept',
+      decline_label: typeof pfc.decline_label === 'string' ? pfc.decline_label : 'Decline',
+      captured_rolls: capturedRolls,
+    };
+    state.log.push(`Combat paused for choice: ${pfc.prompt || '(no prompt)'}`);
     return state;
   }
 

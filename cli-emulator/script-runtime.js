@@ -142,7 +142,7 @@
     return obj;
   }
 
-  function runScript(scriptCode, context, forcedRolls, forcedClock) {
+  function runScript(scriptCode, context, forcedRolls, forcedClock, captureRolls) {
     const L = createSandbox();
     const logs = [];
     // Use forcedRolls by reference when it's a genuine queue (array) so that
@@ -165,9 +165,20 @@
     // Table, dealing zero damage to both sides and hanging the fight
     // indefinitely. Pushing as lua_pushinteger keeps the values as Lua
     // integers so tostring(rval) returns the expected plain-digit key.
+    //
+    // Schema v1.36+ / codex v2.55.0 (Rule 36 extension — closes CoH Gap 5).
+    // The optional `captureRolls` parameter, when an array, receives a copy
+    // of each call's per-die `rolls` array. Used by runCombatRound's
+    // mid-round pause-and-resume path to replay the same dice on the
+    // re-run after the player resolves an accept/decline choice. Capture
+    // is transparent to the script — scripts that don't care just ignore
+    // the parameter.
     lua.lua_pushjsfunction(L, function(L) {
       const formula = to_jsstring(lua.lua_tostring(L, 1));
       const result = rollDice(formula, rollsUsed.length > 0 ? rollsUsed.shift() : null);
+      if (Array.isArray(captureRolls)) {
+        captureRolls.push(result.rolls.slice());
+      }
       lua.lua_createtable(L, 0, 3);
       lua.lua_pushstring(L, to_luastring('total'));
       lua.lua_pushinteger(L, result.total);

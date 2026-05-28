@@ -4785,6 +4785,270 @@ test('Rule 50 v2.46.0: schema-additive — pre-v1.34 books validate unchanged', 
 });
 
 // ============================================================
+// Rule 36 extension v2.55.0 — round_script mid-round player-choice pause (CoH Gap 5)
+// Canonical case: CoH §238 Ophidiotaur tail-sting. Script signals
+// `combat.pause_for_choice`; engine pauses, surfaces UI, resumes with
+// `combat.player_choice` set. Captured rolls replay so phase 2's dice
+// match phase 1's exactly.
+// ============================================================
+
+function buildR55Book(roundScript) {
+  return {
+    metadata: { title: 'B', author: 'a', total_sections: 2 },
+    rules: {
+      stats: [{ name: 'HEALTH' }, { name: 'LUCK' }],
+      health_stat: 'HEALTH',
+      abilities: { available: [] },
+      combat_system: { round_script: roundScript },
+    },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: { ophidiotaur: { name: 'Ophidiotaur', HEALTH: 100 } },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'ophidiotaur', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+  };
+}
+
+test('Rule 36 v2.55.0: combat.pause_for_choice causes engine to pause mid-round', () => {
+  // Script unconditionally pauses on round 1 to verify the pause hook works.
+  const script = `
+    if combat.player_choice == nil then
+      combat.pause_for_choice = {
+        prompt = 'Test prompt',
+        accept_label = 'Yes',
+        decline_label = 'No',
+      }
+      return
+    end
+    combat.damage_to_enemy = 0
+    combat.damage_to_player = 0
+    combat.last_result = 'no_damage'
+  `;
+  const book = buildR55Book(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100, LUCK: 10 };
+  play.navigateTo(state, book, '1');
+  const hp_before = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.pause?.type, 'combat_choice', `pause should be combat_choice; got ${JSON.stringify(state.pause)}`);
+  assertEqual(state.pause?.prompt, 'Test prompt', 'prompt preserved');
+  assertEqual(state.stats.HEALTH, hp_before, 'no damage applied while paused');
+  const actions = play.getAvailableActions(state, book).map(a => a.name);
+  assertTrue(actions.includes('accept') && actions.includes('decline'), `accept and decline exposed; got ${JSON.stringify(actions)}`);
+});
+
+test('Rule 36 v2.55.0: accept resume re-runs round_script with player_choice="accept"', () => {
+  // Script pauses on first call, applies damage based on accept/decline on resume.
+  const script = `
+    if combat.player_choice == nil then
+      combat.pause_for_choice = {
+        prompt = 'Test prompt',
+        accept_label = 'Yes',
+        decline_label = 'No',
+      }
+      return
+    end
+    if combat.player_choice == 'accept' then
+      combat.damage_to_enemy = 0
+      combat.damage_to_player = 7
+      combat.last_result = 'enemy_wounds_player'
+      combat.last_damage = 7
+    else
+      combat.damage_to_enemy = 0
+      combat.damage_to_player = 3
+      combat.last_result = 'enemy_wounds_player'
+      combat.last_damage = 3
+    end
+  `;
+  const book = buildR55Book(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100, LUCK: 10 };
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.pause?.type, 'combat_choice', 'paused before accept');
+  const hp_at_pause = state.stats.HEALTH;
+  play.applyAction(state, book, 'accept', []);
+  assertEqual(state.pause, null, `pause cleared after resume; got ${JSON.stringify(state.pause)}`);
+  assertEqual(hp_at_pause - state.stats.HEALTH, 7, 'accept branch took 7 damage');
+});
+
+test('Rule 36 v2.55.0: decline resume re-runs with player_choice="decline"', () => {
+  const script = `
+    if combat.player_choice == nil then
+      combat.pause_for_choice = { prompt = 'p', accept_label = 'y', decline_label = 'n' }
+      return
+    end
+    combat.damage_to_player = (combat.player_choice == 'accept') and 7 or 3
+    combat.damage_to_enemy = 0
+    combat.last_result = 'enemy_wounds_player'
+    combat.last_damage = combat.damage_to_player
+  `;
+  const book = buildR55Book(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100, LUCK: 10 };
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'decline', []);
+  assertEqual(state.stats.HEALTH, 97, 'decline branch took 3 damage (100 - 3)');
+});
+
+test('Rule 36 v2.55.0: captured rolls replay — phase 2 dice match phase 1', () => {
+  // Phase 1's FIRST roll('2d6') call gets random RNG, captured by the
+  // engine. Phase 2's FIRST roll('2d6') call must replay phase 1's rolls
+  // (forcedRolls-driven). The script structure: both phases call roll()
+  // once, record the value, and the phase-2 check confirms match.
+  const script = `
+    local d = roll('2d6')
+    if combat.player_choice == nil then
+      combat.vars.phase1_d = d.rolls[1] * 10 + d.rolls[2]
+      combat.pause_for_choice = { prompt = 'p', accept_label = 'y', decline_label = 'n' }
+      return
+    end
+    combat.vars.phase2_d = d.rolls[1] * 10 + d.rolls[2]
+    combat.vars.matched = (combat.vars.phase1_d == combat.vars.phase2_d)
+    combat.damage_to_enemy = 0
+    combat.damage_to_player = 0
+    combat.last_result = 'no_damage'
+  `;
+  const book = buildR55Book(script);
+  // Run several times to defeat dice luck — at least one run will involve
+  // a roll where Math.random would differ between calls without capture.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100, LUCK: 10 };
+    play.navigateTo(state, book, '1');
+    play.applyAction(state, book, 'attack', []);
+    play.applyAction(state, book, 'accept', []);
+    assertTrue(state.combat?.vars?.matched === true,
+      `attempt ${attempt}: phase 2 dice must match phase 1 (replay). vars: ${JSON.stringify(state.combat?.vars)}`);
+  }
+});
+
+test('Rule 36 v2.55.0: §238 Ophidiotaur shape — doubles + opt-in luck test', () => {
+  // The canonical CoH §238 round_script: enemy rolls 2d6, if it's a double
+  // and the player chose to test luck, the test fires; if the player declined,
+  // the sting deals 2 damage; if not a double, normal round.
+  const script = `
+    local pad = roll('2d6')  -- player attack dice
+    local ead = roll('2d6')  -- enemy attack dice
+    local enemy_doubled = (ead.rolls[1] == ead.rolls[2])
+
+    if enemy_doubled and combat.player_choice == nil then
+      combat.pause_for_choice = {
+        prompt = 'The Ophidiotaur strikes with its tail. Test your Luck to avoid?',
+        accept_label = 'Test Luck',
+        decline_label = 'Take the sting',
+      }
+      return
+    end
+
+    if enemy_doubled and combat.player_choice == 'accept' then
+      local luck_roll = roll('2d6')
+      if luck_roll.total <= player.luck then
+        combat.damage_to_player = 0
+        combat.last_result = 'no_damage'
+      else
+        combat.damage_to_player = 4
+        combat.last_result = 'enemy_wounds_player'
+        combat.last_damage = 4
+      end
+    elseif enemy_doubled and combat.player_choice == 'decline' then
+      combat.damage_to_player = 2
+      combat.last_result = 'enemy_wounds_player'
+      combat.last_damage = 2
+    else
+      -- Normal round
+      combat.damage_to_player = 0
+      combat.last_result = 'no_damage'
+    end
+    combat.damage_to_enemy = 0
+  `;
+  const book = buildR55Book(script);
+  // Path A: force a non-double enemy roll (3,4) → no pause, normal round.
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100, LUCK: 10 };
+    play.navigateTo(state, book, '1');
+    play.applyAction(state, book, 'attack', ['1,2', '3,4']);
+    assertTrue(state.pause?.type !== 'combat_choice', `non-double round: no combat_choice pause; got ${JSON.stringify(state.pause)}`);
+    assertEqual(state.stats.HEALTH, 100, 'non-double round: no damage');
+  }
+  // Path B: force a double (4,4), player accepts, lucky luck roll → 0 damage.
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100, LUCK: 12 };
+    play.navigateTo(state, book, '1');
+    // Phase 1 rolls: player (1,2), enemy (4,4 — double). Pause fires.
+    play.applyAction(state, book, 'attack', ['1,2', '4,4']);
+    assertEqual(state.pause?.type, 'combat_choice', 'double: paused for luck choice');
+    // Phase 2 replays (1,2), (4,4), then needs a third roll for the luck test.
+    // The applyAction('accept') path doesn't take forced-rolls args — we have
+    // to seed via state.forcedRolls for the luck-test extra roll. The test
+    // exercises the captured-replay (first 2 rolls) + real-RNG-fallthrough
+    // (luck test) path. Set luck high enough (12) that any 2d6 luck roll
+    // (max 12) succeeds, so we don't depend on RNG for the assertion.
+    play.applyAction(state, book, 'accept', []);
+    assertEqual(state.stats.HEALTH, 100, 'lucky test (LUCK=12 ≥ max 2d6=12): no damage');
+  }
+  // Path C: force a double (4,4), player declines → 2 damage (sting).
+  {
+    const state = play.initialState('synthetic');
+    state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+    state.stats = { HEALTH: 100, LUCK: 10 };
+    play.navigateTo(state, book, '1');
+    play.applyAction(state, book, 'attack', ['1,2', '4,4']);
+    play.applyAction(state, book, 'decline', []);
+    assertEqual(state.stats.HEALTH, 98, 'declined: 2 damage from sting');
+  }
+});
+
+test('Rule 36 v2.55.0: combat.vars writeback persists across the pause', () => {
+  // Phase 1 writes to combat.vars; pause; phase 2 reads it back.
+  const script = `
+    if combat.player_choice == nil then
+      combat.vars.from_phase1 = 'persisted'
+      combat.pause_for_choice = { prompt = 'p', accept_label = 'y', decline_label = 'n' }
+      return
+    end
+    combat.vars.read_in_phase2 = combat.vars.from_phase1
+    combat.damage_to_enemy = 0
+    combat.damage_to_player = 0
+    combat.last_result = 'no_damage'
+  `;
+  const book = buildR55Book(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100, LUCK: 10 };
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.combat?.vars?.from_phase1, 'persisted', 'phase 1 write to vars survives pause');
+  play.applyAction(state, book, 'accept', []);
+  assertEqual(state.combat?.vars?.read_in_phase2, 'persisted', 'phase 2 reads back what phase 1 wrote');
+});
+
+test('Rule 36 v2.55.0: round scripts that never set pause_for_choice are unaffected', () => {
+  // Backward-compat: a vanilla "deal 4 damage" script must behave identically
+  // to pre-v2.55. No pause, normal damage application.
+  const script = 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 4\ncombat.last_result = "enemy_wounds_player"';
+  const book = buildR55Book(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100, LUCK: 10 };
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  assertTrue(state.pause?.type !== 'combat_choice', `no combat_choice pause for vanilla scripts; got ${JSON.stringify(state.pause)}`);
+  assertEqual(state.stats.HEALTH, 96, 'normal 4 damage applied');
+});
+
+// ============================================================
 // Rule 51 v2.53.0 — flag-gated navigation_transforms (CoH §439 Grognag shape)
 // ============================================================
 

@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.28.0';
+const CODEX_EMULATOR_VERSION = '3.29.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -1003,9 +1003,30 @@ const LuaEngine = (function() {
 
   // Run a combat round script
   // Returns: { logs: string[], player: {health, attack}, enemy: {health, attack, name}, combat: {last_result, last_damage, ...} }
-  function runCombatRound(script, playerData, enemyData, combatData, extraContext) {
+  function runCombatRound(script, playerData, enemyData, combatData, extraContext, opts) {
     const L = createSandbox();
     const logs = [];
+    // Rule 36 extension v2.55.0 (closes CoH Gap 5). Optional `opts.forcedRolls`
+    // (array-of-arrays — one entry per roll() call) drives roll() returns
+    // deterministically for the resume-from-mid-round-pause path; optional
+    // `opts.captureRolls` records each call's per-die array so the engine
+    // can replay them on resume. See cli-emulator/play.js runCombatRound for
+    // the canonical doc.
+    //
+    // HTML's rollDice consumes from the global window._forcedRollQueue, not
+    // a parameter. We push forcedRolls (flattened) onto the front of that
+    // queue and restore it after the script runs. The captureRolls write
+    // happens inside the Lua roll() callback where each call's return is
+    // visible.
+    const captureRolls = (opts && Array.isArray(opts.captureRolls)) ? opts.captureRolls : null;
+    const priorForcedQueue = window._forcedRollQueue ? window._forcedRollQueue.slice() : [];
+    if (opts && Array.isArray(opts.forcedRolls) && opts.forcedRolls.length > 0) {
+      const flat = [];
+      for (const callRolls of opts.forcedRolls) {
+        if (Array.isArray(callRolls)) for (const r of callRolls) flat.push(r);
+      }
+      window._forcedRollQueue = flat.concat(priorForcedQueue);
+    }
 
     // Register roll() function.
     //
@@ -1022,6 +1043,7 @@ const LuaEngine = (function() {
     lua.lua_pushcfunction(L, function(L) {
       const formula = to_jsstring(lua.lua_tostring(L, 1));
       const result = rollDice(formula);
+      if (captureRolls) captureRolls.push(result.rolls.slice());
       lua.lua_createtable(L, 0, 3);
       lua.lua_pushstring(L, to_luastring('total'));
       lua.lua_pushinteger(L, result.total);
@@ -1115,6 +1137,7 @@ const LuaEngine = (function() {
     if (status !== 0) {
       const err = to_jsstring(lua.lua_tostring(L, -1));
       lua.lua_close(L);
+      window._forcedRollQueue = priorForcedQueue;
       return { error: err, logs };
     }
 
@@ -1132,6 +1155,9 @@ const LuaEngine = (function() {
     lua.lua_pop(L, 1);
 
     lua.lua_close(L);
+    // Restore the forcedRollQueue to whatever the caller had before we
+    // pushed replay rolls onto it (Rule 36 v2.55.0 resume-replay path).
+    window._forcedRollQueue = priorForcedQueue;
     return { player: newPlayer, enemy: newEnemy, combat: newCombat, logs, error: null };
   }
 
@@ -3593,6 +3619,14 @@ function handleCombat(event) {
       // flee-wound message, and any special_rules that were in effect
       // during the fight before the next section renders.
       html += `<button class="btn btn-large" onclick="combatContinueAfterEnd()">Continue</button>`;
+    } else if (window._pendingCombatChoice) {
+      // Rule 36 extension v2.55.0 — mid-round pause for player choice.
+      // Replace the Attack/Flee buttons with the script's accept/decline
+      // pair until the player resolves the choice.
+      const pc = window._pendingCombatChoice;
+      html += `<div class="prompt-text">${pc.prompt}</div>`;
+      html += `<button class="btn" onclick="combatPlayerChoice('accept')">${pc.acceptLabel}</button>`;
+      html += `<button class="btn btn-secondary" onclick="combatPlayerChoice('decline')">${pc.declineLabel}</button>`;
     } else if (enemy.currentHealth > 0 && playerHealth > 0) {
       html += `<button class="btn" onclick="combatAttack()">Attack</button>`;
       if (c.fleeTo) {
@@ -3825,11 +3859,37 @@ function handleCombat(event) {
     else processNextEvent();
   };
 
+  // Rule 36 extension v2.55.0 (closes CoH Gap 5). Click handler for the
+  // mid-round accept/decline buttons surfaced by `combat.pause_for_choice`.
+  // Stashes the answer + the captured-phase-1 rolls on c.pendingPlayerChoice,
+  // clears window._pendingCombatChoice, and re-invokes the combat-round
+  // runner. The runner detects pendingPlayerChoice at its top and routes
+  // into the resume path: same round (no roundNum++), captured rolls
+  // replayed as forcedRolls, combat.player_choice carries the answer.
+  window.combatPlayerChoice = function(answer) {
+    if (answer !== 'accept' && answer !== 'decline') return;
+    const c = window._combat;
+    if (!c || !window._pendingCombatChoice) return;
+    c.pendingPlayerChoice = {
+      action: answer,
+      capturedRolls: window._pendingCombatChoice.capturedRolls || [],
+    };
+    c.combatLog.push(`<span>You chose: ${answer === 'accept' ? window._pendingCombatChoice.acceptLabel : window._pendingCombatChoice.declineLabel}</span>`);
+    window._pendingCombatChoice = null;
+    window.combatAttack();
+  };
+
   window.combatAttack = function() {
     const c = window._combat;
     const enemy = c.enemies[c.currentEnemyIdx];
     const { attackStat, healthStat } = getCombatStats();
-    c.roundNum++;
+    // Rule 36 extension v2.55.0 (closes CoH Gap 5). On a resume-from-pause
+    // path (pendingPlayerChoice set), do NOT increment roundNum — we're
+    // continuing the SAME round. See cli-emulator/play.js for the canonical doc.
+    const resume = c.pendingPlayerChoice;
+    if (!resume) {
+      c.roundNum++;
+    }
 
     // Get the round script from the combat system
     const cs = gameData.rules.combat_system;
@@ -3951,6 +4011,10 @@ function handleCombat(event) {
       vars: c.vars || {},
       wounds_dealt: c.woundsDealt || 0,
       wounds_taken: c.woundsTaken || 0,
+      // Rule 36 extension v2.55.0 (closes CoH Gap 5). Surfaces the player's
+      // accept/decline answer to the resumed round_script after a mid-round
+      // combat_choice pause. See cli-emulator/play.js for the canonical doc.
+      player_choice: c.pendingPlayerChoice?.action || null,
     };
 
     // Expose equipment to the round_script as player.equipment so
@@ -3981,7 +4045,19 @@ function handleCombat(event) {
     const preEnemyHealth = enemy.currentHealth;
     const prePlayerHealth = getPlayerHealth();
 
-    const result = LuaEngine.runCombatRound(roundScript, playerData, enemyData, combatData, extraContext);
+    // Rule 36 extension v2.55.0 — capture each roll() call's per-die array
+    // so the engine can replay them on resume if the script signals a
+    // mid-round pause. Forced rolls come from a prior pause (resume.capturedRolls)
+    // when re-running.
+    const capturedRolls = [];
+    const runOpts = {
+      captureRolls: capturedRolls,
+      forcedRolls: resume?.capturedRolls || null,
+    };
+    if (resume) {
+      c.pendingPlayerChoice = null;  // consume the resume marker
+    }
+    const result = LuaEngine.runCombatRound(roundScript, playerData, enemyData, combatData, extraContext, runOpts);
 
     if (result.error) {
       c.combatLog.push(`<span class="hit">Lua error: ${result.error}</span>`);
@@ -3995,6 +4071,31 @@ function handleCombat(event) {
     if ((result.enemy && result.enemy.health !== undefined && result.enemy.health !== preEnemyHealth) ||
         (result.player && result.player.health !== undefined && result.player.health !== prePlayerHealth)) {
       c.combatLog.push(`<span class="hit">ERROR: round_script uses the pre-v1.5 contract (mutated *.health directly). Migrate to combat.damage_to_enemy / combat.damage_to_player. See Rule 18.</span>`);
+      c.renderCombat();
+      return;
+    }
+
+    // Rule 36 extension v2.55.0 — mid-round pause for player choice. If the
+    // round_script signaled `combat.pause_for_choice`, capture the rolls
+    // phase 1 made, persist combat.vars writeback (v2.51.0 contract), set
+    // window._pauseForChoice with the captured rolls, render the choice UI,
+    // and bail BEFORE damage application. The accept/decline click handler
+    // will set c.pendingPlayerChoice and re-invoke the combat-round runner.
+    const pfc = result.combat?.pause_for_choice;
+    if (pfc && typeof pfc === 'object') {
+      if (result.combat && result.combat.vars && typeof result.combat.vars === 'object') {
+        c.vars = result.combat.vars;
+      }
+      const promptText = typeof pfc.prompt === 'string' ? pfc.prompt : 'Make a choice';
+      const acceptLabel = typeof pfc.accept_label === 'string' ? pfc.accept_label : 'Accept';
+      const declineLabel = typeof pfc.decline_label === 'string' ? pfc.decline_label : 'Decline';
+      window._pendingCombatChoice = {
+        capturedRolls,
+        prompt: promptText,
+        acceptLabel,
+        declineLabel,
+      };
+      c.combatLog.push(`<span>Combat paused for choice: ${promptText}</span>`);
       c.renderCombat();
       return;
     }

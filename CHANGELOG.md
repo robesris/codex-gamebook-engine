@@ -6,6 +6,68 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.55.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.29.0
+
+**Rule 36 extension — `round_script` mid-round player-choice pause (closes CoH Gap 5).** Surfaced live at CoH §238 (Ophidiotaur). Source-text: when the Ophidiotaur rolls a double for its attack-strength dice, the player MAY opt to Test their Luck to avoid the resulting tail sting — but they don't have to. The faithful encoding requires the engine to pause mid-round and surface a yes/no choice. Pre-v2.55, no such hook existed: the `round_script` ran start-to-finish on its own each round, so the parser was forced to hard-code an auto-resolve rule ("test when LUCK is healthy") that wasn't in the source. Same limitation also covered Warlock §63 / §282 instinct-roll overlays and analogous "Test your Luck to avoid" idioms across the FF family.
+
+No schema change. The fix is a runtime convention on the per-round Lua `combat` table, parallel to v2.51.0's `combat.vars` / `wounds_dealt` / `wounds_taken`. Round_scripts that never reference the new field behave identically to pre-v2.55:
+
+- **`combat.pause_for_choice`** (write). Shape: `{ prompt, accept_label, decline_label }`. When the script writes this and returns, the engine pauses the round: no damage applied, no `last_result` updated, no wound counters incremented, no `combat.round++`. State.pause receives `{ type: 'combat_choice', prompt, accept_label, decline_label, captured_rolls }`.
+- **`combat.player_choice`** (read). On the resumed re-run of the round_script after the player's accept/decline, carries `"accept"` or `"decline"`. `null` on the initial round call.
+
+Captured-rolls replay. The script's `roll()` calls during phase 1 are captured by the engine via a new optional 5th param to `runScript` (CLI) and a new `opts.captureRolls` param to `LuaEngine.runCombatRound` (HTML). When phase 2 resumes after the player's answer, the engine replays those rolls as forced rolls so phase 2's dice match phase 1's exactly. Critical because most pause conditions are dice-driven ("the enemy rolled a double") — re-rolling in phase 2 would break the condition. Extra rolls in phase 2 (e.g. a Luck-test roll in the accept branch) get real RNG. Transparent to the script writer.
+
+Combat.vars writeback persists across the pause. Consistent with v2.51.0 semantics: a phase-1 write to `combat.vars` is read back into `state.combat.vars` before the engine pauses, and phase 2's script reads the same vars it wrote in phase 1.
+
+Canonical CoH §238 Ophidiotaur encoding now expressible as a normal round_script:
+
+```lua
+local pad = roll('2d6'); local ead = roll('2d6')
+local enemy_doubled = (ead.rolls[1] == ead.rolls[2])
+
+if enemy_doubled and combat.player_choice == nil then
+  combat.pause_for_choice = {
+    prompt = 'The Ophidiotaur strikes with its tail. Test your Luck to avoid?',
+    accept_label = 'Test Luck',
+    decline_label = 'Take the sting',
+  }
+  return
+end
+
+if enemy_doubled and combat.player_choice == 'accept' then
+  local luck = roll('2d6')
+  combat.damage_to_player = (luck.total <= player.luck) and 0 or 4
+  -- ... last_result, etc.
+elseif enemy_doubled and combat.player_choice == 'decline' then
+  combat.damage_to_player = 2
+  -- ...
+else
+  -- normal attack-strength comparison
+end
+```
+
+Engine wiring:
+
+- **CLI emulator** (`cli-emulator/play.js`): new resume detection at top of `runCombatRound` (skips `combat.round++` if `combat.pendingPlayerChoice` is set); new `capturedRolls` array passed to `runScript`'s 5th param; new pause-detection branch after `runScript` returns; new `case 'combat_choice'` in `applyAction` (validates accept/decline, stashes `pendingPlayerChoice`, clears pause, re-invokes runCombatRound); new `case 'combat_choice'` in `getAvailableActions` (surfaces accept/decline with the script's labels).
+- **CLI script-runtime** (`cli-emulator/script-runtime.js`): `runScript` signature extended with an optional 5th `captureRolls` parameter; if an array, each `roll()` call's per-die `rolls` array is pushed into it.
+- **HTML emulator** (`index.html`): parallel changes. `LuaEngine.runCombatRound` accepts an `opts` parameter (`opts.forcedRolls`, `opts.captureRolls`); forced rolls are flattened into `window._forcedRollQueue` and the queue is save/restored around script execution. Combat UI: new `combatPlayerChoice` window function; renderCombat shows the accept/decline buttons when `window._pendingCombatChoice` is set.
+
+Triage note: single-site recurrence at decision time (CoH §238) but cross-book pattern recurrence — the FF "Test your Luck to avoid" overlay appears in Warlock §63 / §282 and analogous idioms recur across the series. Shipped because the live parsing session hit it and the auto-resolve workaround was unfaithful; implementation cost was bounded (~200 lines across CLI + HTML + script-runtime + tests); design reused the v2.51.0 combat.vars infrastructure cleanly; same convention generalizes to any "round_script needs to pause for a player decision" idiom.
+
+Tests: 125/125 → 132/132. Seven new Rule 36 v2.55.0 tests cover pause-fires-when-script-sets-field, accept-resume, decline-resume, captured-rolls-replay (5 attempts to defeat RNG luck), the canonical §238 Ophidiotaur shape in all three paths, combat.vars persistence across the pause, and a regression check that vanilla scripts are unaffected.
+
+Versions:
+- Codex v2.54.0 → v2.55.0
+- GBF schema: unchanged (v1.36.0)
+- CLI emulator v3.32.0 → v3.33.0
+- HTML emulator v3.28.0 → v3.29.0
+
+Cross-book validator sweep: 0 schema errors across all six first-party books. Dist bundle rebuilt.
+
+CoH Gap status post-v2.55.0: Gaps 1, 2, 4, 5, 6 resolved (v2.50, v2.51, v2.51, v2.55, v2.53 respectively). Only Gap 3 (cross-component same-round predicates — the Hornet's "UNLESS player also rolled doubles" half) remains open; round_script + `combat.vars` is faithful there.
+
+---
+
 ## v2.54.0 / GBF v1.36.0 / CLI emulator v3.32.0 / HTML emulator v3.28.0
 
 **User-audience discipline: "Codex density is not user technicality."** Surfaced when the same Creature of Havoc parsing session that motivated the v2.52.0 Step 2c rewrite continued surfacing implementation vocabulary (schema field names, version pins, file/line refs, validator-check IDs) to a non-technical user. The diagnosis: reading this densely technical codex was shifting the agent's model of the user toward "they want technical depth" — the opposite of the truth. The codex is dense BECAUSE the engine is doing the technical lifting so the user doesn't have to.
