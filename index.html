@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.26.0';
+const CODEX_EMULATOR_VERSION = '3.27.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -3311,6 +3311,8 @@ function handleCombat(event) {
         damageCaps: [],
         woundsDealt: 0,
         woundsTaken: 0,
+        // Rule 36 extension v2.51.0 — see cli-emulator/play.js for the canonical doc.
+        vars: {},
         round: 0,
         consecutiveLosses: 0,
         originSection: state.currentSection,
@@ -3721,6 +3723,11 @@ function handleCombat(event) {
     // gets its own interrupt window.
     woundsDealt: 0,
     woundsTaken: 0,
+    // Rule 36 extension v2.51.0 — per-fight scratch table for round_scripts.
+    // See cli-emulator/play.js for the canonical doc. Restored from
+    // state.activeCombat.vars on Rule 46 resume so a paused/resumed fight
+    // preserves cross-round state.
+    vars: (resumed && state.activeCombat && typeof state.activeCombat.vars === 'object') ? state.activeCombat.vars : {},
     interruptAfterPlayerWounds: event.interrupt_after_player_wounds || null,
     interruptAfterEnemyWounds: event.interrupt_after_enemy_wounds || null,
     lifecycleMode,
@@ -3906,6 +3913,10 @@ function handleCombat(event) {
       // Expose applied damage_interactions for scripts that want to
       // introspect them. Most won't.
       damage_interactions: c.appliedDamageInteractions || [],
+      // Rule 36 extension v2.51.0 — see cli-emulator/play.js for the canonical doc.
+      vars: c.vars || {},
+      wounds_dealt: c.woundsDealt || 0,
+      wounds_taken: c.woundsTaken || 0,
     };
 
     // Expose equipment to the round_script as player.equipment so
@@ -4082,6 +4093,12 @@ function handleCombat(event) {
       c.combatLog.push(`<span class="hit">${msg}</span>`);
     }
 
+    // Rule 36 extension v2.51.0 — persist the per-fight scratch table.
+    // See cli-emulator/play.js for the canonical doc.
+    if (result.combat && result.combat.vars && typeof result.combat.vars === 'object') {
+      c.vars = result.combat.vars;
+    }
+
     // Store last result for luck testing etc.
     const lr = result.combat?.last_result;
     if (lr === 'player_wounds_enemy') {
@@ -4223,6 +4240,8 @@ function handleCombat(event) {
         damageCaps: (c.appliedDamageCaps || []).slice(),
         woundsDealt: c.woundsDealt || 0,
         woundsTaken: c.woundsTaken || 0,
+        // Rule 36 extension v2.51.0 — preserve scratch table across Rule 46 pause/resume.
+        vars: c.vars || {},
         round: c.roundNum,
         consecutiveLosses: c.consecutiveLosses || 0,
         originSection: state.currentSection,

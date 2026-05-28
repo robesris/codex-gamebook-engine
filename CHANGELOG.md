@@ -6,6 +6,55 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.51.0 / GBF v1.35.0 / CLI emulator v3.31.0 / HTML emulator v3.27.0
+
+**Rule 36 extension — `round_script` cross-round persistence (closes CoH Gap 4; retracts the v2.50.0 "round_script is faithful here" claim).** Surfaced when the CoH parser empirically verified at the v2.50.0 pinned commit (CLI v3.30.0) that no slot — readable or writable — existed for a round_script to carry state from one round to the next, despite the v2.50.0 codex documentation stating round_script was a faithful workaround for Gap 4. The verified failure modes: (a) the per-round `combat` table was rebuilt fresh every round and only `last_result` / `last_damage` were read back from `result.combat`; arbitrary keys like `combat.vars.rage_active` were silently discarded; (b) `game_state` was round-tripped for SECTION scripts but not for COMBAT round scripts; (c) the engine maintained `state.combat.woundsDealt` / `woundsTaken` but did not pass them INTO the script's `combatData` so scripts couldn't read them either. Net effect: the CoH §263 Manic Beast rage-buff (and any "buff depends on what happened last round" idiom) was unencodable.
+
+Fix shipped in v2.51.0 — three additions to the per-round Lua `combat` table, with the corresponding wiring in both emulators. No schema change (runtime Lua context only):
+
+- **`combat.vars`** (read/write). Per-fight scratch table. Initialised empty on combat start; restored from `state.activeCombat.vars` on Rule 46 resume. The engine reads `result.combat.vars` back after each round and persists it to `state.combat.vars`. Round-tripped through `pauseCombat`'s snapshot so paused/resumed combat preserves state. Scripts that ignore the field are unaffected.
+- **`combat.wounds_dealt`** (read-only). Engine-maintained monotonic counter — incremented when the prior round's `last_result` is `player_wounds_enemy`. Resets to 0 on every combat start AND on every Rule 46 resume (each resume opens a fresh interrupt window — matches the existing Rule 46 semantics).
+- **`combat.wounds_taken`** (read-only). Same shape but for `enemy_wounds_player` rounds.
+
+The canonical CoH Manic Beast §263 rage-buff shape now expresses naturally in a round_script:
+
+```lua
+combat.vars = combat.vars or { rage_active = false }
+local enemy_bonus = combat.vars.rage_active and 2 or 0
+-- ... attack-strength math, with the bonus on the enemy's roll ...
+if player_wounded_enemy then
+  combat.last_result = 'player_wounds_enemy'
+  combat.vars.rage_active = true   -- bonus active next round
+else
+  combat.vars.rage_active = false  -- any non-wound round clears the bonus
+end
+```
+
+The retain-or-clear nuance (rage stays true on consecutive wounds, clears on any non-wound round) is naturally expressed in the conditional.
+
+Documentation correction: the v2.50.0 Rule 36 extension sub-section AND the v2.50.0 version-identifier block both claimed "round_script is faithful here" for Gap 4. Both have been corrected in this bump. The new Rule 36 extension v2.51.0 sub-section in the codex doc carries the retraction prominently.
+
+Relationship to the deferred Gap 4 design (`on_round_start` triggered_effect hook): v2.51.0 ships the per-fight scratch slot half of the original Gap 4 design but not the declarative trigger half. Books that need the buff-as-data shape can still encode it via round_script + `combat.vars` until the declarative version lands; if/when that arrives, it would be a smooth additive shape.
+
+Emulator wiring:
+
+- CLI emulator (`cli-emulator/play.js`): added `vars: {}` to the `state.combat` constructor (with conditional restore from `state.activeCombat.vars` on resume); added `vars`, `wounds_dealt`, `wounds_taken` to the per-round `combatData` passed to `runScript`; added a writeback of `result.combat.vars` to `state.combat.vars` after each round; round-tripped `vars` through `pauseCombat`'s snapshot. Also added `vars: {}` to the Rule 46 'modify' path's activeCombat seeding.
+- HTML emulator (`index.html`): parallel changes to the matching code paths.
+
+Tests: 113/113 → 118/118. Six new Rule 36 v2.51.0 tests cover vars-persists-across-rounds, wounds-counters-script-readable, the CoH Manic Beast retain/clear shape across four rounds, Rule 46 pause/resume preservation, and a regression check that pre-v2.51 round_scripts ignoring the new field are unaffected.
+
+Versions:
+- Codex v2.50.0 → v2.51.0
+- GBF schema: unchanged (v1.35.0)
+- CLI emulator v3.30.0 → v3.31.0
+- HTML emulator v3.26.0 → v3.27.0
+
+Cross-book validator sweep: 0 schema errors across all six first-party books (sanity check; no schema change). Dist bundle rebuilt.
+
+CoH Gap status post-v2.51.0: Gaps 1, 2, 4 resolved. Gap 3 (cross-component same-round predicates) and Gap 5 (optional mid-combat player choice) remain open — see `known_issues.md` in the books repo.
+
+---
+
 ## v2.50.0 / GBF v1.35.0 / CLI emulator v3.30.0 / HTML emulator v3.26.0
 
 **Rule 36 extension — `applies_on: "double"` keyword + `instant_death` effect verb.** Surfaced during a Creature of Havoc (FF#24) fresh-parse in an incognito chat. The CoH parser hit three enemies (Giant Hornet, Manic Beast, Ophidiotaur) with per-round stateful combat rules that the declarative `triggered_effects` layer couldn't express, forcing custom `round_script`s. The parser filed five gaps; the cross-book triage shipped two of them in this bump and filed the remaining three for follow-up.

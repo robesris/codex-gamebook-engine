@@ -4785,6 +4785,229 @@ test('Rule 50 v2.46.0: schema-additive — pre-v1.34 books validate unchanged', 
 });
 
 // ============================================================
+// Rule 36 extension v2.51.0 — round_script cross-round state (CoH Gap 4)
+// Adds three new fields to the per-round combatData passed to round_scripts:
+//   - combat.vars        — read/write per-fight scratch table
+//   - combat.wounds_dealt — read-only engine-maintained counter
+//   - combat.wounds_taken — read-only engine-maintained counter
+// vars is persisted back to state.combat.vars after each round, and round-
+// trips through state.activeCombat across Rule 46 pause/resume.
+// ============================================================
+
+function buildR36VarsBook(roundScript) {
+  return {
+    metadata: { title: 'B', author: 'a', total_sections: 2 },
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      abilities: { available: [] },
+      combat_system: { round_script: roundScript },
+    },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: { test_enemy: { name: 'Test Enemy', HEALTH: 100 } },
+    sections: {
+      '1': { text: 'fight', events: [{ type: 'combat', enemy_ref: 'test_enemy', win_to: '2', flee_to: null }], choices: [] },
+      '2': { text: 'won', events: [], choices: [] },
+    },
+  };
+}
+
+test('Rule 36 v2.51.0: combat.vars persists across rounds', () => {
+  // A round_script that increments combat.vars.counter every round.
+  // After three runScript calls, vars.counter should be 3 — proving that
+  // (a) the engine writes back result.combat.vars and (b) the next round
+  // re-injects combat.vars with the persisted value.
+  const script = `
+    combat.vars = combat.vars or {}
+    combat.vars.counter = (combat.vars.counter or 0) + 1
+    combat.damage_to_enemy = 0
+    combat.damage_to_player = 0
+    combat.last_result = 'no_damage'
+  `;
+  const book = buildR36VarsBook(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'attack', []);
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.combat?.vars?.counter, 3, `combat.vars.counter should be 3 after 3 rounds; got ${JSON.stringify(state.combat?.vars)}`);
+});
+
+test('Rule 36 v2.51.0: wounds_dealt / wounds_taken are readable from round_script', () => {
+  // The round_script reads combat.wounds_dealt from the prior round and
+  // copies it into combat.vars.observed_wounds. After two rounds where
+  // the player wounded the enemy, observed_wounds should show the count
+  // the engine maintained.
+  const script = `
+    combat.vars = combat.vars or {}
+    combat.vars.observed_wounds_dealt = combat.wounds_dealt
+    combat.vars.observed_wounds_taken = combat.wounds_taken
+    -- Tag this round as a player wound so woundsDealt increments
+    combat.damage_to_enemy = 1
+    combat.damage_to_player = 0
+    combat.last_result = 'player_wounds_enemy'
+    combat.last_damage = 1
+  `;
+  const book = buildR36VarsBook(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  play.navigateTo(state, book, '1');
+  // Round 1: enters with wounds_dealt=0, deals a wound → engine increments to 1.
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.combat?.vars?.observed_wounds_dealt, 0, 'round 1 observes wounds_dealt=0 (pre-round)');
+  // Round 2: enters with wounds_dealt=1.
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.combat?.vars?.observed_wounds_dealt, 1, `round 2 observes wounds_dealt=1; got ${state.combat?.vars?.observed_wounds_dealt}`);
+});
+
+test('Rule 36 v2.51.0: CoH Manic Beast rage-buff shape — rage flag retained across consecutive wound rounds, cleared on a non-wound round', () => {
+  // Encodes the §263 source-text rule via combat.vars:
+  //   - rage_active starts false
+  //   - On a round the player wounds the enemy, rage_active is set true for next round
+  //   - On a round where rage_active is true, enemy gets a +2 attack-strength bonus (we
+  //     encode this as +2 damage_to_player for test visibility)
+  //   - If the player wounds again, rage_active stays true
+  //   - If not, rage_active clears
+  const script = `
+    combat.vars = combat.vars or { rage_active = false }
+    -- Apply rage buff if active this round
+    if combat.vars.rage_active then
+      combat.damage_to_player = 2
+      combat.last_result = 'enemy_wounds_player'
+    else
+      combat.damage_to_player = 0
+      combat.last_result = 'no_damage'
+    end
+    -- Did the player wound this round? Force via forcedRolls (test fixture)
+    -- For simplicity here, use combat.vars.scripted_wound to externally drive.
+    if combat.vars.scripted_wound then
+      combat.damage_to_enemy = 1
+      combat.last_result = 'player_wounds_enemy'
+      combat.last_damage = 1
+      combat.vars.rage_active = true   -- bonus active NEXT round
+    else
+      combat.vars.rage_active = false  -- no wound dealt → bonus clears
+    end
+  `;
+  const book = buildR36VarsBook(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  play.navigateTo(state, book, '1');
+
+  // Round 1: pre-seed scripted_wound = true. rage_active starts false (no buff),
+  // player wounds → rage_active becomes true for next round.
+  state.combat.vars = { rage_active: false, scripted_wound: true };
+  const hp1 = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.stats.HEALTH, hp1, 'R1: no rage buff active → player takes 0 damage');
+  assertEqual(state.combat?.vars?.rage_active, true, 'R1: rage_active set true (player wounded)');
+
+  // Round 2: rage_active is true (buff applies, player takes +2). Keep wounding.
+  state.combat.vars.scripted_wound = true;
+  const hp2 = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(hp2 - state.stats.HEALTH, 2, 'R2: rage buff active → player takes 2 damage');
+  assertEqual(state.combat?.vars?.rage_active, true, 'R2: rage_active retained (player wounded again)');
+
+  // Round 3: rage_active is true. Player does NOT wound → buff applies one more
+  // time (already started this round), and rage_active clears for next round.
+  state.combat.vars.scripted_wound = false;
+  const hp3 = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(hp3 - state.stats.HEALTH, 2, 'R3: rage buff fires (from prior round) → player takes 2 damage');
+  assertEqual(state.combat?.vars?.rage_active, false, 'R3: rage_active cleared (no wound this round)');
+
+  // Round 4: rage_active false again. Player does not wound. No buff.
+  state.combat.vars.scripted_wound = false;
+  const hp4 = state.stats.HEALTH;
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.stats.HEALTH, hp4, 'R4: rage cleared → player takes 0 damage');
+});
+
+test('Rule 36 v2.51.0: combat.vars round-trips through Rule 46 pause/resume', () => {
+  // Verifies state.activeCombat.vars persistence across a Rule 46 pause.
+  // A round_script writes vars.token; we then trigger an interrupt_after_
+  // player_wounds pause; we read state.activeCombat.vars; we resume; the
+  // resumed combat's first script call should see vars.token preserved.
+  const script = `
+    combat.vars = combat.vars or {}
+    combat.vars.token = combat.vars.token or 'set_in_round_1'
+    combat.vars.last_round_seen = combat.round
+    combat.damage_to_enemy = 1
+    combat.damage_to_player = 0
+    combat.last_result = 'player_wounds_enemy'
+    combat.last_damage = 1
+  `;
+  const book = {
+    metadata: { title: 'B', author: 'a', total_sections: 3 },
+    rules: {
+      stats: [{ name: 'HEALTH' }],
+      health_stat: 'HEALTH',
+      abilities: { available: [] },
+      combat_system: { round_script: script },
+    },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: { test_enemy: { name: 'Test Enemy', HEALTH: 100 } },
+    sections: {
+      '1': {
+        text: 'fight',
+        events: [{
+          type: 'combat',
+          enemy_ref: 'test_enemy',
+          win_to: '3',
+          flee_to: null,
+          interrupt_after_enemy_wounds: { count: 1, target: '2' },
+        }],
+        choices: [],
+      },
+      '2': {
+        text: 'interlude',
+        events: [{ type: 'combat', enemy_ref: 'test_enemy', mode: 'resume', win_to: '3', flee_to: null }],
+        choices: [],
+      },
+      '3': { text: 'won', events: [], choices: [] },
+    },
+  };
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  play.navigateTo(state, book, '1');
+  // Round 1 → wound dealt → interrupt fires → pause at §2.
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.currentSection, '2', 'after wound, pause routes to §2');
+  assertTrue(state.activeCombat?.vars?.token === 'set_in_round_1', `vars.token persisted to activeCombat; got ${JSON.stringify(state.activeCombat?.vars)}`);
+  // Resume at §2 → script runs again; it reads vars.token and finds the prior value.
+  play.applyAction(state, book, 'attack', []);
+  assertEqual(state.combat?.vars?.token, 'set_in_round_1', 'vars.token survives Rule 46 resume');
+  // last_round_seen should now reflect the resumed round (round counter is
+  // preserved on resume per state.activeCombat.round).
+  assertTrue(typeof state.combat?.vars?.last_round_seen === 'number', 'last_round_seen updated on resumed round');
+});
+
+test('Rule 36 v2.51.0: round_scripts that ignore combat.vars are unaffected', () => {
+  // Backward-compat regression: a round_script that never touches
+  // combat.vars must behave identically to pre-v2.51.0. We confirm by
+  // running a vanilla "deal 4 damage" script and checking that
+  // combat.vars stays empty (the field is exposed but never written).
+  const script = 'combat.damage_to_enemy = 0\ncombat.damage_to_player = 4';
+  const book = buildR36VarsBook(script);
+  const state = play.initialState('synthetic');
+  state.frontmatterDone = true; state.creationDone = true; state.pause = null;
+  state.stats = { HEALTH: 100 };
+  play.navigateTo(state, book, '1');
+  play.applyAction(state, book, 'attack', []);
+  // vars exists on state.combat (engine-initialised) but the script never wrote
+  // anything, so its keys should be empty.
+  assertEqual(Object.keys(state.combat?.vars || {}).length, 0, `vars should stay empty when script does not write it; got ${JSON.stringify(state.combat?.vars)}`);
+});
+
+// ============================================================
 // Rule 36 extension v2.50.0 (schema v1.35) — applies_on "double" + instant_death
 // Closes CoH gaps 1 & 2 from the engine-feedback handoff.
 // ============================================================

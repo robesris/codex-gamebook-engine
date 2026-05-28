@@ -27,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.30.0';
+const CODEX_EMULATOR_VERSION = '3.31.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1781,6 +1781,10 @@ function startCombat(event, state, book) {
         damageCaps: [],
         woundsDealt: 0,
         woundsTaken: 0,
+        // Rule 36 extension v2.51.0 — initialise the per-fight scratch
+        // table for round_scripts. A Rule 46 'modify' that seeds a new
+        // activeCombat starts the scratch empty, same as a fresh start.
+        vars: {},
         round: 0,
         consecutiveLosses: 0,
         originSection: state.currentSection,
@@ -2041,6 +2045,17 @@ function startCombat(event, state, book) {
     // increment).
     woundsDealt: 0,
     woundsTaken: 0,
+    // Schema v1.35.0 / codex v2.51.0 (Rule 36 extension — closes CoH Gap 4).
+    // Per-fight scratch table that round_scripts may read/write across rounds.
+    // Initialised empty on combat start; restored from state.activeCombat.vars
+    // on Rule 46 resume; round-trips back through pauseCombat's snapshot.
+    // Use for source-text mechanics that need cross-round running state — the
+    // canonical case is the CoH Manic Beast rage buff (set true when a wound
+    // is dealt, read next round, retained or cleared based on this round's
+    // outcome). Distinguished from the engine-maintained woundsDealt /
+    // woundsTaken counters (read-only at the script API) by being script-
+    // owned and arbitrary-shaped.
+    vars: (resumed && state.activeCombat && typeof state.activeCombat.vars === 'object') ? state.activeCombat.vars : {},
     interruptAfterPlayerWounds: event.interrupt_after_player_wounds || null,
     interruptAfterEnemyWounds: event.interrupt_after_enemy_wounds || null,
     interruptAfterRounds: event.interrupt_after_rounds || null,
@@ -3307,6 +3322,18 @@ function runCombatRound(forcedRollsArg, state, book) {
     // can read them. Most won't — interaction application is the
     // emulator's job, not the script's.
     damage_interactions: combat.appliedDamageInteractions || [],
+    // Rule 36 extension v2.51.0 — cross-round state for round_scripts.
+    // `vars` is a per-fight scratch table the script may read/write; the
+    // engine round-trips it back into state.combat.vars after each round
+    // and through state.activeCombat across Rule 46 pause/resume.
+    // `wounds_dealt` / `wounds_taken` are engine-maintained counters
+    // (incremented from the prior round's last_result tag — see the
+    // post-script bookkeeping below); exposed read-only to scripts that
+    // need to gate on "did I wound the enemy on the previous round?"
+    // (canonical case: CoH §263 Manic Beast rage buff).
+    vars: combat.vars || {},
+    wounds_dealt: combat.woundsDealt || 0,
+    wounds_taken: combat.woundsTaken || 0,
   };
 
   const context = {
@@ -3469,6 +3496,14 @@ function runCombatRound(forcedRollsArg, state, book) {
 
   combat.lastRoundResult = result.combat?.last_result;
   combat.lastDamage = result.combat?.last_damage || 0;
+
+  // Rule 36 extension v2.51.0 — persist the per-fight scratch table.
+  // Scripts that mutate combat.vars write the new table here; scripts that
+  // ignore the field leave combat.vars unchanged (the writeback no-ops when
+  // result.combat.vars is missing or not an object).
+  if (result.combat && result.combat.vars && typeof result.combat.vars === 'object') {
+    combat.vars = result.combat.vars;
+  }
 
   // Schema v1.30+ / Rule 46. Update monotonic per-fight wound counters
   // from the round_script's last_result tag. These drive the
@@ -3695,6 +3730,10 @@ function checkCombatEnd(state, book) {
       damageCaps: (combat.appliedDamageCaps || []).slice(),
       woundsDealt: combat.woundsDealt || 0,
       woundsTaken: combat.woundsTaken || 0,
+      // Rule 36 extension v2.51.0 — preserve the per-fight scratch table
+      // across a Rule 46 pause/resume so round_scripts on the resumed half
+      // see the same combat.vars the pre-pause half wrote.
+      vars: combat.vars || {},
       round: combat.round,
       consecutiveLosses: combat.consecutiveLosses || 0,
       originSection: state.currentSection,
