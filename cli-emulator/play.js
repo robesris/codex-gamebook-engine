@@ -27,7 +27,7 @@
 
 'use strict';
 
-const CODEX_EMULATOR_VERSION = '3.31.0';
+const CODEX_EMULATOR_VERSION = '3.32.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` before making a
 // commit that touches the emulator. Displayed in the HTML emulator's
@@ -1260,7 +1260,52 @@ function processCreationSteps(state, book) {
 }
 
 function navigateTo(state, book, sectionId) {
-  const sid = String(sectionId);
+  let sid = String(sectionId);
+  // Rule 51 (schema v1.36+): apply navigation_transforms BEFORE looking up
+  // the section. A transform whose `while_flag` is currently set on
+  // state.flags AND whose `match` predicate is true for the incoming sid
+  // rewrites sid per its `apply` rule. Transforms are evaluated in the
+  // order declared at book.rules.navigation_transforms[]; the first match
+  // wins. Applied at the navigateTo() chokepoint so every navigation path
+  // (choice, computed-jump, route_by_flag, stat_test target, combat
+  // win_to/flee_to) gets the same treatment. Canonical case: CoH §439
+  // Grognag companion ("if you turn to any reference ending in a 7,
+  // deduct 52"), active until §235 clears the flag.
+  const navTransforms = book.rules?.navigation_transforms;
+  if (Array.isArray(navTransforms) && navTransforms.length > 0) {
+    const numericSid = parseInt(sid, 10);
+    if (Number.isFinite(numericSid)) {
+      for (const t of navTransforms) {
+        if (!t || typeof t !== 'object') continue;
+        if (!t.while_flag || !state.flags.includes(t.while_flag)) continue;
+        const m = t.match;
+        if (!m || typeof m !== 'object') continue;
+        // match.target_mod: [divisor, remainder] — "(target % divisor) == remainder"
+        let matched = false;
+        if (Array.isArray(m.target_mod) && m.target_mod.length === 2) {
+          const [divisor, remainder] = m.target_mod;
+          if (typeof divisor === 'number' && typeof remainder === 'number' && divisor !== 0) {
+            matched = (((numericSid % divisor) + divisor) % divisor) === ((remainder % divisor + divisor) % divisor);
+          }
+        }
+        if (!matched) continue;
+        const a = t.apply;
+        if (!a || typeof a !== 'object') continue;
+        let newSid = numericSid;
+        if (typeof a.offset === 'number') {
+          newSid = numericSid + a.offset;
+        }
+        const newSidStr = String(newSid);
+        if (!book.sections[newSidStr]) {
+          state.log.push(`R51 navigation_transform: would transform §${sid} → §${newSidStr} via "${t.while_flag}" but target does not exist; falling back to §${sid}`);
+          break;
+        }
+        state.log.push(`R51 navigation_transform: §${sid} → §${newSidStr} (while_flag=${t.while_flag}${t.reason ? `, ${t.reason}` : ''})`);
+        sid = newSidStr;
+        break;
+      }
+    }
+  }
   const section = book.sections[sid];
   if (!section) {
     state.log.push(`ERROR: Section ${sid} not found`);

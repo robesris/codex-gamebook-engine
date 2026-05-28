@@ -6,6 +6,63 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.53.0 / GBF v1.36.0 / CLI emulator v3.32.0 / HTML emulator v3.28.0
+
+**Rule 51 — flag-gated global navigation transform (`navigation_transforms`).** Surfaced during the Creature of Havoc (FF#24) parse at §439, where a companion (Grognag "Grog" Clawtooth) joins the party and rewrites the player's navigation while present: *"if you turn to any reference ending in a 7, deduct 52 from it and turn to this new reference."* Active from §439 until §235 (where the companion dies). The mechanic touches 37 destination sections; without a first-class encoding, 159 sections were unreachable in play. The only existing workarounds were (a) ~37 per-section manual edits with subtly wrong semantics, or (b) a `set_flag` at §439 with no enforcement.
+
+Schema addition (v1.36+, schema-additive — pre-v1.36 books validate unchanged):
+
+- **`rules.navigation_transforms[]`** at book level. Each entry: `while_flag` (the flag that gates the transform), `match` (predicate against the navigation target — currently `target_mod: [divisor, remainder]`), `apply` (transform shape — currently `offset: N`), `reason` (optional human-readable log message).
+
+Engine semantics:
+
+- Applied inside `navigateTo()` BEFORE the destination section is looked up. Runs at the single navigation chokepoint so every path uniformly — choices, computed `input_number` jumps (secret doors), `route_by_flag`, `stat_test` `success_to`/`failure_to`, combat `win_to`/`flee_to` — gets the same treatment. This matches the source-text semantic ("if you turn to any reference ending in 7" doesn't distinguish how the player got there).
+- First-match-wins compose order if multiple transforms are declared.
+- Invalid-target fallback: if the transform's computed result is not a valid section id, the emulator logs a warning and navigates to the ORIGINAL target rather than the transformed one. Avoids dead-ending the player on a misconfigured transform.
+
+Canonical encoding for CoH §439 Grognag — three pieces total:
+
+```json
+// §439: companion joins
+{ "type": "set_flag", "flag": "has_grog" }
+
+// §235: companion dies
+{ "type": "clear_flag", "flag": "has_grog" }
+
+// rules block
+"rules": {
+  "navigation_transforms": [
+    {
+      "while_flag": "has_grog",
+      "match": { "target_mod": [10, 7] },
+      "apply": { "offset": -52 },
+      "reason": "Grognag Clawtooth companion"
+    }
+  ]
+}
+```
+
+Emulator wiring (both):
+
+- CLI emulator (`cli-emulator/play.js`): new transform-application block at the top of `navigateTo()` before the section lookup. Reads `book.rules.navigation_transforms`, iterates in array order, applies the first matching transform's offset to the numeric target. Logs `R51 navigation_transform: §N → §M` on fire and `R51 navigation_transform: would transform ... falling back to ...` on invalid-target fallback.
+- HTML emulator (`index.html`): parallel changes at the matching `navigateTo` function.
+
+Triage note: shipped despite single-site cross-book frequency (1 confirmed site, CoH §439) because the implementation cost was small (~50 lines across both emulators), the blocking severity was HIGH (159 sections unreachable until fixed — not a polish issue), and the user's design sketch was clean enough to drop in nearly verbatim. Pattern cue (recurring FF idiom: "companion/curse alters reference numbers by a fixed offset on a digit class") plausibly recurs across the FF series even if cross-book sample size is too small to confirm.
+
+Tests: 118/118 → 125/125. Seven new Rule 51 v2.53.0 tests cover fires-when-flag-and-match, does-not-fire-without-flag, does-not-fire-without-match, fires-through-choice-navigation (chokepoint test), multiple-transforms-first-match-wins, invalid-target-fallback, and schema-additive pre-v1.36 books validate.
+
+Versions:
+- Codex v2.52.0 → v2.53.0
+- GBF schema v1.35.0 → v1.36.0
+- CLI emulator v3.31.0 → v3.32.0
+- HTML emulator v3.27.0 → v3.28.0
+
+Cross-book validator sweep: 0 schema errors across all six first-party books. Dist bundle rebuilt.
+
+CoH Gap status post-v2.53.0: Gaps 1, 2, 4 resolved (v2.50, v2.51); navigation-transform gap resolved (v2.53). Gap 3 (cross-component same-round predicates) and Gap 5 (optional mid-combat player choice) remain open — see `known_issues.md` in the books repo.
+
+---
+
 ## v2.52.0 / GBF v1.35.0 / CLI emulator v3.31.0 / HTML emulator v3.27.0
 
 **Step 2c rewrite: verbosity mode as a discipline, with hard budgets + DO-NOT list + pre-send self-check.** Surfaced when a real Creature of Havoc parsing session in an incognito chat agreed to "basics" mode and then produced overwhelming amounts of pre-conclusion reasoning anyway. The v2.48.0 Step 2c described the two modes but did not enforce them — agents read the descriptive guidance, agreed to it, and then defaulted back to Claude's training pattern (read-tool-call, narrate, write-tool-call, narrate, summarise) which is exactly what "basics" exists to suppress.

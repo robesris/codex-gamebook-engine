@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.27.0';
+const CODEX_EMULATOR_VERSION = '3.28.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -2435,7 +2435,41 @@ function usePotion() {
 
 // ==================== NAVIGATION ====================
 function navigateTo(sectionId) {
-  const sid = String(sectionId);
+  let sid = String(sectionId);
+  // Rule 51 (schema v1.36+) — see cli-emulator/play.js for the canonical doc.
+  const navTransforms = gameData.rules?.navigation_transforms;
+  if (Array.isArray(navTransforms) && navTransforms.length > 0) {
+    const numericSid = parseInt(sid, 10);
+    if (Number.isFinite(numericSid)) {
+      for (const t of navTransforms) {
+        if (!t || typeof t !== 'object') continue;
+        if (!t.while_flag || !state.flags.includes(t.while_flag)) continue;
+        const m = t.match;
+        if (!m || typeof m !== 'object') continue;
+        let matched = false;
+        if (Array.isArray(m.target_mod) && m.target_mod.length === 2) {
+          const [divisor, remainder] = m.target_mod;
+          if (typeof divisor === 'number' && typeof remainder === 'number' && divisor !== 0) {
+            matched = (((numericSid % divisor) + divisor) % divisor) === ((remainder % divisor + divisor) % divisor);
+          }
+        }
+        if (!matched) continue;
+        const a = t.apply;
+        if (!a || typeof a !== 'object') continue;
+        let newSid = numericSid;
+        if (typeof a.offset === 'number') {
+          newSid = numericSid + a.offset;
+        }
+        const newSidStr = String(newSid);
+        if (!gameData.sections[newSidStr]) {
+          console.warn(`R51 navigation_transform: would transform §${sid} → §${newSidStr} via "${t.while_flag}" but target does not exist; falling back to §${sid}`);
+          break;
+        }
+        sid = newSidStr;
+        break;
+      }
+    }
+  }
   const section = gameData.sections[sid];
   if (!section) {
     document.getElementById('game-content').innerHTML = `<p style="color:var(--danger)">Section ${sid} not found!</p>`;

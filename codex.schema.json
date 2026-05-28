@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/robesris/grimoire-gamebook-engine/main/codex.schema.json",
-  "title": "Gamebook Format (GBF) v1.35.0",
+  "title": "Gamebook Format (GBF) v1.36.0",
   "description": "A universal data interchange format for representing interactive gamebooks as structured data. Designed to be consumed by a deterministic emulator that can play any gamebook without AI involvement at runtime.",
   "type": "object",
   "required": ["metadata", "rules", "character_creation", "sections"],
@@ -281,6 +281,47 @@
         },
         "provisions": {
           "$ref": "#/definitions/provisions_rules"
+        },
+        "navigation_transforms": {
+          "type": "array",
+          "description": "Schema v1.36+ (Rule 51). Flag-gated global navigation rewrites applied in navigateTo() before the destination section is looked up. Each transform fires when its `while_flag` is set on state.flags AND its `match` predicate is true for the incoming target; the `apply` rule rewrites the target. Evaluated in array order, first match wins. Use for source-text idioms that rewrite reference numbers wholesale while a condition holds — canonical case: CoH §439 Grognag companion ('if you turn to any reference ending in 7, deduct 52'), active from §439 until §235 clears the flag. Without this primitive the only encoding is ~37 per-section manual edits with subtly wrong semantics. Transform fires through every navigation path uniformly (choices, computed input_number jumps, route_by_flag, stat_test targets, combat win_to/flee_to). If the transformed target is not a valid section id, the emulator logs a warning and falls back to the original target (avoids dead-ending the player on a misconfigured transform).",
+          "items": {
+            "type": "object",
+            "required": ["while_flag", "match", "apply"],
+            "properties": {
+              "while_flag": {
+                "type": "string",
+                "description": "Flag that must be present on state.flags for this transform to fire. Set via set_flag at the source-text section that activates the companion/curse/etc.; cleared via clear_flag at the section that deactivates it (companion dies, curse breaks, etc.). The validator's dangling-flag soft check should flag transforms whose flag is never set OR never cleared."
+              },
+              "match": {
+                "type": "object",
+                "description": "Predicate evaluated against the navigation target. Currently supports `target_mod: [divisor, remainder]` (matches when `(target % divisor) == remainder`). Future match shapes may include `target_in: [N, ...]` (specific section list), `target_range: [lo, hi]` (inclusive range), or `target_eq: N` (single section); add only when a real source-text case justifies them.",
+                "properties": {
+                  "target_mod": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "Two-element [divisor, remainder] tuple. The transform fires when `(numericTarget % divisor) == remainder`. For 'any reference ending in 7' use `[10, 7]`. Divisor must be non-zero; both ints. The emulator computes the modulo using positive-remainder arithmetic, so negative incoming targets are handled correctly (though source texts essentially never use them)."
+                  }
+                }
+              },
+              "apply": {
+                "type": "object",
+                "description": "Transform applied when match passes. Currently supports `offset: N` (additive shift on the integer target). Future apply shapes may include `set_to: N` (wholesale replacement) or `apply_table: {N: M, ...}` (per-source mapping); add only when justified.",
+                "properties": {
+                  "offset": {
+                    "type": "integer",
+                    "description": "Signed integer added to the numeric target. For 'deduct 52' use `-52`. The result must resolve to an existing section id; if not, the transform is skipped (with a warning logged) and navigation proceeds to the original target."
+                  }
+                }
+              },
+              "reason": {
+                "type": "string",
+                "description": "Optional human-readable explanation of the transform's source-text origin. Surfaced in the playthrough log when the transform fires. Example: 'Grognag Clawtooth companion: -52 on references ending in 7'."
+              }
+            }
+          }
         },
         "potion": {
           "$ref": "#/definitions/potion_rules"

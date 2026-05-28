@@ -1024,7 +1024,7 @@ test('schema v1.11 accepts both endings placements (confidence-array and top-lev
   const fs = require('fs');
   const schemaText = fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8');
   const schema = JSON.parse(schemaText);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title at v1.36.0');
 
   // Top-level death_endings / victory_endings declared.
   assertTrue(!!schema.properties.death_endings, 'top-level death_endings declared');
@@ -1151,7 +1151,7 @@ test('modify_stat.set_initial_to caps initialStats and clamps current when above
   // schema title at v1.12.0.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title at v1.36.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.set_initial_to, 'event.set_initial_to declared');
   assertEqual(eventProps.set_initial_to.type, 'number', 'event.set_initial_to is number');
@@ -1424,7 +1424,7 @@ test('removed_after_consecutive_losses drops modifier after threshold streak', (
   assertEqual(cmProps.removed_after_consecutive_losses.type, 'integer', 'is integer');
   assertEqual(cmProps.removed_after_consecutive_losses.minimum, 1, 'minimum is 1');
   // Schema title bumped to v1.15.0.
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title bumped to v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title bumped to v1.36.0');
 });
 
 // ============================================================
@@ -1606,7 +1606,7 @@ test('damage_caps bound post-interaction per-round damage total', () => {
   // Schema-shape assertions.
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title at v1.36.0');
   const eventProps = schema.definitions.event.properties;
   assertTrue(!!eventProps.damage_caps, 'event.damage_caps declared');
   assertEqual(eventProps.damage_caps.type, 'array', 'damage_caps is array');
@@ -2017,7 +2017,7 @@ test('chargen ability effects auto-apply, exclusive_with rejects, choose_talents
   // ----------------------------------------------------------------
   const fs = require('fs');
   const schema = JSON.parse(fs.readFileSync(__dirname + '/../codex.schema.json', 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title at v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title at v1.36.0');
   const stepActions = schema.definitions.character_creation_step.properties.action.enum;
   assertTrue(stepActions.includes('choose_talents'),
              'choose_talents in character_creation_step.action enum');
@@ -2779,7 +2779,7 @@ test('Rule 36 v2.28.0: schema-additive — pre-v1.21 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.21 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -2924,7 +2924,7 @@ test('Rule 11 v2.29.0: schema-additive — pre-v1.22 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.22 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title bumped to v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title bumped to v1.36.0');
 });
 
 // ============================================================
@@ -3261,7 +3261,7 @@ test('Rule 39 v2.31.0: schema-additive — pre-v1.24 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.24 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -3295,7 +3295,7 @@ test('Rule 38 v2.30.0: schema-additive — pre-v1.23 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.23 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -3437,7 +3437,7 @@ test('Rule 40 v2.33.0: schema-additive — pre-v1.25 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.25 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -3523,7 +3523,7 @@ test('Rule 42 v2.34.0: schema-additive — pre-v1.26 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.26 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -3677,7 +3677,7 @@ test('Rule 44 v2.39.0: schema-additive — pre-v1.27 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.27 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -3851,7 +3851,7 @@ test('Rule 45 v2.40.0: schema-additive — pre-v1.28 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.28 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -4258,7 +4258,7 @@ test('Rule 46 v2.42.0: schema-additive — pre-v1.30 books validate unchanged', 
   };
   const ok = validate(book);
   assertTrue(ok, `pre-v1.30 book should validate clean: ${JSON.stringify(validate.errors)}`);
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 // ============================================================
@@ -4434,7 +4434,7 @@ test('Rule 49 v2.45.0: schema accepts both failure_penalty shapes', () => {
   assertTrue(validate(baseBook({ stat: 'SKILL', amount: -1 })), 'single-object shape validates');
   assertTrue(validate(baseBook([{ stat: 'SKILL', amount: -1 }, { stat: 'SKILL', amount: -2 }])), 'array shape validates');
   assertTrue(!validate(baseBook('bogus')), 'string penalty rejected');
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title is v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title is v1.36.0');
 });
 
 test('Rule 49 v2.45.0: schema-additive — pre-v1.33 books validate unchanged', () => {
@@ -4782,6 +4782,162 @@ test('Rule 50 v2.46.0: schema-additive — pre-v1.34 books validate unchanged', 
     },
   };
   assertTrue(validate(book), `pre-v1.34 book should validate clean: ${JSON.stringify(validate.errors)}`);
+});
+
+// ============================================================
+// Rule 51 v2.53.0 — flag-gated navigation_transforms (CoH §439 Grognag shape)
+// ============================================================
+
+function buildR51Book(navigation_transforms, extraSections) {
+  const baseSections = {
+    '1': { text: 'start', events: [], choices: [{ text: 'go', target: '247', condition: null }], is_ending: false },
+    '247': { text: 'untransformed-247', events: [], choices: [{ text: 'loop', target: '1', condition: null }], is_ending: false },
+    '195': { text: 'transformed-195', events: [], choices: [{ text: 'loop', target: '1', condition: null }], is_ending: false },
+    '248': { text: 'untransformed-248-no-match', events: [], choices: [{ text: 'loop', target: '1', condition: null }], is_ending: false },
+  };
+  return {
+    metadata: { title: 'B', author: 'a', total_sections: 4 },
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }],
+      navigation_transforms,
+    },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: { ...baseSections, ...(extraSections || {}) },
+  };
+}
+
+test('Rule 51 v2.53.0: navigation_transform fires when flag is set AND target matches', () => {
+  const book = buildR51Book([{
+    while_flag: 'has_grog',
+    match: { target_mod: [10, 7] },
+    apply: { offset: -52 },
+    reason: 'Grognag: -52 on references ending in 7',
+  }]);
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.flags.push('has_grog');
+  state = play.navigateTo(state, book, '247');
+  assertEqual(state.currentSection, '195', `247 → 195 with flag set; got ${state.currentSection}`);
+  assertTrue(!!state.log.find(l => /R51 navigation_transform.*247.*195/.test(l)), 'transform application logged');
+});
+
+test('Rule 51 v2.53.0: navigation_transform does NOT fire when flag is NOT set', () => {
+  const book = buildR51Book([{
+    while_flag: 'has_grog',
+    match: { target_mod: [10, 7] },
+    apply: { offset: -52 },
+  }]);
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  // No has_grog flag set
+  state = play.navigateTo(state, book, '247');
+  assertEqual(state.currentSection, '247', `247 → 247 with flag NOT set; got ${state.currentSection}`);
+});
+
+test('Rule 51 v2.53.0: navigation_transform does NOT fire when target does not match', () => {
+  const book = buildR51Book([{
+    while_flag: 'has_grog',
+    match: { target_mod: [10, 7] },
+    apply: { offset: -52 },
+  }]);
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.flags.push('has_grog');
+  state = play.navigateTo(state, book, '248');  // 248 % 10 === 8, not 7
+  assertEqual(state.currentSection, '248', `248 → 248 with flag set but target doesn't match mod; got ${state.currentSection}`);
+});
+
+test('Rule 51 v2.53.0: navigation_transform fires through choice navigation (chokepoint test)', () => {
+  // §1 → choice "go" → target 247. With has_grog set, choice navigation
+  // should arrive at §195 (post-transform), proving the transform runs at
+  // the navigateTo chokepoint for choice-paths too.
+  const book = buildR51Book([{
+    while_flag: 'has_grog',
+    match: { target_mod: [10, 7] },
+    apply: { offset: -52 },
+  }]);
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.flags.push('has_grog');
+  state = play.navigateTo(state, book, '1');
+  // Pick the choice "go" (target 247) — the choice resolution funnels through navigateTo.
+  state = play.applyAction(state, book, 'choose_section', ['0']);
+  assertEqual(state.currentSection, '195', `choice → 247 → transformed → 195; got ${state.currentSection}`);
+});
+
+test('Rule 51 v2.53.0: navigation_transform with multiple entries — first match wins', () => {
+  // Two transforms both gated on has_grog. First matches target_mod [10, 7],
+  // second matches target_mod [10, 7] with a different offset. The first
+  // transform should win; the second is ignored because the first already
+  // matched.
+  const book = buildR51Book([
+    { while_flag: 'has_grog', match: { target_mod: [10, 7] }, apply: { offset: -52 } },
+    { while_flag: 'has_grog', match: { target_mod: [10, 7] }, apply: { offset: -100 } },
+  ]);
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.flags.push('has_grog');
+  state = play.navigateTo(state, book, '247');
+  assertEqual(state.currentSection, '195', `first match wins: 247 → 195 (not 147); got ${state.currentSection}`);
+});
+
+test('Rule 51 v2.53.0: transform that would land on invalid section falls back to original', () => {
+  // target_mod [10, 7] + offset -300 would send 247 → -53. -53 is not a
+  // valid section id. Engine should log a warning and fall back to 247.
+  const book = buildR51Book([{
+    while_flag: 'has_grog',
+    match: { target_mod: [10, 7] },
+    apply: { offset: -300 },
+  }]);
+  let state = play.initialState(book);
+  state = play.startCharacterCreation(state, book);
+  state.flags.push('has_grog');
+  state = play.navigateTo(state, book, '247');
+  assertEqual(state.currentSection, '247', `invalid transformed target → fallback to original; got ${state.currentSection}`);
+  assertTrue(!!state.log.find(l => /R51.*would transform.*falling back/.test(l)), 'fallback logged with warning');
+});
+
+test('Rule 51 v2.53.0: schema accepts navigation_transforms; pre-v1.36 books validate unchanged', () => {
+  const Ajv = require('ajv');
+  const addFormats = require('ajv-formats');
+  const fs = require('fs');
+  const path = require('path');
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title bumped to v1.36.0');
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  // A pre-v1.36 book without navigation_transforms must still validate.
+  const oldBook = {
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: { stats: [{ name: 'SKILL', initial: 10 }], abilities: { available: [] } },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: { '1': { text: 't', events: [], choices: [{ text: 'end', target: '1', condition: null }], is_ending: false } },
+  };
+  assertTrue(validate(oldBook), `pre-v1.36 book validates: ${JSON.stringify(validate.errors)}`);
+  // A v1.36+ book WITH navigation_transforms validates too.
+  const newBook = {
+    metadata: { title: 'B', author: 'a', total_sections: 1 },
+    rules: {
+      stats: [{ name: 'SKILL', initial: 10 }],
+      abilities: { available: [] },
+      navigation_transforms: [{
+        while_flag: 'has_grog',
+        match: { target_mod: [10, 7] },
+        apply: { offset: -52 },
+        reason: 'Grognag companion',
+      }],
+    },
+    character_creation: { steps: [] },
+    items_catalog: {},
+    enemies_catalog: {},
+    sections: { '1': { text: 't', events: [], choices: [{ text: 'end', target: '1', condition: null }], is_ending: false } },
+  };
+  assertTrue(validate(newBook), `v1.36+ book with navigation_transforms validates: ${JSON.stringify(validate.errors)}`);
 });
 
 // ============================================================
@@ -5213,7 +5369,7 @@ test('Rule 36 v2.50.0: schema v1.35 — schema-additive, pre-v1.35 books validat
   const fs = require('fs');
   const path = require('path');
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'codex.schema.json'), 'utf8'));
-  assertEqual(schema.title, 'Gamebook Format (GBF) v1.35.0', 'schema title bumped to v1.35.0');
+  assertEqual(schema.title, 'Gamebook Format (GBF) v1.36.0', 'schema title bumped to v1.36.0');
   const ajv = new Ajv({ allErrors: true, strict: false });
   addFormats(ajv);
   const validate = ajv.compile(schema);
