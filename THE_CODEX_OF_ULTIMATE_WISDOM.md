@@ -124,53 +124,85 @@ Quality: approaches or exceeds a fully hand-iterated file. Cost: Tier 3 plus ano
 
 Right after the tier selection (and before parsing begins), ask the user which **output verbosity mode** they'd like for the session. The two modes change ONLY how the agent presents progress to the user — they do not change parsing quality, validation rigor, or tier behavior. They also do not change the volume of internal tool calls (file reads, validator runs, sub-agent dispatches) — only what the agent says to the user about them.
 
-**Verbose (the default).** Normal Claude-style narration. Explain reasoning as you go, surface decisions in real time, annotate `file_path:line_number` references when relevant, give running updates between tool calls, summarise findings before moving on. Suitable for users who want to follow along, learn the codex semantics, or trust-but-verify the agent's reasoning. Verbose is the default because new users benefit from seeing the agent's work and because debugging an unexpected outcome is much easier when the prior reasoning is visible.
+> ⚠ **"Basics" is a discipline, not a courtesy.** It is the most-violated rule in this codex. If you (the parsing agent) read this section, agree to basics mode, and then produce paragraphs of pre-conclusion reasoning anyway, you have not followed the codex — you have followed your training defaults. The rules below exist because Claude's default conversational pattern (read-tool-call, narrate, write-tool-call, narrate, summarise) is exactly what "basics" exists to suppress. **Read every rule below and bind to it for the session, not just for the next turn.**
 
-**Just the basics.** Suppress the technical monologue. Surface only:
-- **Questions the user must answer** (always — these are the only thing the user MUST see).
-- **Bottom-line conclusions** — what changed, what's next, in one or two sentences.
-- **Just enough context to inform a decision** — when asking a question, include the minimum context the user needs to choose well, but no more.
-- **Critical warnings** — validation errors, blocking issues, anything that would make the user's next decision wrong if they didn't see it.
+#### Verbose (the default)
 
-Suppress in basics mode:
-- Pre-tool-call announcements ("Let me read the file..."), per-step running commentary, between-tool-call narration.
-- File-path / line-number annotations except when directly relevant to a user decision.
-- Recaps of what the agent just did (the diff or the validator output is the record).
-- Re-statements of prior context the user already has.
-- Explanations of WHY a tool was chosen unless the user asks.
+Normal Claude-style narration. Explain reasoning as you go, surface decisions in real time, annotate `file_path:line_number` references when relevant, give running updates between tool calls, summarise findings before moving on. Suitable for users who want to follow along, learn the codex semantics, or trust-but-verify the agent's reasoning. Verbose is the default because new users benefit from seeing the agent's work and because debugging an unexpected outcome is much easier when the prior reasoning is visible.
 
-**Worked-example contrast** — same actual work, two presentations:
+#### Basics (output-reduction discipline)
 
-*Verbose:*
+When the user picks **basics**, EVERY user-facing turn must obey the rules below. "User-facing turn" means anything you send to the user — it does NOT include internal tool calls. The agent still reads files, still runs the validator, still has the full reasoning available internally; what changes is what reaches the user.
 
-> Let me read the §131 encoding to see the current state.
->
-> [Read tool call]
->
-> Found the eat_meal event at line 9700. The note reads `"May eat Provisions but must share - only gain 2 STAMINA instead of 4"` — this is the §131-shape un-encoded constraint we discussed earlier. The schema's `heal_amount` field on `eat_meal` is the right encoding here; both emulators already honor it via `event.heal_amount ?? book.rules?.provisions?.heal_amount ?? 4` (cli-emulator/play.js:2902, index.html:4684). I'll re-encode as `heal_amount: 2` and drop the note since the constraint will be structural.
->
-> [Edit tool call]
->
-> [Validator run]
->
-> Both catch-nets now silent on §131. Cross-book scan still surfaces zero findings. Want me to commit this change and push to the feature branch?
+**HARD WORD BUDGETS** (per turn body, excluding required artifacts like validator stdout, diff blocks, or commit SHAs the user must see verbatim):
 
-*Just the basics:*
+| Turn type | Budget | Notes |
+|---|---|---|
+| Procedural confirmation ("done", "pushed") | **1 sentence** | Often just the commit SHA + a 4-word framing. |
+| Status update / progress report | **≤ 60 words** | About 3-4 sentences. Lead with the bottom line. |
+| Question to the user | **≤ 100 words** | Includes the question itself PLUS the minimum context to answer it. If you need more, the framing is wrong. |
+| Non-trivial finding the user must act on | **≤ 200 words** | About 10-12 sentences. Anything longer means you're explaining when you should be deciding. |
+| Re-explaining something you said earlier in the session | **0 words** | Don't. The user remembers. |
 
-> §131 needs `heal_amount: 2` on the eat_meal event. Both catch-nets will go silent after the fix.
->
-> **Apply and commit?**
+**If a draft turn exceeds the budget for its type, REWRITE before sending. Do not send a long turn with an apology. Do not send a long turn with a "TL;DR" prefix.** Bloat is almost always pre-conclusion reasoning paragraphs — cut those, lead with the conclusion, let the user ask for reasoning if they want it.
 
-The actual tool calls and reasoning are identical — the difference is what the user sees. In basics mode, the agent still reads the file, still runs the validator, still has the full reasoning available internally; it just doesn't narrate any of it to the user. The user gets the question that needs an answer and the minimum context to answer it.
+**STRUCTURE: bottom line first.** The first sentence of every basics-mode turn must be either (a) the conclusion of the work just done, (b) the question that needs answering, or (c) the blocking error. Reasoning, context, and "what I noticed along the way" come AFTER, if at all. The user reads top-down and stops when they have what they need.
 
-**Mode persistence and switching.** The mode the user picks at Step 2c persists for the rest of the session unless they explicitly switch. A user can switch any time by saying `verbose`, `basics`, or `just the basics` (case-insensitive). The agent acknowledges the switch with one brief confirmation line and then immediately adopts the new mode (no recap of what was suppressed under the prior mode).
+**GOOD vs BAD worked example** (same actual work, basics mode):
 
-**What never changes between modes.** Three things are always rendered identically regardless of mode:
-1. Questions requiring user response — see "Visual question affordance" below.
-2. Blocking errors and validation failures — basics mode does not suppress these; they ARE the bottom line.
-3. Final commit / push status — basics mode still confirms when work has been pushed and at what commit SHA.
+GOOD:
+> §131 needs `heal_amount: 2` on the eat_meal event. Apply?
 
-**When to override the user's choice.** If the user picked basics but the agent encounters a genuinely ambiguous decision — one where any of three or more reasonable interpretations could be correct AND the choice affects book correctness — the agent should drop into a verbose-mode question for that one decision (state the options, recommend one, ask), then return to basics. Brevity for routine work, deliberate detail for genuine forks.
+BAD (still recognisable bloat even with the bottom line eventually present):
+> I read §131 and looked at the eat_meal event. The current encoding has a `note` field describing the shared-meal half-heal mechanic, but the actual `heal_amount` isn't set — so the global default of 4 applies, which doesn't match the source text. The schema has a per-event `heal_amount` override that both emulators honor (see cli-emulator/play.js:2902 and index.html:4684), so the fix is to add `heal_amount: 2` to the event. This will make both catch-nets go silent on §131. Want me to apply the fix and commit?
+
+The BAD version is 100 words of pre-conclusion reasoning the user did not ask for. In basics mode, the GOOD version forces the user to ask "wait, why 2?" only when they actually want the reasoning. They usually don't.
+
+**DO NOT** (basics mode, every turn):
+
+1. Pre-announce tool calls. *"Let me read the file..."* — just read it.
+2. Narrate between tool calls. *"Now I'll check the schema..."* — silent.
+3. Recap what you just did. The diff or the validator output IS the record.
+4. Restate context already in this session. The user remembers their own questions.
+5. Explain WHY you chose a tool, file, or approach unless the user asks.
+6. Volunteer cross-references, related sections, or "interesting" tangents.
+7. Lead with mode-acknowledging meta. *"Got it, basics mode — here's the fix..."* — just give the fix.
+8. Add tonal filler. *"Great question!", "Excellent point!", "Happy to help!"* — cut every word.
+9. Re-quote source text the user already pasted or referenced this session.
+10. Summarise the prior turn at the start of your reply ("So you wanted to know..."). The user knows what they asked.
+11. End with offers to help. *"Let me know if you want me to..."* — wait for them to ask.
+12. Format every reply as a multi-section structured document with headers. Most replies are 1-3 sentences. Headers are for replies that genuinely need them.
+
+**SELF-CHECK before sending each basics-mode turn:**
+
+Run this mental checklist on the draft. If any answer triggers a rewrite, do it before sending.
+
+1. Is the bottom line the first sentence? (No → rewrite.)
+2. Could I cut half the words and the user could still answer? (Yes → rewrite.)
+3. Am I explaining something the tool output already shows? (Yes → delete that explanation.)
+4. Am I re-stating something I said earlier this session? (Yes → delete it.)
+5. Am I within the word budget for this turn type? (No → rewrite or split.)
+6. Have I added headers or structure where 2 sentences would do? (Yes → strip them.)
+
+#### Always rendered (regardless of mode)
+
+Three categories survive basics mode in full because suppressing them harms the user:
+
+1. **User-facing questions.** Always bold or `AskUserQuestion`-tool-rendered — see "Visual question affordance" below. Even in basics mode, never bury the question.
+2. **Blocking errors and validation failures.** Surface them; do NOT compress them. If the validator reports a schema error or the emulator throws, the full message goes to the user verbatim.
+3. **Final commit / push status.** When work has landed, name the commit SHA(s) and the branch(es). One line is fine.
+
+#### Mode persistence and switching
+
+The mode the user picks persists for the rest of the session unless they explicitly switch. The agent recognises `verbose`, `basics`, or `just the basics` (case-insensitive). On a switch, acknowledge with at most ONE sentence and immediately adopt the new mode — do NOT recap what was suppressed under the prior mode.
+
+If the user complains about output volume even in basics ("too long", "still too much", "tighter"), treat that as a switch-tighter signal: re-run the SELF-CHECK above with stricter cutoffs (-50% on the budgets) for the rest of the session. The user has told you the discipline isn't binding hard enough.
+
+#### When to override the user's choice
+
+Genuinely ambiguous decisions where multiple plausible interpretations could be correct AND the choice affects book correctness — drop into a verbose-mode question for that one decision (state the options, recommend one, ask), then return to basics. This exception is for **genuine forks**, not for "the agent feels uncertain" or "this seems important enough to explain". Procedural steps with one obvious right answer do NOT qualify; just do them.
+
+If you find yourself reaching for this exception more than once per ~10 user-facing turns, you are over-using it. The user picked basics; trust your judgment on the routine work.
 
 ### Visual question affordance
 
@@ -6402,7 +6434,7 @@ The resume flow turns a previously-frustrating "this book can't be parsed yet" o
 
 ## Version identifiers
 
-**Codex v2.51.0 / GBF schema v1.35.0 / CLI emulator v3.31.0 / HTML emulator v3.27.0** (Rule 36 extension v2.51.0 closes CoH Gap 4 — round_script cross-round persistence — and retracts the v2.50.0 documentation claim that "round_script is faithful here," which was empirically false at CLI v3.30.0 / HTML v3.26.0. Three new fields on the per-round Lua `combat` table: `combat.vars` (read/write per-fight scratch table, persisted back to state.combat.vars after each round and round-tripped through state.activeCombat across Rule 46 pause/resume); `combat.wounds_dealt` and `combat.wounds_taken` (read-only engine-maintained monotonic counters incremented from the prior round's `last_result` tag). The canonical CoH §263 Manic Beast rage-buff shape ships as a round_script + `combat.vars` recipe in the codex doc — declarative `on_round_start` triggered_effects shape is filed for future consideration. No schema change (runtime Lua context only); pre-v2.51 round_scripts unaffected. v2.50.0 closed CoH Gaps 1 & 2 — `applies_on: "double"` keyword + `instant_death` effect verb. v2.49.0 added Step 2d "Spoiler Level" — no-spoilers / reduce-spoilers / spoilers-OK, a session-opening preference orthogonal to verbosity that controls how much story content the agent surfaces to the user. No-spoilers restricts agent output to rules + front matter + section numbers + shape-only mechanical descriptions; reduce-spoilers uses general categorical language and offers a substitution-or-deferral menu for inherently spoilery questions; spoilers-OK is the pre-Step-2d behavior. The agent logs no-spoilers best-judgment calls to `known_issues.md` so the user can review them post-play. Companion §12.0 sub-section in the remediation chapter re-confirms BOTH preferences at pass start (remediation may happen in a different session than the initial parse, so a refresh is mandatory) and gives a per-finding-category framings table showing how the same finding looks at each spoiler level. Documentation-only — no schema, validator, or emulator change. v2.48.0 added Step 2c "Output Verbosity Mode" — verbose (default) vs just-the-basics, a session-opening preference that controls how the agent presents progress to the user. Verbose narrates reasoning, surfaces tool calls and file references, gives running updates; basics suppresses the monologue and shows only questions, bottom-line conclusions, and just enough context to inform a decision. Mode is sticky for the session, switchable any time by typing "verbose" or "basics". Internal tool calls and parsing quality are identical between modes. Companion sub-section "Visual question affordance" mandates that every user-facing question be either an `AskUserQuestion` tool call (preferred for choices with discrete options — renders as selectable chips) or **bold markdown** (for free-form answers), so users never have to scan paragraphs of monologue to find the question. Both guidelines apply during interactive parsing sessions; documentation-only — no schema or emulator change. v2.47.0 added Rule 49.1's stat-name-in-note catch-net. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
+**Codex v2.52.0 / GBF schema v1.35.0 / CLI emulator v3.31.0 / HTML emulator v3.27.0** (Step 2c "Output Verbosity Mode" rewritten with prescriptive force. Surfaced when a real CoH parsing session agreed to "basics" mode and then produced overwhelming amounts of pre-conclusion reasoning anyway — the v2.48.0 Step 2c described two modes but did not enforce them. The v2.52.0 rewrite adds: hard word budgets per turn type (1 sentence for procedural confirmations, ≤60 words for status updates, ≤100 for questions, ≤200 for findings, 0 for re-explanation); a "bottom line first" structural rule; a 12-item DO-NOT list naming each anti-pattern explicitly (pre-tool-call narration, between-tool-call narration, recap of work just done, restating context, etc.); a 6-question pre-send SELF-CHECK the agent runs mentally on every basics-mode draft; an "always rendered" carve-out for questions, blocking errors, and commit SHAs; and a "switch-tighter" signal for when the user says output is still too long. Documentation-only — no schema, validator, or emulator change. v2.51.0 closed CoH Gap 4 (Rule 36 extension v2.51.0 closes CoH Gap 4 — round_script cross-round persistence — and retracts the v2.50.0 documentation claim that "round_script is faithful here," which was empirically false at CLI v3.30.0 / HTML v3.26.0. Three new fields on the per-round Lua `combat` table: `combat.vars` (read/write per-fight scratch table, persisted back to state.combat.vars after each round and round-tripped through state.activeCombat across Rule 46 pause/resume); `combat.wounds_dealt` and `combat.wounds_taken` (read-only engine-maintained monotonic counters incremented from the prior round's `last_result` tag). The canonical CoH §263 Manic Beast rage-buff shape ships as a round_script + `combat.vars` recipe in the codex doc — declarative `on_round_start` triggered_effects shape is filed for future consideration. No schema change (runtime Lua context only); pre-v2.51 round_scripts unaffected. v2.50.0 closed CoH Gaps 1 & 2 — `applies_on: "double"` keyword + `instant_death` effect verb. v2.49.0 added Step 2d "Spoiler Level" — no-spoilers / reduce-spoilers / spoilers-OK, a session-opening preference orthogonal to verbosity that controls how much story content the agent surfaces to the user. No-spoilers restricts agent output to rules + front matter + section numbers + shape-only mechanical descriptions; reduce-spoilers uses general categorical language and offers a substitution-or-deferral menu for inherently spoilery questions; spoilers-OK is the pre-Step-2d behavior. The agent logs no-spoilers best-judgment calls to `known_issues.md` so the user can review them post-play. Companion §12.0 sub-section in the remediation chapter re-confirms BOTH preferences at pass start (remediation may happen in a different session than the initial parse, so a refresh is mandatory) and gives a per-finding-category framings table showing how the same finding looks at each spoiler level. Documentation-only — no schema, validator, or emulator change. v2.48.0 added Step 2c "Output Verbosity Mode" — verbose (default) vs just-the-basics, a session-opening preference that controls how the agent presents progress to the user. Verbose narrates reasoning, surfaces tool calls and file references, gives running updates; basics suppresses the monologue and shows only questions, bottom-line conclusions, and just enough context to inform a decision. Mode is sticky for the session, switchable any time by typing "verbose" or "basics". Internal tool calls and parsing quality are identical between modes. Companion sub-section "Visual question affordance" mandates that every user-facing question be either an `AskUserQuestion` tool call (preferred for choices with discrete options — renders as selectable chips) or **bold markdown** (for free-form answers), so users never have to scan paragraphs of monologue to find the question. Both guidelines apply during interactive parsing sessions; documentation-only — no schema or emulator change. v2.47.0 added Rule 49.1's stat-name-in-note catch-net. v2.45.0 / v1.33.0 / v3.28.0 added Rule 49 multi-stat `failure_penalty` array + `checkMechanicVerbsInNote` catch-net + extended disarmament regex set (FF-dialect Equipment List / leave behind / in exchange) — plus a HTML-emulator bugfix removing a broken `penalty.type === 'modify_stat'` gate that had silently dropped all single-stat penalties in the browser; v2.44.0 / v1.32.0 / v3.27.0 added Rule 48 `interrupt_after_rounds` round-cap interrupt; v2.43.0 / v1.31.0 / v3.25.0 added Rule 47 `route_by_flag`, the §12.14 play-execution gate, the §12.15 resume-after-engine-update flow, and the top-level `schema_version` field; v2.42.0 / v1.30.0 / v3.24.0 added Rule 46 pausable/resumable combat as active state. HTML emulator v3.23.0 wired up Rule 40 `choose_items mode:"remove"`; still pending Rule 42 wire-up AND the chargen `roll_table` action fix from prior bumps; see CHANGELOG).
 
 Full development changelog: see `CHANGELOG.md` in the engine repository.
 

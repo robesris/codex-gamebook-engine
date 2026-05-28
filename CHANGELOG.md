@@ -6,6 +6,32 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.52.0 / GBF v1.35.0 / CLI emulator v3.31.0 / HTML emulator v3.27.0
+
+**Step 2c rewrite: verbosity mode as a discipline, with hard budgets + DO-NOT list + pre-send self-check.** Surfaced when a real Creature of Havoc parsing session in an incognito chat agreed to "basics" mode and then produced overwhelming amounts of pre-conclusion reasoning anyway. The v2.48.0 Step 2c described the two modes but did not enforce them — agents read the descriptive guidance, agreed to it, and then defaulted back to Claude's training pattern (read-tool-call, narrate, write-tool-call, narrate, summarise) which is exactly what "basics" exists to suppress.
+
+The v2.52.0 rewrite reframes basics as a discipline (not a courtesy) and adds prescriptive force:
+
+- **Hard word budgets per turn type.** 1 sentence for procedural confirmations; ≤60 words for status updates / progress reports; ≤100 words for questions (including their context); ≤200 words for non-trivial findings the user must act on; **0 words for re-explaining something said earlier in the session**. Drafts exceeding the budget must be rewritten before sending — no apology prefix, no "TL;DR" prefix.
+
+- **Bottom line first.** The first sentence of every basics-mode turn must be either the conclusion, the question, or the blocking error. Reasoning, context, and "what I noticed along the way" come after, if at all.
+
+- **12-item DO-NOT list naming the specific anti-patterns explicitly.** Pre-announce tool calls; narrate between tool calls; recap what was just done; restate prior context; explain WHY a tool was chosen unless asked; volunteer tangents; lead with mode-acknowledging meta ("Got it, basics mode —"); add tonal filler ("Great question!"); re-quote source text the user already referenced; summarise the prior turn at the start of the reply; end with offers to help; format every reply as a multi-section structured document with headers.
+
+- **Side-by-side GOOD/BAD worked example.** Same actual work, basics mode. The BAD version is 100 words of pre-conclusion reasoning ending with the same question the GOOD version puts in its single sentence. Names the specific failure mode the v2.48.0 text did not.
+
+- **Pre-send SELF-CHECK.** A 6-question mental checklist the agent runs on every basics-mode draft before sending: is the bottom line first? Could I cut half the words? Am I explaining something the tool output shows? Am I re-stating something said earlier? Within budget? Did I add headers where 2 sentences would do?
+
+- **Always-rendered carve-out** unchanged: user-facing questions (bold or AskUserQuestion), blocking errors and validation failures (verbatim), final commit / push SHAs.
+
+- **"Switch-tighter" signal.** If the user complains about output volume even in basics ("too long", "still too much", "tighter"), re-run the self-check with -50% cutoffs for the rest of the session. The user has told the agent the discipline isn't binding hard enough.
+
+- **Override exception tightened.** The "drop into verbose for a single ambiguous decision" carve-out is preserved but explicitly framed as for genuine forks, not "the agent feels uncertain". A line is added: if the agent reaches for this exception more than once per ~10 turns, it's over-using it.
+
+Documentation-only — no schema, validator, or emulator change. Codex doc bumped to v2.52.0; schema and emulators unchanged.
+
+---
+
 ## v2.51.0 / GBF v1.35.0 / CLI emulator v3.31.0 / HTML emulator v3.27.0
 
 **Rule 36 extension — `round_script` cross-round persistence (closes CoH Gap 4; retracts the v2.50.0 "round_script is faithful here" claim).** Surfaced when the CoH parser empirically verified at the v2.50.0 pinned commit (CLI v3.30.0) that no slot — readable or writable — existed for a round_script to carry state from one round to the next, despite the v2.50.0 codex documentation stating round_script was a faithful workaround for Gap 4. The verified failure modes: (a) the per-round `combat` table was rebuilt fresh every round and only `last_result` / `last_damage` were read back from `result.combat`; arbitrary keys like `combat.vars.rage_active` were silently discarded; (b) `game_state` was round-tripped for SECTION scripts but not for COMBAT round scripts; (c) the engine maintained `state.combat.woundsDealt` / `woundsTaken` but did not pass them INTO the script's `combatData` so scripts couldn't read them either. Net effect: the CoH §263 Manic Beast rage-buff (and any "buff depends on what happened last round" idiom) was unencodable.
