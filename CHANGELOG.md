@@ -6,6 +6,29 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.54.0 / GBF v1.36.0 / CLI emulator v3.32.0 / HTML emulator v3.28.0
+
+**User-audience discipline: "Codex density is not user technicality."** Surfaced when the same Creature of Havoc parsing session that motivated the v2.52.0 Step 2c rewrite continued surfacing implementation vocabulary (schema field names, version pins, file/line refs, validator-check IDs) to a non-technical user. The diagnosis: reading this densely technical codex was shifting the agent's model of the user toward "they want technical depth" — the opposite of the truth. The codex is dense BECAUSE the engine is doing the technical lifting so the user doesn't have to.
+
+Three additions, documentation-only:
+
+- **SYSTEM INSTRUCTIONS callout at the top of the codex.** Primes the agent BEFORE it reaches the interactive flow. States explicitly that the codex is internal reference material; the user is a gamebook reader and curator who is NOT assumed to know what a `triggered_effect` is, what `Rule 36` refers to, or what JSON shapes look like. Reading the codex must NOT shift the agent's model of the user toward "they want technical depth" — it is the opposite signal.
+
+- **New sub-section in Step 2c: "Codex density is not user technicality."** Includes:
+  - Concrete BAD vs GOOD worked example for the §131 heal_amount case. BAD surfaces 5 implementation terms (`eat_meal`, `heal_amount`, `schema v1.34+`, `Rule 49.1`, `cli-emulator/play.js:2902`); GOOD surfaces the source-text fact ("§131 says you only gain 2 STAMINA from sharing a meal with the dwarves, not the normal 4") and the question ("Fix it?").
+  - "Things the user DOES know" allow-list: section numbers, section names if the book uses them, stat names from the rules section, item names from the book, enemy names, game-rule terms the book itself defines.
+  - "Things the user does NOT know" deny-list: schema field names, event-type identifiers (`triggered_effect`, `gate_roll`, `route_by_flag`, `damage_set`, `instant_death`, `eat_meal`, `prompt_choice`, `choose_items`, `navigation_transforms`), condition predicates (`has_flag`, `has_item`, `has_item_with_property`), version pins, file/line references, validator-check identifiers (`mechanic-verbs-in-note`, `disarmament-without-event`), Lua API, Rule numbers.
+  - **Translation rule:** ask "could the user answer this question by re-reading the source-text passage, without ever opening this codex?" — if no, leak detected; rewrite using source-text terms.
+  - **Validator output is the one exception** — render raw findings verbatim in a code block when the user must see them, framed by one source-text sentence above.
+
+- **New 13th entry in the basics-mode DO-NOT list** and **new 7th question in the pre-send self-check** lock the discipline in at the per-turn level.
+
+- **§12.1 generalised** from "the remediation agent" to "every user-facing turn" — the cardinal rule has always been right; it was just under-scoped.
+
+No schema, validator, or emulator change. Codex doc bumped to v2.54.0; schema and emulators unchanged.
+
+---
+
 ## v2.53.0 / GBF v1.36.0 / CLI emulator v3.32.0 / HTML emulator v3.28.0
 
 **Rule 51 — flag-gated global navigation transform (`navigation_transforms`).** Surfaced during the Creature of Havoc (FF#24) parse at §439, where a companion (Grognag "Grog" Clawtooth) joins the party and rewrites the player's navigation while present: *"if you turn to any reference ending in a 7, deduct 52 from it and turn to this new reference."* Active from §439 until §235 (where the companion dies). The mechanic touches 37 destination sections; without a first-class encoding, 159 sections were unreachable in play. The only existing workarounds were (a) ~37 per-section manual edits with subtly wrong semantics, or (b) a `set_flag` at §439 with no enforcement.
