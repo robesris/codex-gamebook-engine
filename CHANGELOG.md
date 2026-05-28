@@ -6,6 +6,33 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.58.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.32.0
+
+**HTML emulator UX bugfix: rapid / repeat Use clicks stacked content and trapped the player at the section.** Surfaced live by the Creature of Havoc browser session immediately after the v2.57.0 `handleEvent` fix landed (Use button now functional → first click works → multiple clicks expose the next bug). Symptom: clicking Use more than once on an item whose `on_user_use` effect renders content into game-content (canonical case: a document item whose script log-prints the document's text) accumulated layered content on top of the section. Each Use fired the script, appended the document's log output into game-content, and didn't clear prior output. The section's choice buttons got buried under duplicate document text; the player was "trapped at the section" with no clean way to advance.
+
+Root cause: `r36_useItem` had no re-entry guard. The handler is wired as `btn.addEventListener('click', () => r36_useItem(item))` without `{ once: true }`, so the same DOM button can fire repeatedly; even with `{ once: true }`, the post-call `updateInventory` re-renders a fresh button that's immediately clickable. And when the triggered effect is a `script` event, the script's log output and any rendered `#script-continue` button stay in game-content until the player clicks Continue — so the player can re-fire Use during that window.
+
+Fix: two defensive layers in `r36_useItem`:
+
+1. **Re-entry flag** (`window._r36UseItemInFlight`). Set at the top of the function, cleared in a `finally`. Concurrent clicks (e.g. a stray double-click before the first run's `updateInventory` re-renders) return immediately.
+2. **Pending-script-continue check.** Before dispatching, the function checks for `document.getElementById('script-continue')`. If a script-rendered Continue button is currently in the DOM (meaning a prior Use's script is awaiting the player's Continue), further Use clicks are ignored. The player must resolve the prior Use's Continue before triggering another.
+
+The function body was extracted into `r36_useItemImpl` so the guard logic at the top stays small and the existing implementation stays untouched.
+
+No schema change; CLI emulator unchanged.
+
+Versions:
+- Codex v2.57.0 → v2.58.0
+- GBF schema: unchanged (v1.36.0)
+- CLI emulator: unchanged (v3.33.0)
+- HTML emulator v3.31.0 → v3.32.0
+
+Dist bundle rebuilt.
+
+**Lessons-learned thread.** This is the third HTML-only bug in three days (v2.56.0 `state.flags` Set/Array, v2.57.0 missing `handleEvent`, v2.58.0 Use re-entry). Each surfaced the moment the prior fix made the path reachable. The pattern is: a code path was added (Rule 36 or Rule 51), CLI got tested, HTML didn't, the HTML version of the same path was either missing or wrong. The "test the HTML emulator" workstream flagged in v2.57.0's CHANGELOG is no longer optional — three CoH-blocking bugs in a row from the same root cause justify the focused session.
+
+---
+
 ## v2.57.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.31.0
 
 **HTML emulator bugfix: `handleEvent` was referenced but never defined; "Use" button crashed for any item with `on_user_use` triggered_effects.** Surfaced live by the Creature of Havoc browser session immediately after the v2.56.0 `state.flags` fix landed:

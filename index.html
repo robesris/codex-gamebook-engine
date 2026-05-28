@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.31.0';
+const CODEX_EMULATOR_VERSION = '3.32.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -5585,6 +5585,31 @@ function r36_dispatchTriggeredEvent(effect, sourceDesc, log) {
 // honors consume_on_fire; handles flee_combat by clearing combat and
 // navigating.
 function r36_useItem(itemId) {
+  // Defensive guard against rapid / repeat clicks on the Use button.
+  // Surfaced live by the Creature of Havoc browser session: clicking Use
+  // more than once on an item whose on_user_use effect renders content
+  // into game-content (e.g. a document item whose script log-prints the
+  // document's text) accumulates layered content on top of the section
+  // and traps the player — the section's choice buttons get buried under
+  // duplicate document text. Two layers of protection:
+  //   1. A re-entry flag prevents concurrent dispatch (e.g. a stray
+  //      double-click that fires before the first run's updateInventory
+  //      re-renders the Use button).
+  //   2. A pending-script-continue check rejects further Use clicks while
+  //      the previous Use's script is still awaiting the player's
+  //      Continue click. The player must resolve the prior Use's
+  //      Continue before triggering another.
+  if (window._r36UseItemInFlight) return;
+  if (document.getElementById('script-continue')) return;
+  window._r36UseItemInFlight = true;
+  try {
+    r36_useItemImpl(itemId);
+  } finally {
+    window._r36UseItemInFlight = false;
+  }
+}
+
+function r36_useItemImpl(itemId) {
   const def = (gameData.items_catalog || {})[itemId];
   if (!def || !Array.isArray(def.triggered_effects)) {
     state.log.push(`No on_user_use triggered_effects on ${itemId}`);
