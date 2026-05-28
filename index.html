@@ -673,7 +673,7 @@ h3 { font-size: 1.1em; margin-bottom: 0.4em; }
 
 <script src="fengari-web.js"></script>
 <script>
-const CODEX_EMULATOR_VERSION = '3.30.0';
+const CODEX_EMULATOR_VERSION = '3.31.0';
 // Short SHA of the git commit this emulator binary was built on top of.
 // Updated via `scripts/stamp-emulator-commit.sh` immediately before
 // making a commit that touches the emulator — the script reads
@@ -5540,6 +5540,34 @@ function r36_dispatchCombatRoundTriggers(ctx) {
     if (e.source === 'item' && e.entry.consume_on_fire) ctx.consume.push(e.itemId);
   }
   return ctx;
+}
+
+// Synchronous single-event dispatch for Rule 36 triggered_effect actions.
+// Mirrors a subset of processNextEvent's switch — only the non-pausing event
+// types the schema's triggered_effect_action union permits. Does NOT advance
+// pendingEvents; triggered effects are fire-and-return, not queue-driven.
+// The CLI emulator has a same-named function with the same shape.
+//
+// This was missing entirely in pre-v3.31.0 — r36_dispatchTriggeredEvent
+// referenced `handleEvent` without it being defined anywhere, so any "Use"
+// click on an item with on_user_use triggered_effects (the only path that
+// reaches r36_dispatchTriggeredEvent in normal play) crashed with
+// "handleEvent is not defined". Surfaced live by the Creature of Havoc
+// browser session.
+function handleEvent(event) {
+  if (!event || !event.type) return;
+  switch (event.type) {
+    case 'modify_stat':               return handleModifyStat(event);
+    case 'restore_to_initial':        return handleRestoreToInitial(event);
+    case 'add_item':                  return handleAddItem(event);
+    case 'remove_item':               return handleRemoveItem(event);
+    case 'remove_inventory_category': return handleRemoveInventoryCategory(event);
+    case 'set_flag':                  return handleSetFlag(event);
+    case 'clear_flag':                return handleClearFlag(event);
+    case 'script':                    return handleScript(event);
+    default:
+      console.warn(`handleEvent: triggered_effect carries event type "${event.type}" which is not in the schema's triggered_effect_action permitted set — pausing types (combat, stat_test, roll_dice, eat_meal, choose_items, input_*, return_to_caller) are forbidden. Effect skipped.`);
+  }
 }
 
 function r36_dispatchTriggeredEvent(effect, sourceDesc, log) {

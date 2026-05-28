@@ -6,6 +6,34 @@ For the current version identifiers, see `THE_CODEX_OF_ULTIMATE_WISDOM.md` → "
 
 ---
 
+## v2.57.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.31.0
+
+**HTML emulator bugfix: `handleEvent` was referenced but never defined; "Use" button crashed for any item with `on_user_use` triggered_effects.** Surfaced live by the Creature of Havoc browser session immediately after the v2.56.0 `state.flags` fix landed:
+
+```
+Uncaught ReferenceError: handleEvent is not defined
+    at r36_dispatchTriggeredEvent (index.html:5552)
+    at r36_useItem (index.html:5600)
+```
+
+Root cause: `r36_dispatchTriggeredEvent` was copy-pasted from the CLI emulator's same-named function, which calls `handleEvent(evt, state, book)` (a real CLI function at `cli-emulator/play.js:1397`). The HTML emulator never had a corresponding `handleEvent` — `processNextEvent` is its event dispatcher, and the relevant single-event handlers (`handleModifyStat`, `handleSetFlag`, `handleAddItem`, etc.) are reached via that function's switch, not via a top-level `handleEvent` aggregator. The HTML version of `r36_dispatchTriggeredEvent` has been broken since the Rule 36 wire-up landed; it only surfaced now because no first-party maintained book exercises `r36_useItem` heavily in the browser path, and CoH was the first deployment to click "Use" on an item with `on_user_use` triggered_effects.
+
+Fix: add a 28-line `handleEvent(event)` synchronous single-event dispatcher to `index.html`. Mirrors the subset of `processNextEvent`'s switch covering the non-pausing event types the schema's `triggered_effect_action` union permits — `modify_stat`, `set_flag`, `clear_flag`, `add_item`, `remove_item`, `restore_to_initial`, `remove_inventory_category`, `script`. Does NOT advance `pendingEvents` (triggered effects are fire-and-return, not queue-driven). Pausing event types are explicitly schema-forbidden in `triggered_effect_action`; the dispatcher warns and skips if one is encountered, surfacing the misuse instead of crashing.
+
+No schema change; CLI emulator unchanged.
+
+Versions:
+- Codex v2.56.0 → v2.57.0
+- GBF schema: unchanged (v1.36.0)
+- CLI emulator: unchanged (v3.33.0)
+- HTML emulator v3.30.0 → v3.31.0
+
+Dist bundle rebuilt.
+
+**Lessons-learned thread building.** This is the second HTML-only bug ("blind" because no HTML test coverage) shipped in two days (the v2.56.0 `state.flags` Set/Array fix was the first). Both are functions of the same gap: the test suite exercises the CLI emulator and not the HTML one. The follow-up "unify state.flags storage" candidate from v2.56.0's CHANGELOG should probably be folded into a broader "test the HTML emulator" workstream — a focused engine session to either (a) extract shared dispatch logic into a runtime that both emulators use, or (b) add Puppeteer/JSDOM-based HTML emulator tests that exercise at least the canonical event-dispatch paths. Either bounds the "browser-only crash" risk going forward.
+
+---
+
 ## v2.56.0 / GBF v1.36.0 / CLI emulator v3.33.0 / HTML emulator v3.30.0
 
 **HTML emulator bugfix: `state.flags` is a `Set`, not an `Array` — three sites used Array methods on it.** Surfaced live by the Creature of Havoc parsing session: the §439 Grognag navigation rewrite (Rule 51) produced a blank screen on first play in the browser, while the CLI emulator played the same book fine. Root cause: the HTML emulator stores `state.flags` as a `Set`, the CLI emulator stores it as an `Array`. Three recently-added Rule sites in the HTML code called `state.flags.includes(...)` / `state.flags.push(...)` (Array methods) on the Set, which crashed silently and rendered nothing.
